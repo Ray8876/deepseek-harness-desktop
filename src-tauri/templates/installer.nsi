@@ -3,10 +3,9 @@
 ;
 ; Keep it in sync with upstream tauri-bundler upgrades, but preserve the
 ; Deepseek Harness Desktop customizations (marked with "Deepseek Harness Desktop:").
-; The single customization so far is in PageReinstall: a cross-version UPGRADE is
-; applied in place — the redundant "uninstall / don't uninstall" prompt is skipped
-; entirely (no uninstall, keep user data). The standalone "add/remove programs"
-; uninstall path is untouched.
+; Customizations include an in-place cross-version UPGRADE path and a WebView2
+; section that repairs a missing runtime even during an in-place upgrade. The
+; standalone "add/remove programs" uninstall path is untouched.
 
 Unicode true
 ManifestDPIAware true
@@ -579,53 +578,59 @@ Section WebView2
   ${If} $4 == ""
     ; Webview2 installation
     ;
-    ; Skip if updating
-    ${If} $UpdateMode <> 1
-      !if "${INSTALLWEBVIEW2MODE}" == "downloadBootstrapper"
-        Delete "$TEMP\MicrosoftEdgeWebview2Setup.exe"
-        DetailPrint "$(webview2Downloading)"
-        NSISdl::download "https://go.microsoft.com/fwlink/p/?LinkId=2124703" "$TEMP\MicrosoftEdgeWebview2Setup.exe"
-        Pop $0
-        ${If} $0 == "success"
-          DetailPrint "$(webview2DownloadSuccess)"
-        ${Else}
-          DetailPrint "$(webview2DownloadError)"
-          Abort "$(webview2AbortError)"
-        ${EndIf}
-        StrCpy $6 "$TEMP\MicrosoftEdgeWebview2Setup.exe"
-        Goto install_webview2
-      !endif
+    ; The registry check above is authoritative. An in-place upgrade can come
+    ; from an older build that did not install WebView2, so do not skip this
+    ; section merely because UpdateMode is set.
+    !if "${INSTALLWEBVIEW2MODE}" == "downloadBootstrapper"
+      Delete "$TEMP\MicrosoftEdgeWebview2Setup.exe"
+      DetailPrint "$(webview2Downloading)"
+      NSISdl::download "https://go.microsoft.com/fwlink/p/?LinkId=2124703" "$TEMP\MicrosoftEdgeWebview2Setup.exe"
+      Pop $0
+      ${If} $0 == "success"
+        DetailPrint "$(webview2DownloadSuccess)"
+      ${Else}
+        DetailPrint "$(webview2DownloadError)"
+        Abort "$(webview2AbortError)"
+      ${EndIf}
+      StrCpy $6 "$TEMP\MicrosoftEdgeWebview2Setup.exe"
+      Goto install_webview2
+    !endif
 
-      !if "${INSTALLWEBVIEW2MODE}" == "embedBootstrapper"
-        Delete "$TEMP\MicrosoftEdgeWebview2Setup.exe"
-        File "/oname=$TEMP\MicrosoftEdgeWebview2Setup.exe" "${WEBVIEW2BOOTSTRAPPERPATH}"
-        DetailPrint "$(installingWebview2)"
-        StrCpy $6 "$TEMP\MicrosoftEdgeWebview2Setup.exe"
-        Goto install_webview2
-      !endif
+    !if "${INSTALLWEBVIEW2MODE}" == "embedBootstrapper"
+      Delete "$TEMP\MicrosoftEdgeWebview2Setup.exe"
+      File "/oname=$TEMP\MicrosoftEdgeWebview2Setup.exe" "${WEBVIEW2BOOTSTRAPPERPATH}"
+      DetailPrint "$(installingWebview2)"
+      StrCpy $6 "$TEMP\MicrosoftEdgeWebview2Setup.exe"
+      Goto install_webview2
+    !endif
 
-      !if "${INSTALLWEBVIEW2MODE}" == "offlineInstaller"
-        Delete "$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe"
-        File "/oname=$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe" "${WEBVIEW2INSTALLERPATH}"
-        DetailPrint "$(installingWebview2)"
-        StrCpy $6 "$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe"
-        Goto install_webview2
-      !endif
+    !if "${INSTALLWEBVIEW2MODE}" == "offlineInstaller"
+      Delete "$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe"
+      File "/oname=$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe" "${WEBVIEW2INSTALLERPATH}"
+      DetailPrint "$(installingWebview2)"
+      StrCpy $6 "$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe"
+      Goto install_webview2
+    !endif
 
-      Goto webview2_done
+    Goto webview2_done
 
-      install_webview2:
-        DetailPrint "$(installingWebview2)"
-        ; $6 holds the path to the webview2 installer
-        ExecWait "$6 ${WEBVIEW2INSTALLERARGS} /install" $1
-        ${If} $1 = 0
-          DetailPrint "$(webview2InstallSuccess)"
-        ${Else}
-          DetailPrint "$(webview2InstallError)"
-          Abort "$(webview2AbortError)"
-        ${EndIf}
-      webview2_done:
-    ${EndIf}
+    install_webview2:
+      DetailPrint "$(installingWebview2)"
+      ; $6 holds the path to the webview2 installer
+      ExecWait "$6 ${WEBVIEW2INSTALLERARGS} /install" $1
+      ${If} $1 = 0
+        DetailPrint "$(webview2InstallSuccess)"
+      ${ElseIf} $1 = 3010
+        ; ERROR_SUCCESS_REBOOT_REQUIRED: Runtime is installed; reboot can be deferred.
+        DetailPrint "$(webview2InstallSuccess)"
+      ${ElseIf} $1 = 1641
+        ; ERROR_SUCCESS_REBOOT_INITIATED: Runtime is installed and reboot started.
+        DetailPrint "$(webview2InstallSuccess)"
+      ${Else}
+        DetailPrint "$(webview2InstallError)"
+        Abort "$(webview2AbortError)"
+      ${EndIf}
+    webview2_done:
   ${Else}
     !if "${MINIMUMWEBVIEW2VERSION}" != ""
       ${VersionCompare} "${MINIMUMWEBVIEW2VERSION}" "$4" $R0

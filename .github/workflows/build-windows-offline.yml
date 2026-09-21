@@ -74,7 +74,5 @@ jobs:
           name: deepseek-harness-desktop-windows-x64-offline
           path: |
             src-tauri/target/release/bundle/offline-windows-x64/**
-            src-tauri/target/release/bundle/deepseek-harness-desktop-*-windows-x64-offline.zip
-            src-tauri/target/release/bundle/SHA256SUMS
           if-no-files-found: error
           retention-days: 14

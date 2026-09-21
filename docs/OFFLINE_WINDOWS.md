@@ -43,6 +43,8 @@ The final output is under `src-tauri/target/release/bundle/`:
 - `offline-windows-x64/offline-manifest.json`
 - `offline-windows-x64/SHA256SUMS`
 
+The GitHub Actions artifact uploads only the `offline-windows-x64/` directory. The artifact therefore contains one installer; the separately generated full `.zip` remains a local build output and is not nested into the artifact.
+
 The installer is unsigned. Signing and publication are separate authorization steps.
 
 ## Required disconnected VM acceptance

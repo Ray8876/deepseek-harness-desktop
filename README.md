@@ -45,9 +45,10 @@
 Artifact 包含：
 
 - Windows x64 离线安装器 `.exe`
-- 完整离线分发包 `.zip`
 - `offline-manifest.json`
 - `SHA256SUMS`
+
+Artifact 本身就是 GitHub 下载的压缩包，内部只保留一份安装器；本地构建目录仍会额外生成完整离线分发包 `.zip`。
 
 构建任务使用 GitHub 托管的临时 `windows-2022` 环境，固定依赖版本并验证每项资产的 SHA-256。详细版本、构建命令和断网验收步骤见 [离线 Windows 构建说明](./docs/OFFLINE_WINDOWS.md)。
 
