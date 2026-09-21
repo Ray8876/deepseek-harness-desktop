@@ -24,13 +24,7 @@ const manifestPath = join(resourceDir, 'offline-manifest.json')
 const targetDir = join(repoRoot, 'src-tauri', 'target')
 const webviewId = '913236b0-52e1-4dde-943c-2cfdbe153d31'
 const webviewFile = 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
-const webviewCachePath = join(
-  targetDir,
-  '.tauri',
-  'x64',
-  webviewId,
-  webviewFile,
-)
+const webviewStagingPath = join(targetDir, 'offline-staging', webviewFile)
 const auditedUpstreamCommit = 'c2d2a9dec6120ad96410bb368a54a1c359ebc392'
 const fixedHarness = {
   version: '0.1.5-rc.2',
@@ -74,17 +68,20 @@ const assets = [
     sha256: 'd4bf83d6a860ccae9af44e508e1e00a39f09db6fa78a9ba5543b94d87ca22a29',
     archive: 'zip',
   },
-  {
-    key: 'webview2',
-    version: `evergreen-standalone-x64-${webviewId}`,
-    url: `https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/${webviewId}/${webviewFile}`,
-    file: webviewFile,
-    sha256: 'ad9b350625e132481bc0953eee9e032810134df9fedbd7be364c3f4e0e4dbd64',
-    archive: 'exe',
-  },
 ]
 
-const fixedSourceUrls = new Set(assets.map(asset => asset.url))
+const webviewSpec = {
+  key: 'webview2',
+  version: `evergreen-standalone-x64-${webviewId}`,
+  url: `https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/${webviewId}/${webviewFile}`,
+  file: webviewFile,
+  sha256: 'ad9b350625e132481bc0953eee9e032810134df9fedbd7be364c3f4e0e4dbd64',
+  archive: 'exe',
+}
+
+const fixedSourceUrls = new Set(
+  [...assets, webviewSpec].map(asset => asset.url),
+)
 const allowedRedirectHosts = new Set([
   'nodejs.org',
   'github.com',
@@ -245,8 +242,7 @@ async function fetchAsset(spec) {
   fail(`too many redirects while downloading ${spec.key}`)
 }
 
-async function ensureAsset(spec) {
-  const destination = join(assetDir, spec.file)
+async function ensureAsset(spec, destination = join(assetDir, spec.file)) {
   try {
     if ((await stat(destination)).isFile()) {
       const existing = await digestFile(destination)
@@ -265,8 +261,11 @@ async function ensureAsset(spec) {
   if (actual !== spec.sha256) {
     fail(`${spec.key} SHA-256 mismatch, expected ${spec.sha256}, got ${actual}`)
   }
-  await mkdir(assetDir, { recursive: true })
-  const temporary = join(assetDir, `.${spec.file}.${process.pid}.${randomUUID()}.tmp`)
+  await mkdir(dirname(destination), { recursive: true })
+  const temporary = join(
+    dirname(destination),
+    `.${spec.file}.${process.pid}.${randomUUID()}.tmp`,
+  )
   try {
     await writeFile(temporary, bytes, { flag: 'wx' })
     await rm(destination, { force: true })
@@ -366,21 +365,20 @@ async function verifyManifest() {
     }
   }
   try {
-    if (!(await stat(webviewCachePath)).isFile()) {
-      fail(`WebView2 cache is not a file: ${webviewCachePath}`)
+    if (!(await stat(webviewStagingPath)).isFile()) {
+      fail(`WebView2 sidecar is not staged: ${webviewStagingPath}`)
     }
   }
   catch {
-    fail(`WebView2 cache is missing: ${webviewCachePath}`)
+    fail(`WebView2 sidecar is missing: ${webviewStagingPath}`)
   }
-  const webviewSpec = assets.find(asset => asset.key === 'webview2')
-  const cachedDigest = await digestFile(webviewCachePath)
-  if (cachedDigest !== webviewSpec.sha256) {
+  const stagedDigest = await digestFile(webviewStagingPath)
+  if (stagedDigest !== webviewSpec.sha256) {
     fail(
-      `WebView2 cache SHA-256 mismatch, expected ${webviewSpec.sha256}, got ${cachedDigest}`,
+      `WebView2 sidecar SHA-256 mismatch, expected ${webviewSpec.sha256}, got ${stagedDigest}`,
     )
   }
-  log(`verified ${assets.length} offline assets and WebView2 cache`)
+  log(`verified ${assets.length} offline assets and side-by-side WebView2 installer`)
   return manifest
 }
 
@@ -388,9 +386,10 @@ async function prepare() {
   const metadata = await getBuildMetadata()
   await mkdir(assetDir, { recursive: true })
   for (const spec of assets) await ensureAsset(spec)
-  const webview = join(assetDir, webviewFile)
-  await mkdir(dirname(webviewCachePath), { recursive: true })
-  await copyFile(webview, webviewCachePath)
+  // Keep WebView2 beside the app installer. The resources/**/* glob would
+  // otherwise pull a stale copy into the main installer.
+  await rm(join(assetDir, webviewFile), { force: true })
+  await ensureAsset(webviewSpec, webviewStagingPath)
   await writeFile(manifestPath, `${JSON.stringify(buildManifest(metadata), null, 2)}\n`)
   await verifyManifest()
   log(`prepared ${manifestPath}`)
@@ -444,6 +443,7 @@ async function finalize() {
   await mkdir(outputDir, { recursive: true })
   const installerName = `deepseek-harness-desktop-${metadata.desktopVersion}-windows-x64-offline-setup.exe`
   const outputInstaller = join(outputDir, installerName)
+  const outputWebview = join(outputDir, webviewFile)
   const outputManifest = join(outputDir, 'offline-manifest.json')
   const sumsPath = join(outputDir, 'SHA256SUMS')
   const zipPath = join(
@@ -453,12 +453,14 @@ async function finalize() {
     `deepseek-harness-desktop-${metadata.desktopVersion}-windows-x64-offline.zip`,
   )
   await copyFile(installer, outputInstaller)
+  await copyFile(webviewStagingPath, outputWebview)
   await copyFile(manifestPath, outputManifest)
   const installerDigest = await digestFile(outputInstaller)
+  const webviewDigest = await digestFile(outputWebview)
   const manifestDigest = await digestFile(outputManifest)
   await writeFile(
     sumsPath,
-    `${installerDigest}  ${installerName}\n${manifestDigest}  offline-manifest.json\n`,
+    `${installerDigest}  ${installerName}\n${webviewDigest}  ${webviewFile}\n${manifestDigest}  offline-manifest.json\n`,
   )
   await rm(zipPath, { force: true })
   await makeZip(outputDir, zipPath)
@@ -466,9 +468,10 @@ async function finalize() {
   const zipDigest = await digestFile(zipPath)
   await writeFile(
     bundleSumsPath,
-    `${zipDigest}  ${basename(zipPath)}\n${installerDigest}  offline-windows-x64/${installerName}\n${manifestDigest}  offline-windows-x64/offline-manifest.json\n`,
+    `${zipDigest}  ${basename(zipPath)}\n${installerDigest}  offline-windows-x64/${installerName}\n${webviewDigest}  offline-windows-x64/${webviewFile}\n${manifestDigest}  offline-windows-x64/offline-manifest.json\n`,
   )
   log(`installer: ${outputInstaller}`)
+  log(`WebView2 sidecar: ${outputWebview}`)
   log(`manifest: ${outputManifest}`)
   log(`checksums: ${sumsPath}`)
   log(`archive: ${zipPath}`)

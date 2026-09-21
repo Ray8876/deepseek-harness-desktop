@@ -1,6 +1,6 @@
 # Windows x64 offline bundle
 
-This workflow builds an unsigned NSIS installer for a Windows x64 machine that has no network access at first launch. The normal online build and release workflows are unchanged.
+This workflow builds an unsigned NSIS installer plus a separate WebView2 Runtime installer for a Windows x64 machine that has no network access at first launch. The normal online build and release workflows are unchanged.
 
 ## Audit baseline
 
@@ -10,7 +10,7 @@ This workflow builds an unsigned NSIS installer for a Windows x64 machine that h
 - Node.js: `v22.22.0`, SHA-256 `c97fa376d2becdc8863fcd3ca2dd9a83a9f3468ee7ccf7a6d076ec66a645c77a`
 - pnpm: `11.7.0`, SHA-256 `deafa7ec98a1218b6a047289b92fbe2395c1e22d3495bb711653013218ee15ee`
 - MinGit: `2.53.0.2`, SHA-256 `d4bf83d6a860ccae9af44e508e1e00a39f09db6fa78a9ba5543b94d87ca22a29`
-- WebView2 Evergreen Standalone x64, SHA-256 `ad9b350625e132481bc0953eee9e032810134df9fedbd7be364c3f4e0e4dbd64`
+- WebView2 Evergreen Standalone x64 sidecar, SHA-256 `ad9b350625e132481bc0953eee9e032810134df9fedbd7be364c3f4e0e4dbd64`
 - Harness Windows package SHA-256 `328780f453d89f01543bfc1e055ada75a6ff2c6204c7973254c61f95be81076a`
 
 The fixed Harness tag and commit are registered in `src-tauri/resources/version-recommend.json`. `scripts/offline-windows.mjs` rejects any other version, URL, redirect host, or digest.
@@ -31,7 +31,7 @@ DSH_OFFLINE_BUILD=1 pnpm tauri build --config src-tauri/tauri.offline.conf.json
 pnpm offline:finalize
 ```
 
-On PowerShell, set `$env:DSH_OFFLINE_BUILD = "1"` for the Tauri build step. `offline:prepare` downloads only the pinned assets into `src-tauri/resources/offline/`, verifies every SHA-256, writes `src-tauri/resources/offline-manifest.json`, and populates Tauri's WebView2 cache at `src-tauri/target/.tauri/x64/913236b0-52e1-4dde-943c-2cfdbe153d31/`. `offline:verify` performs the same checks without downloading.
+On PowerShell, set `$env:DSH_OFFLINE_BUILD = "1"` for the Tauri build step. `offline:prepare` downloads the four application assets into `src-tauri/resources/offline/`, downloads the pinned WebView2 Standalone installer into `src-tauri/target/offline-staging/`, verifies every SHA-256, and writes `src-tauri/resources/offline-manifest.json`. The offline Tauri config uses `webviewInstallMode: skip`, so WebView2 is not embedded in or downloaded by the main NSIS installer. `offline:verify` performs the same checks without downloading.
 
 ## Artifacts
 
@@ -40,10 +40,11 @@ The final output is under `src-tauri/target/release/bundle/`:
 - `deepseek-harness-desktop-<version>-windows-x64-offline.zip`
 - `SHA256SUMS`
 - `offline-windows-x64/deepseek-harness-desktop-<version>-windows-x64-offline-setup.exe`
+- `offline-windows-x64/MicrosoftEdgeWebView2RuntimeInstallerX64.exe`
 - `offline-windows-x64/offline-manifest.json`
 - `offline-windows-x64/SHA256SUMS`
 
-The GitHub Actions artifact uploads only the `offline-windows-x64/` directory. The artifact therefore contains one installer; the separately generated full `.zip` remains a local build output and is not nested into the artifact.
+The GitHub Actions artifact uploads only the `offline-windows-x64/` directory. The artifact therefore contains the two side-by-side installers, the manifest, and checksums; the separately generated full `.zip` remains a local build output and is not nested into the artifact.
 
 The installer is unsigned. Signing and publication are separate authorization steps.
 
@@ -51,8 +52,8 @@ The installer is unsigned. Signing and publication are separate authorization st
 
 Use a clean Windows 10/11 x64 VM, snapshot it, and disconnect the network before each first-launch test:
 
-1. Install the NSIS package and confirm installation completes without a download prompt.
-2. Start the application, complete first-run setup, and confirm the embedded Harness UI loads.
+1. Run `MicrosoftEdgeWebView2RuntimeInstallerX64.exe` and confirm Runtime installation completes without a download prompt.
+2. Run the NSIS package and confirm main application installation completes without a download prompt.
 3. Close and reopen the application, then reboot the VM and repeat the launch check.
 4. Exercise the CLI shim from a fresh terminal and verify it uses the bundled Node, pnpm, and Git.
 5. Verify that community plugin installation/update reports a network-required error while bundled plugins still load.

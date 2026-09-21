@@ -8,7 +8,7 @@
 
 <p align="center">
   基于 <a href="https://github.com/dsh-tauri/deepseek-harness-desktop">上游项目</a> 的个人修改版，<br />
-  为 Windows x64 提供首次启动无需联网的完整离线安装包。
+  为 Windows x64 提供首次启动无需联网的离线安装包。
 </p>
 
 <p align="center">
@@ -31,24 +31,26 @@
 
 ## Windows 离线安装修改版
 
-本 fork 在上游桌面端 `v0.15.8` 基础上增加独立的 Windows x64 离线安装流程。安装包内置首次运行所需的 Node.js、Harness、pnpm、MinGit 和 WebView2，适合目标电脑无法联网或不便临时下载依赖的场景。
+本 fork 在上游桌面端 `v0.15.8` 基础上增加独立的 Windows x64 离线安装流程。Release 将主程序安装器与官方 WebView2 Standalone x64 安装器并列提供；主程序安装器内置 Node.js、Harness、pnpm 和 MinGit，不会在安装过程中联网下载 WebView2。
 
 > [!IMPORTANT]
-> 这是个人维护的修改版，不是上游官方发行包。当前生成的是**未签名 NSIS 安装器**，Windows 可能显示未知发布者提示。安装、首次启动和内置插件可离线完成；社区插件安装、在线更新及其他网络功能仍然需要联网。
+> 这是个人维护的修改版，不是上游官方发行包。当前生成的是**未签名 NSIS 安装器**，Windows 可能显示未知发布者提示。离线使用时请先运行 Release 中的 `MicrosoftEdgeWebView2RuntimeInstallerX64.exe`，再运行主程序安装器；社区插件安装、在线更新及其他网络功能仍然需要联网。
 
 ### 使用 GitHub Actions 构建
 
 1. 打开本仓库的 [Actions](https://github.com/Ray8876/deepseek-harness-desktop/actions) 页面。
 2. 选择 **Offline Windows Build**，点击 **Run workflow**。
 3. 构建完成后下载 `deepseek-harness-desktop-windows-x64-offline` Artifact。
+4. 先运行 WebView2 Runtime 安装器，再运行主程序安装器。
 
 Artifact 包含：
 
 - Windows x64 离线安装器 `.exe`
+- 独立的 WebView2 Runtime 安装器 `MicrosoftEdgeWebView2RuntimeInstallerX64.exe`
 - `offline-manifest.json`
 - `SHA256SUMS`
 
-Artifact 本身就是 GitHub 下载的压缩包，内部只保留一份安装器；本地构建目录仍会额外生成完整离线分发包 `.zip`。
+Artifact 本身就是 GitHub 下载的压缩包，内部包含主程序安装器和独立 WebView2 Runtime 安装器；本地构建目录仍会额外生成同样内容的完整离线分发包 `.zip`。
 
 构建任务使用 GitHub 托管的临时 `windows-2022` 环境，固定依赖版本并验证每项资产的 SHA-256。详细版本、构建命令和断网验收步骤见 [离线 Windows 构建说明](./docs/OFFLINE_WINDOWS.md)。
 
@@ -109,7 +111,7 @@ Windows x64 离线修改版从本仓库的 [Actions](https://github.com/Ray8876/
 brew install dsh-tauri/desktop/deepseek-harness
 ```
 
-本 fork 的 Windows 离线安装包已包含 Node 运行时与 Harness 内核，首次运行无需下载；上游常规安装包仍会在首次运行时下载依赖。启动后进入 `http://127.0.0.1:3080` 的 Harness 界面。
+本 fork 的 Windows 离线安装包已包含 Node 运行时与 Harness 内核，安装前单独安装 WebView2 Runtime 后，首次运行无需下载；上游常规安装包仍会在首次运行时下载依赖。启动后进入 `http://127.0.0.1:3080` 的 Harness 界面。
 
 **系统要求：** Windows 10+ · macOS 10.15+ · Linux（AppImage / .deb）· 离线修改版仅提供 Windows x64 · Harness 内核 **0.1.5-rc.2**
 

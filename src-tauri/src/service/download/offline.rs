@@ -11,7 +11,7 @@ use tauri::{AppHandle, Manager, Runtime};
 const MANIFEST_FILE: &str = "offline-manifest.json";
 const MANIFEST_SCHEMA: u32 = 1;
 const OFFLINE_MODE: &str = "windows-x64";
-const REQUIRED_ASSETS: [&str; 5] = ["node", "harness", "pnpm", "mingit", "webview2"];
+const REQUIRED_ASSETS: [&str; 4] = ["node", "harness", "pnpm", "mingit"];
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -234,8 +234,7 @@ mod tests {
                 "node": { "version": "v22.22.0", "url": "https://nodejs.org/a", "path": path, "sha256": "a".repeat(64), "archive": "zip" },
                 "harness": { "version": "0.1.5-rc.2", "url": "https://github.com/a", "path": "offline/harness.zip", "sha256": "b".repeat(64), "archive": "zip", "releaseTag": "dsh-0.1.5-rc.2-34495473237", "releaseCommit": "a9582858297904ee7d7ffe613cfd28faaa5f6462" },
                 "pnpm": { "version": "11.7.0", "url": "https://registry.npmjs.org/a", "path": "offline/pnpm.tgz", "sha256": "c".repeat(64), "archive": "tgz" },
-                "mingit": { "version": "2.53.0.2", "url": "https://github.com/a", "path": "offline/mingit.zip", "sha256": "d".repeat(64), "archive": "zip" },
-                "webview2": { "version": "evergreen", "url": "https://msedge.sf.dl.delivery.mp.microsoft.com/a", "path": "offline/webview2.exe", "sha256": "e".repeat(64), "archive": "exe" }
+                "mingit": { "version": "2.53.0.2", "url": "https://github.com/a", "path": "offline/mingit.zip", "sha256": "d".repeat(64), "archive": "zip" }
             }
         })
         .to_string()
