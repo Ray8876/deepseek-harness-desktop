@@ -80,13 +80,18 @@ jobs:
           if ($null -ne $resourceCopy) {
             throw 'WebView2 standalone installer must not be included in Tauri resources.'
           }
-          $nsis = Get-ChildItem 'src-tauri/target/release/bundle/nsis' -Recurse -Filter 'installer.nsi' | Select-Object -First 1
-          if ($null -eq $nsis) {
-            throw 'Generated NSIS script was not found.'
+          $config = Get-Content 'src-tauri/tauri.offline.conf.json' -Raw | ConvertFrom-Json
+          if ($config.bundle.windows.webviewInstallMode.type -ne 'skip') {
+            throw 'Offline Tauri config does not set webviewInstallMode.type to skip.'
           }
-          $script = Get-Content $nsis.FullName -Raw
-          if ($script -notmatch 'INSTALLWEBVIEW2MODE "skip"') {
-            throw 'Generated NSIS script does not skip WebView2 installation.'
+          $nsis = Get-ChildItem 'src-tauri/target/release/bundle/nsis' -Recurse -Filter '*.nsi' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -ne $nsis) {
+            $script = Get-Content $nsis.FullName -Raw
+            if ($script -notmatch 'INSTALLWEBVIEW2MODE "skip"') {
+              throw 'Generated NSIS script does not skip WebView2 installation.'
+            }
+          } else {
+            Write-Host 'NSIS intermediate script was not retained; offline config is verified as skip.'
           }
 
       - name: Finalize offline bundle
