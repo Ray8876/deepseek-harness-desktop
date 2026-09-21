@@ -47,16 +47,22 @@ pub(crate) fn build_plugin_envs(
             node_abs.to_string_lossy().into_owned(),
         ),
     ]);
+    if config::offline_build() {
+        envs.insert("npm_config_offline".to_string(), "true".to_string());
+        envs.insert("pnpm_config_offline".to_string(), "true".to_string());
+    }
     // 用户 pnpm 过旧/不可探测时强制 pnpm shim 优先捆绑版，避免 8/9 的
     // autoInstallPeers 语义与 workspace-root gate 破坏插件安装（见 ensure_pnpm）
     if prefer_bundled_pnpm {
         envs.insert("DSH_PREFER_BUNDLED_PNPM".to_string(), "1".to_string());
-    } else if let Some(pnpm) = cli::find_user_pnpm(app_handle) {
-        // 显式注入绝对路径，避免子进程在不同 PATH/CWD 下重新发现失败。
-        // Unix 保留 mise 依赖 argv[0] 的 shim 链接；Windows 仍解析连接点并剥离
-        // `\\?\`。同时防御性排除应用自身 shim，避免递归调用。
-        if let Some(pnpm_value) = cli::pnpm_env_value(&pnpm, &bin_dir) {
-            envs.insert("DSH_PNPM".to_string(), pnpm_value);
+    } else if !config::offline_build() {
+        if let Some(pnpm) = cli::find_user_pnpm(app_handle) {
+            // 显式注入绝对路径，避免子进程在不同 PATH/CWD 下重新发现失败。
+            // Unix 保留 mise 依赖 argv[0] 的 shim 链接；Windows 仍解析连接点并剥离
+            // `\\?\`。同时防御性排除应用自身 shim，避免递归调用。
+            if let Some(pnpm_value) = cli::pnpm_env_value(&pnpm, &bin_dir) {
+                envs.insert("DSH_PNPM".to_string(), pnpm_value);
+            }
         }
     }
 

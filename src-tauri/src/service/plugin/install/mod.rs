@@ -164,6 +164,15 @@ async fn install_with_cancel(
             preset,
             bundled_dir_of(app_handle, preset),
         )?);
+        if config::offline_build()
+            && !raw.starts_with("link:")
+            && !raw.starts_with("file:")
+        {
+            return Err(
+                "OFFLINE_PLUGIN_NETWORK_REQUIRED: community plugin installation requires network access"
+                    .to_string(),
+            );
+        }
         // 规范化后 `git+...` 前缀即 git 托管依赖：pnpm 安装时需要实际可用的 git
         // （见下方预检）；npm 包名（如 `dshmarket`）与 `link:` 本地依赖无需 git。
         if raw.starts_with("git+") {

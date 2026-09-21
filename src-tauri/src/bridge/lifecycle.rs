@@ -88,6 +88,8 @@ pub async fn install_dependencies(app_handle: AppHandle) -> Result<bool, String>
         return Ok(false);
     }
 
+    let offline_manifest = download::load_offline_manifest(&app_handle)?;
+
     // 以实际安装状态为准：本地安装与 GitHub 最新 release 的 commit hash
     // 不一致时，说明上游 pkg 有更新/修复，需要自动重新下载。
     let node_ok = download::Nodejs.check_installed(&app_handle);
@@ -147,7 +149,9 @@ pub async fn install_dependencies(app_handle: AppHandle) -> Result<bool, String>
         .flatten();
     let preserve_installed =
         preserve_newer_installed_dsh(installed_version.as_deref(), recommended_version.as_deref());
-    let dsh_latest = if preserve_installed {
+    let dsh_latest = if config::offline_build() {
+        None
+    } else if preserve_installed {
         log::info!(
             "Keeping installed dsh version above recommendation: {}",
             installed_version.as_deref().unwrap_or_default()
@@ -165,64 +169,74 @@ pub async fn install_dependencies(app_handle: AppHandle) -> Result<bool, String>
     // 可用的 node_modules 整目录删除重解压，Windows 上原生模块 DLL 锁/重解压
     // 很容易留下破损安装，导致启动报找不到 @deepseek-ai/dsh-client-ui-settings
     // 或 HARNESS_NOT_FOUND。仅在真更新（UpdateAvailable）时才允许重新下载。
-    let dsh_need_install = match dsh_latest.as_ref() {
-        None => false,
-        Some(Ok(latest)) if dsh_files_ok => {
-            let record_commit = config::get_dsh_pkg_commit(&app_handle);
-            let record_tag = config::get_dsh_pkg_tag(&app_handle);
-            // 老记录没有 tag，反查 pkg 仓库 tags 列表确认记录对应的发布版本；
-            // 反查失败时由 resolve_update 回退到“以实际文件为准”的保守分支
-            let legacy_tags = if record_tag.is_none() {
-                download::fetch_dsh_pkg_tags().await.unwrap_or_default()
-            } else {
-                Vec::new()
-            };
-            match download::resolve_update(
-                record_commit.as_deref(),
-                record_tag.as_deref(),
-                installed_version.as_deref(),
-                latest,
-                &legacy_tags,
-            ) {
-                // 安装文件已是最新 release，只是记录滞后：修正记录后下次
-                // 启动直接走 commit 快速比对，不再误判、也绝不整包重下
-                download::UpdateCheck::UpToDate | download::UpdateCheck::HealUpToDate => {
-                    if record_commit.as_deref() != Some(latest.commit.as_str()) {
-                        log::info!(
-                            "Installed Harness files already at latest release, healing stale record: {} ({})",
-                            latest.tag,
-                            latest.commit
-                        );
-                        config::set_dsh_pkg_commit(&app_handle, latest.commit.clone());
-                        config::set_dsh_pkg_tag(&app_handle, latest.tag.clone());
-                    }
-                    false
-                }
-                download::UpdateCheck::UpdateAvailable => {
-                    // 有新版但 GitHub API 限流拿不到可信源码摘要时，不自动整包重下
-                    // （无法校验完整性，Windows 上重解压还易损坏 node_modules）。
-                    // 保持本地安装，更新提示由启动后的 check_dsh_update 给出，稍后可重试。
-                    if latest.digest.is_none() {
-                        log::warn!(
-                            "New dsh release {} found but trusted digest unavailable (API rate-limited), keeping local install",
-                            latest.tag
-                        );
+    let dsh_need_install = if config::offline_build() {
+        !dsh_files_ok
+            || offline_manifest
+                .as_ref()
+                .and_then(|manifest| manifest.asset("harness").ok())
+                .is_some_and(|asset| {
+                    active_dsh_version(&app_handle).as_deref() != Some(asset.version.trim())
+                })
+    } else {
+        match dsh_latest.as_ref() {
+            None => false,
+            Some(Ok(latest)) if dsh_files_ok => {
+                let record_commit = config::get_dsh_pkg_commit(&app_handle);
+                let record_tag = config::get_dsh_pkg_tag(&app_handle);
+                // 老记录没有 tag，反查 pkg 仓库 tags 列表确认记录对应的发布版本；
+                // 反查失败时由 resolve_update 回退到“以实际文件为准”的保守分支
+                let legacy_tags = if record_tag.is_none() {
+                    download::fetch_dsh_pkg_tags().await.unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                match download::resolve_update(
+                    record_commit.as_deref(),
+                    record_tag.as_deref(),
+                    installed_version.as_deref(),
+                    latest,
+                    &legacy_tags,
+                ) {
+                    // 安装文件已是最新 release，只是记录滞后：修正记录后下次
+                    // 启动直接走 commit 快速比对，不再误判、也绝不整包重下
+                    download::UpdateCheck::UpToDate | download::UpdateCheck::HealUpToDate => {
+                        if record_commit.as_deref() != Some(latest.commit.as_str()) {
+                            log::info!(
+                                "Installed Harness files already at latest release, healing stale record: {} ({})",
+                                latest.tag,
+                                latest.commit
+                            );
+                            config::set_dsh_pkg_commit(&app_handle, latest.commit.clone());
+                            config::set_dsh_pkg_tag(&app_handle, latest.tag.clone());
+                        }
                         false
-                    } else {
-                        true
+                    }
+                    download::UpdateCheck::UpdateAvailable => {
+                        // 有新版但 GitHub API 限流拿不到可信源码摘要时，不自动整包重下
+                        // （无法校验完整性，Windows 上重解压还易损坏 node_modules）。
+                        // 保持本地安装，更新提示由启动后的 check_dsh_update 给出，稍后可重试。
+                        if latest.digest.is_none() {
+                            log::warn!(
+                                "New dsh release {} found but trusted digest unavailable (API rate-limited), keeping local install",
+                                latest.tag
+                            );
+                            false
+                        } else {
+                            true
+                        }
                     }
                 }
             }
-        }
-        // 核心文件缺失（首次安装或目录被清空）→ 需要安装
-        Some(Ok(_)) => true,
-        Some(Err(e)) => {
-            // 网络不可用或 GitHub API 限流时保留本地安装，不阻塞启动
-            log::warn!(
-                "Failed to check latest dsh release info, keeping local install: {}",
-                e
-            );
-            !dsh_files_ok
+            // 核心文件缺失（首次安装或目录被清空）→ 需要安装
+            Some(Ok(_)) => true,
+            Some(Err(e)) => {
+                // 网络不可用或 GitHub API 限流时保留本地安装，不阻塞启动
+                log::warn!(
+                    "Failed to check latest dsh release info, keeping local install: {}",
+                    e
+                );
+                !dsh_files_ok
+            }
         }
     };
 
@@ -272,6 +286,9 @@ pub async fn install_dependencies(app_handle: AppHandle) -> Result<bool, String>
 pub async fn check_dsh_update(
     app_handle: AppHandle,
 ) -> Result<Option<download::LatestDshPkg>, String> {
+    if config::offline_build() {
+        return Ok(None);
+    }
     // 本地没有安装时无需提示更新
     let dsh_files_ok = download::Dsh.check_installed(&app_handle);
     if !dsh_files_ok {

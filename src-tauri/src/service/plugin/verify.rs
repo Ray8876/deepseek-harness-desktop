@@ -102,6 +102,13 @@ pub(crate) async fn ensure_preset_plugins(app_handle: &AppHandle) -> Result<(), 
         missing.len()
     );
 
+    if config::offline_build() {
+        let detail =
+            "OFFLINE_PLUGIN_NETWORK_REQUIRED: repairing community plugins requires network access";
+        record_missing(app_handle, &missing, detail);
+        return Ok(());
+    }
+
     // 修复：在 profile 目录以现有 manifest + lockfile 为准执行 `pnpm install`，
     // 重建 node_modules 依赖图（不解析新版本）。修复失败不阻断启动，给缺失插件
     // 记录错误标记，让前端插件面板暴露问题、用户可走卸载兜底恢复。

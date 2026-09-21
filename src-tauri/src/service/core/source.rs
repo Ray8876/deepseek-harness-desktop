@@ -117,6 +117,9 @@ fn warn_unsupported_local_core(app_handle: &AppHandle, version: &str) {
 /// `active_core` 设置不改写——用户升级本地核心后自动恢复「本地优先」。
 pub fn active_source(app_handle: &AppHandle) -> CoreSource {
     let setting = config::get_store_dat_setting(app_handle);
+    if config::offline_build() && setting.active_core.is_none() {
+        return CoreSource::App;
+    }
     let local = local_core(app_handle);
     let local_usable = local
         .as_ref()

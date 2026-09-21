@@ -1,17 +1,20 @@
 <p align="center">
-  <a href="https://github.com/dsh-tauri/deepseek-harness-desktop">
+  <a href="https://github.com/Ray8876/deepseek-harness-desktop">
     <img src="public/favicon.svg" width="96" alt="DeepSeek Harness Desktop" />
   </a>
 </p>
 
-<h1 align="center">DeepSeek Harness 桌面版</h1>
+<h1 align="center">DeepSeek Harness 桌面版<br />Windows 离线安装修改版</h1>
 
 <p align="center">
-  在桌面上一键运行 <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a> ——<br />
-  无需 Node.js、无需 pnpm、无需 Docker，下载即用。
+  基于 <a href="https://github.com/dsh-tauri/deepseek-harness-desktop">上游项目</a> 的个人修改版，<br />
+  为 Windows x64 提供首次启动无需联网的完整离线安装包。
 </p>
 
 <p align="center">
+  <a href="https://github.com/Ray8876/deepseek-harness-desktop/actions/workflows/build-windows-offline.yml">
+    <img src="https://github.com/Ray8876/deepseek-harness-desktop/actions/workflows/build-windows-offline.yml/badge.svg" alt="Offline Windows Build" />
+  </a>
   <a href="https://github.com/dsh-tauri/deepseek-harness-desktop/releases">
     <img src="https://img.shields.io/github/v/release/dsh-tauri/deepseek-harness-desktop?style=flat-square&label=release&color=4D6BFE" alt="Release" />
   </a>
@@ -25,6 +28,28 @@
 <p align="center">
   <samp><a href="./README.en.md">English</a> · <a href="./README.es.md">Español</a> · <a href="https://dshtauri.mintlify.site">文档</a> · <strong>中文</strong></samp>
 </p>
+
+## Windows 离线安装修改版
+
+本 fork 在上游桌面端 `v0.15.8` 基础上增加独立的 Windows x64 离线安装流程。安装包内置首次运行所需的 Node.js、Harness、pnpm、MinGit 和 WebView2，适合目标电脑无法联网或不便临时下载依赖的场景。
+
+> [!IMPORTANT]
+> 这是个人维护的修改版，不是上游官方发行包。当前生成的是**未签名 NSIS 安装器**，Windows 可能显示未知发布者提示。安装、首次启动和内置插件可离线完成；社区插件安装、在线更新及其他网络功能仍然需要联网。
+
+### 使用 GitHub Actions 构建
+
+1. 打开本仓库的 [Actions](https://github.com/Ray8876/deepseek-harness-desktop/actions) 页面。
+2. 选择 **Offline Windows Build**，点击 **Run workflow**。
+3. 构建完成后下载 `deepseek-harness-desktop-windows-x64-offline` Artifact。
+
+Artifact 包含：
+
+- Windows x64 离线安装器 `.exe`
+- 完整离线分发包 `.zip`
+- `offline-manifest.json`
+- `SHA256SUMS`
+
+构建任务使用 GitHub 托管的临时 `windows-2022` 环境，固定依赖版本并验证每项资产的 SHA-256。详细版本、构建命令和断网验收步骤见 [离线 Windows 构建说明](./docs/OFFLINE_WINDOWS.md)。
 
 <p align="center">
  <a href="https://trendshift.io/repositories/151676?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-151676" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/151676/daily?language=Rust" alt="dsh-tauri%2Fdeepseek-harness-desktop | Trendshift" width="250" height="55"/></a>
@@ -75,7 +100,7 @@
 
 ## 快速开始
 
-从 [Releases](https://github.com/dsh-tauri/deepseek-harness-desktop/releases) 下载对应平台安装包，安装后启动即可。
+Windows x64 离线修改版从本仓库的 [Actions](https://github.com/Ray8876/deepseek-harness-desktop/actions) 下载构建产物；其他平台及上游常规安装包请前往[上游 Releases](https://github.com/dsh-tauri/deepseek-harness-desktop/releases)。
 
 **macOS（Homebrew）：** 也可通过 Homebrew 一键安装：
 
@@ -83,9 +108,9 @@
 brew install dsh-tauri/desktop/deepseek-harness
 ```
 
-首次运行会下载 Node 运行时与 Harness 内核（如已经安装 `dsh` ，则使用安装版本），随后直接进入 `http://127.0.0.1:3080` 的 Harness 界面；此后完全本地运行，无需联网。
+本 fork 的 Windows 离线安装包已包含 Node 运行时与 Harness 内核，首次运行无需下载；上游常规安装包仍会在首次运行时下载依赖。启动后进入 `http://127.0.0.1:3080` 的 Harness 界面。
 
-**系统要求：** Windows 10+ · macOS 10.15+ · Linux（AppImage / .deb）· 首次运行需要网络 · Harness 内核 **0.1.5-rc.2** 或更高
+**系统要求：** Windows 10+ · macOS 10.15+ · Linux（AppImage / .deb）· 离线修改版仅提供 Windows x64 · Harness 内核 **0.1.5-rc.2**
 
 > **Linux Wayland 注意（PikaOS / GNOME Wayland / Ubuntu 22.04+）：** AppImage 在 Wayland 下可能因 WebKitGTK 黑屏/崩溃，应用已自动处理常见情形。 <details><summary>若仍黑屏/崩溃：</summary><br>**改用 `.deb`**（已验证 PikaOS 4 Wayland），或手动 `WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 GDK_BACKEND=x11 ./AppImage`。图标不显示时，将应用内 `hicolor` 图标复制到 `~/.local/share/icons` 并运行 `update-desktop-database`。<br></details>
 >

@@ -10,6 +10,10 @@ use super::format::get_dsh_service_url;
 use super::utils::search_node_binary;
 use super::{detect_region, Region};
 
+pub fn offline_build() -> bool {
+    option_env!("DSH_OFFLINE_BUILD").is_some()
+}
+
 /// 获取当前构建专用的 AppData 基础目录。
 ///
 /// debug 与 release 不能共用核心安装目录：更新或切换 debug 核心时，可能替换
@@ -219,7 +223,7 @@ static PREFER_BUNDLED_NODE_RUNTIME: AtomicBool = AtomicBool::new(false);
 
 /// 是否因原生模块 ABI 不匹配而强制使用捆绑运行时
 pub fn prefer_bundled_node_runtime() -> bool {
-    PREFER_BUNDLED_NODE_RUNTIME.load(Ordering::Relaxed)
+    offline_build() || PREFER_BUNDLED_NODE_RUNTIME.load(Ordering::Relaxed)
 }
 
 /// 设置捆绑运行时偏好（仅由启动前的原生模块探测调用）
@@ -425,6 +429,14 @@ fn git_binary_works(binary: &Path) -> bool {
 /// 返回桌面端应注入子进程 PATH 的已选 Git `cmd` 目录。
 #[cfg(windows)]
 pub fn get_git_cmd_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Option<PathBuf> {
+    if offline_build() {
+        let bundled = get_mingit_binary_path(app_handle);
+        return if git_binary_works(&bundled) {
+            bundled.parent().map(Path::to_path_buf)
+        } else {
+            None
+        };
+    }
     if let Some(system_git) = find_system_git_binary() {
         return system_git.parent().map(Path::to_path_buf);
     }
@@ -444,7 +456,15 @@ pub fn get_git_cmd_dir<R: Runtime>(_app_handle: &AppHandle<R>) -> Option<PathBuf
 /// 当前环境是否已有可供插件 Git 依赖使用的 Git。
 #[cfg(windows)]
 pub fn git_runtime_ready<R: Runtime>(app_handle: &AppHandle<R>) -> bool {
+    if offline_build() {
+        return bundled_git_runtime_ready(app_handle);
+    }
     find_system_git_binary().is_some() || git_binary_works(&get_mingit_binary_path(app_handle))
+}
+
+#[cfg(windows)]
+pub fn bundled_git_runtime_ready<R: Runtime>(app_handle: &AppHandle<R>) -> bool {
+    git_binary_works(&get_mingit_binary_path(app_handle))
 }
 
 /// 非 Windows 平台不属于本次空白 Windows 环境的自动配置范围。

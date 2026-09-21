@@ -37,6 +37,15 @@ pub(super) async fn ensure_pnpm(
     window: &WebviewWindow,
     owner: ProcessOwner,
 ) -> Result<bool, String> {
+    if config::offline_build() {
+        if download::Pnpm.check_installed(app_handle) {
+            return Ok(true);
+        }
+        return Err(
+            "OFFLINE_PNPM_MISSING: the bundled pnpm asset is not installed; reinstall the offline bundle"
+                .to_string(),
+        );
+    }
     // 档案的 node_modules 由哪个 pnpm 主版本创建（.modules.yaml 的 storeDir 段）
     let store_major = profile_store_major(app_handle);
     let user_major = user_pnpm_major_version_bounded(app_handle, owner).await?;
@@ -761,6 +770,9 @@ pub(crate) fn bundled_pnpm_major(app_handle: &AppHandle) -> Option<u32> {
 /// store 未知时用户 pnpm ≥ 10 优先，否则强制捆绑版。启动阶段绝不触发下载，
 /// 捆绑版未安装即返回 false（交由用户 pnpm）。
 pub(crate) fn harness_prefer_bundled_pnpm(app_handle: &AppHandle) -> bool {
+    if config::offline_build() {
+        return config::get_pnpm_binary_path(app_handle).exists();
+    }
     let store_major = profile_store_major(app_handle);
     let user_major = user_pnpm_major_version(app_handle);
     let bundled_major = bundled_pnpm_major(app_handle);

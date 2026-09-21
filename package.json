@@ -25,6 +25,9 @@
     "knip": "knip",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
+    "offline:prepare": "node scripts/offline-windows.mjs prepare",
+    "offline:verify": "node scripts/offline-windows.mjs verify",
+    "offline:finalize": "node scripts/offline-windows.mjs finalize",
     "icons": "tauri icon public/favicon.svg && tsx scripts/rebuild-macos-icon.ts"
   },
   "dependencies": {

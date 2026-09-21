@@ -31,6 +31,12 @@ pub async fn download_core(
     app_handle: AppHandle,
     tag: String,
 ) -> Result<core::HarnessCore, String> {
+    if config::offline_build() {
+        return Err(
+            "OFFLINE_CORE_DOWNLOAD_DISABLED: offline builds do not download additional cores"
+                .to_string(),
+        );
+    }
     if config::auto_download_disabled() {
         return Err("AUTO_DOWNLOAD_DISABLED: 自动下载已被禁用，无法下载核心".to_string());
     }
@@ -47,5 +53,11 @@ pub async fn remove_core(app_handle: AppHandle, id: String) -> Result<(), String
 /// pnpm `add -g @latest`），返回更新后的版本号。
 #[tauri::command]
 pub async fn update_local_core(app_handle: AppHandle) -> Result<String, String> {
+    if config::offline_build() {
+        return Err(
+            "OFFLINE_CORE_UPDATE_DISABLED: offline builds do not update the local core"
+                .to_string(),
+        );
+    }
     core::update_local_core(app_handle).await
 }

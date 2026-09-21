@@ -124,26 +124,30 @@ pub async fn list(app_handle: &AppHandle) -> Vec<HarnessCore> {
     // 版本行：GitHub releases（最新在前，含 Pre-release label）→ 按版本去重，
     // 同版本只保留最后一个 tag。releases 拉取失败（离线/限流）时回退 git tags，
     // 预览标记按 tag 命名兜底（见 `download::is_preview_tag`）。
-    let (release_metas, remote_catalog_available) = match download::fetch_dsh_pkg_releases().await {
-        Ok(metas) => (metas, true),
-        Err(e) => {
-            log::warn!(
-                "Failed to fetch dsh pkg releases ({}), falling back to git tags",
-                e
-            );
-            match download::fetch_dsh_pkg_tags().await {
-                Ok(tags) => (
-                    tags.into_iter()
-                        .map(|(tag, _)| download::DshPkgReleaseMeta {
-                            tag,
-                            prerelease: false,
-                        })
-                        .collect(),
-                    true,
-                ),
-                Err(e) => {
-                    log::warn!("Failed to fetch dsh pkg tags: {}", e);
-                    (Vec::new(), false)
+    let (release_metas, remote_catalog_available) = if config::offline_build() {
+        (Vec::new(), false)
+    } else {
+        match download::fetch_dsh_pkg_releases().await {
+            Ok(metas) => (metas, true),
+            Err(e) => {
+                log::warn!(
+                    "Failed to fetch dsh pkg releases ({}), falling back to git tags",
+                    e
+                );
+                match download::fetch_dsh_pkg_tags().await {
+                    Ok(tags) => (
+                        tags.into_iter()
+                            .map(|(tag, _)| download::DshPkgReleaseMeta {
+                                tag,
+                                prerelease: false,
+                            })
+                            .collect(),
+                        true,
+                    ),
+                    Err(e) => {
+                        log::warn!("Failed to fetch dsh pkg tags: {}", e);
+                        (Vec::new(), false)
+                    }
                 }
             }
         }

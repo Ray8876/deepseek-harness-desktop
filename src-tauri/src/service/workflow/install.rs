@@ -18,6 +18,11 @@ pub async fn install(
     mut dsh_latest: Option<download::LatestDshPkg>,
 ) -> Result<bool, String> {
     log::info!("Starting installation process");
+    let offline_manifest = download::load_offline_manifest(app_handle)?;
+    if config::offline_build() {
+        dsh_latest = None;
+        log::info!("Offline build selected; dependency installation is local-only");
+    }
     // dsh 任务实际下载解压时置 true
     let mut dsh_updated = false;
 
@@ -59,7 +64,7 @@ pub async fn install(
     // 若先下载 latest、再因 API 限流从 Atom/HTML 解析 tag，latest 在两次请求间
     // 发生切换就会把另一份资产拿来匹配摘要，最终触发 INTEGRITY_CHECK_FAILED。
     let dsh_missing = !download::Dsh.check_installed(app_handle);
-    if dsh_latest.is_none() && dsh_missing {
+    if !config::offline_build() && dsh_latest.is_none() && dsh_missing {
         for attempt in 0..3 {
             let metadata = match config::recommended_dsh_version(app_handle) {
                 Some(version) => download::fetch_dsh_pkg_version(&version).await,
@@ -107,26 +112,36 @@ pub async fn install(
         // rc.7 误判为"已最新"而跳过下载——日志表现为"All installation tasks
         // completed"但实际什么都没下载，重启后仍是旧版，且前端丢掉更新提示。
         let outdated = kind == download::InstallKind::Dsh
-            && dsh_latest.as_ref().is_some_and(|info| {
-                let installed_version = config::get_dsh_version(app_handle);
-                let latest_version = download::parse_version_from_tag(&info.tag);
-                // 版本号可解析且不同 → 必须更新；版本不可解析时退回同一发布判定
-                let version_differs =
-                    match (installed_version.as_deref(), latest_version.as_deref()) {
-                        (Some(a), Some(b)) => a != b,
-                        _ => false,
-                    };
-                // 「同一发布」判定与 resolve_update 完全一致：记录 tag 与最新 tag
-                // 相同、或记录 commit 与 release 的任一合法标识（完整 SHA / build-id）
-                // 一致。限流期安装会把 build-id 写进记录，API 恢复后解析出的完整
-                // SHA 与之不等但仍是同一 release，不能据此误判为过期而重下。
-                version_differs
-                    || !download::record_matches_latest_release(
-                        config::get_dsh_pkg_commit(app_handle).as_deref(),
-                        config::get_dsh_pkg_tag(app_handle).as_deref(),
-                        info,
-                    )
-            });
+            && if config::offline_build() {
+                offline_manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.asset("harness").ok())
+                    .is_some_and(|asset| {
+                        config::get_dsh_version(app_handle).as_deref()
+                            != Some(asset.version.trim())
+                    })
+            } else {
+                dsh_latest.as_ref().is_some_and(|info| {
+                    let installed_version = config::get_dsh_version(app_handle);
+                    let latest_version = download::parse_version_from_tag(&info.tag);
+                    // 版本号可解析且不同 → 必须更新；版本不可解析时退回同一发布判定
+                    let version_differs =
+                        match (installed_version.as_deref(), latest_version.as_deref()) {
+                            (Some(a), Some(b)) => a != b,
+                            _ => false,
+                        };
+                    // 「同一发布」判定与 resolve_update 完全一致：记录 tag 与最新 tag
+                    // 相同、或记录 commit 与 release 的任一合法标识（完整 SHA / build-id）
+                    // 一致。限流期安装会把 build-id 写进记录，API 恢复后解析出的完整
+                    // SHA 与之不等但仍是同一 release，不能据此误判为过期而重下。
+                    version_differs
+                        || !download::record_matches_latest_release(
+                            config::get_dsh_pkg_commit(app_handle).as_deref(),
+                            config::get_dsh_pkg_tag(app_handle).as_deref(),
+                            info,
+                        )
+                })
+            };
         if task.check_installed(app_handle) && !outdated {
             log::debug!(
                 "Task {} already installed and up to date, skipping",
@@ -147,57 +162,56 @@ pub async fn install(
                 task.title()
             ),
         );
-        // 下载 URL 对 dsh 也是完全确定可算的（DSH_CORE_URL + 平台文件名），
-        // 无需依赖 GitHub API 元数据；api.github.com 限流/被代理拦截时
-        // （mac 首次启动常见）仍能拿到真实下载地址，避免整次安装被瞬时失败卡死。
-        // dsh 核心默认先走 GitHub 官方直连，失败自动切换 ghfast.top 镜像兜底
-        // （下载层会在界面上告知用户）；其余任务保持单一官方源。
-        let (urls, name) = if kind == download::InstallKind::Dsh {
-            // 摘要与资产必须来自同一个 release。若前面已取得 release 元数据，
-            // 必须使用其中的固定 asset URL；继续请求 `releases/latest` 会在 latest
-            // 发布切换或 CDN 缓存不一致时下载另一份文件，最终表现为摘要 mismatch。
-            let primary = dsh_latest
-                .as_ref()
-                .map(|info| info.asset_url.clone())
-                .filter(|url| !url.is_empty())
-                .unwrap_or(config::get_dsh_download_url()?);
-            let name = primary.rsplit('/').next().unwrap_or("").to_string();
-            let urls = vec![primary.clone(), config::mirror_download_url(&primary)];
-            (urls, name)
+        let (name, buffer, expected_digest) = if let Some(manifest) = offline_manifest.as_ref() {
+            let key = match kind {
+                download::InstallKind::Node => "node",
+                download::InstallKind::Dsh => "harness",
+                download::InstallKind::Pnpm => "pnpm",
+                download::InstallKind::Git => "mingit",
+            };
+            let (name, buffer) = download::read_offline_asset(&tracker, manifest, key).await?;
+            let digest = manifest.asset(key)?.sha256.clone();
+            (name, buffer, digest)
         } else {
-            let url = task.get_download_url()?;
-            let name = url.rsplit('/').next().unwrap_or("").to_string();
-            (vec![url], name)
-        };
-        // 取文件名用于解压类型判定；下载 URL 正常必含 '/'，但这里不 panic，
-        // 防御性兜底为空串（后续 ensure_extract 会因无法判定类型而报错返回，
-        // 不再让进程崩溃）。
-        log::debug!("Download URL: {}", urls.join(" -> "));
-        log::debug!("File name: {}", name);
-        let buffer = download::download_file_from_sources(&tracker, urls).await?;
-        log::info!("Download completed, file size: {} bytes", buffer.len());
-        let expected_digest = match kind {
-            download::InstallKind::Node => {
-                download::fetch_node_sha256(task.get_download_url()?.as_str()).await?
-            }
-            download::InstallKind::Dsh => {
-                // 元数据已在安装任务开始前获取，确保下载地址与摘要来自同一 release。
-                dsh_latest
+            let (urls, name) = if kind == download::InstallKind::Dsh {
+                let primary = dsh_latest
+                    .as_ref()
+                    .map(|info| info.asset_url.clone())
+                    .filter(|url| !url.is_empty())
+                    .unwrap_or(config::get_dsh_download_url()?);
+                let name = primary.rsplit('/').next().unwrap_or("").to_string();
+                let urls = vec![primary.clone(), config::mirror_download_url(&primary)];
+                (urls, name)
+            } else {
+                let url = task.get_download_url()?;
+                let name = url.rsplit('/').next().unwrap_or("").to_string();
+                (vec![url], name)
+            };
+            log::debug!("Download URL: {}", urls.join(" -> "));
+            log::debug!("File name: {}", name);
+            let buffer = download::download_file_from_sources(&tracker, urls).await?;
+            log::info!("Download completed, file size: {} bytes", buffer.len());
+            let expected_digest = match kind {
+                download::InstallKind::Node => {
+                    download::fetch_node_sha256(task.get_download_url()?.as_str()).await?
+                }
+                download::InstallKind::Dsh => dsh_latest
                     .as_ref()
                     .and_then(|info| info.digest.clone())
                     .ok_or_else(|| {
                         "DSH_INTEGRITY_UNAVAILABLE: trusted release digest is required".to_string()
-                    })?
-            }
-            download::InstallKind::Pnpm => config::PNPM_SHA256.to_string(),
-            #[cfg(windows)]
-            download::InstallKind::Git => config::get_mingit_sha256()?.to_string(),
-            #[cfg(not(windows))]
-            download::InstallKind::Git => {
-                return Err(
-                    "INSTALL_TASK_INVALID: Git task not supported on this platform".to_string(),
-                )
-            }
+                    })?,
+                download::InstallKind::Pnpm => config::PNPM_SHA256.to_string(),
+                #[cfg(windows)]
+                download::InstallKind::Git => config::get_mingit_sha256()?.to_string(),
+                #[cfg(not(windows))]
+                download::InstallKind::Git => {
+                    return Err(
+                        "INSTALL_TASK_INVALID: Git task not supported on this platform".to_string(),
+                    )
+                }
+            };
+            (name, buffer, expected_digest)
         };
         download::verify_sha256(&buffer, &expected_digest)?;
         log::info!("Download integrity verified for task {}", index + 1);
@@ -217,7 +231,17 @@ pub async fn install(
         // 记录本次安装对应的 release tag 与 commit，供下次启动比对
         if kind == download::InstallKind::Dsh {
             dsh_updated = true;
-            if let Some(info) = &dsh_latest {
+            if let Some(manifest) = &offline_manifest {
+                let asset = manifest.asset("harness")?;
+                config::set_dsh_pkg_commit(
+                    app_handle,
+                    asset.release_commit.clone().unwrap_or_default(),
+                );
+                config::set_dsh_pkg_tag(
+                    app_handle,
+                    asset.release_tag.clone().unwrap_or_default(),
+                );
+            } else if let Some(info) = &dsh_latest {
                 config::set_dsh_pkg_commit(app_handle, info.commit.clone());
                 config::set_dsh_pkg_tag(app_handle, info.tag.clone());
             }

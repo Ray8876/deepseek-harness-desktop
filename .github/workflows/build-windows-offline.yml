@@ -1,0 +1,80 @@
+name: Offline Windows Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Git ref to build
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: offline-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (windows-x64 offline)
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+          persist-credentials: false
+
+      - name: Setup Node.js and pnpm
+        uses: ./.github/actions/setup-node-pnpm
+        with:
+          node-version: 22.22.0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build bundled plugins
+        run: pnpm build:plugins
+
+      - name: Build core TypeScript packages
+        run: pnpm --filter dsh-tauri build && pnpm --filter dsh-tauri-ui build
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Run Rust tests
+        run: cargo test --all-features --locked
+        working-directory: src-tauri
+
+      - name: Prepare fixed offline assets
+        run: pnpm offline:prepare
+
+      - name: Verify fixed offline assets
+        run: pnpm offline:verify
+
+      - name: Build unsigned offline NSIS installer
+        env:
+          DSH_OFFLINE_BUILD: "1"
+        run: pnpm tauri build --config src-tauri/tauri.offline.conf.json
+
+      - name: Finalize offline bundle
+        run: pnpm offline:finalize
+
+      - name: Upload offline bundle
+        uses: actions/upload-artifact@v6
+        with:
+          name: deepseek-harness-desktop-windows-x64-offline
+          path: |
+            src-tauri/target/release/bundle/offline-windows-x64/**
+            src-tauri/target/release/bundle/deepseek-harness-desktop-*-windows-x64-offline.zip
+            src-tauri/target/release/bundle/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14

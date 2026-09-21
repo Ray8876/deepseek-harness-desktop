@@ -29,6 +29,12 @@ pub async fn install_preinstall_plugins(
     install_ids: Vec<String>,
     uninstall_ids: Vec<String>,
 ) -> Result<(), String> {
+    if config::offline_build() && !install_ids.is_empty() {
+        return Err(
+            "OFFLINE_PLUGIN_NETWORK_REQUIRED: community preset plugins require network access; skip them or retry with network"
+                .to_string(),
+        );
+    }
     // 安装与卸载均为空：无需操作，直接标记完成
     if install_ids.is_empty() && uninstall_ids.is_empty() {
         let mut setting = config::get_store_dat_setting(&app_handle);
@@ -139,6 +145,9 @@ pub fn get_dsh_plugins(app_handle: AppHandle) -> Vec<plugin::DshPlugin> {
 pub async fn refresh_plugin_updates(
     app_handle: AppHandle,
 ) -> Result<Vec<plugin::DshPlugin>, String> {
+    if config::offline_build() {
+        return Ok(plugin::watch::list(&app_handle));
+    }
     plugin::update::refresh(&app_handle).await
 }
 
@@ -146,6 +155,11 @@ pub async fn refresh_plugin_updates(
 /// 进程输出通过 `preinstall-log` 事件实时推送。
 #[tauri::command]
 pub async fn update_dsh_plugin(app_handle: AppHandle, id: String) -> Result<(), String> {
+    if config::offline_build() {
+        return Err(
+            "OFFLINE_PLUGIN_UPDATE_DISABLED: plugin updates require network access".to_string(),
+        );
+    }
     plugin::update(&app_handle, &id).await?;
     plugin::watch::force_emit(&app_handle);
     Ok(())

@@ -3,6 +3,7 @@
 //! 检查桌面端是否有新版本、下载安装包（含进度事件推送）、打开已下载的安装包，
 //! 以及关于对话框信息。
 
+use crate::config;
 use crate::service::update;
 use tauri::AppHandle;
 
@@ -11,6 +12,9 @@ use tauri::AppHandle;
 pub async fn check_desktop_update(
     app_handle: AppHandle,
 ) -> Result<Option<update::DesktopUpdateInfo>, String> {
+    if config::offline_build() {
+        return Ok(None);
+    }
     update::check(&app_handle).await
 }
 
@@ -19,6 +23,11 @@ pub async fn check_desktop_update(
 pub async fn download_desktop_update(
     app_handle: AppHandle,
 ) -> Result<update::DesktopUpdateInfo, String> {
+    if config::offline_build() {
+        return Err(
+            "OFFLINE_DESKTOP_UPDATE_DISABLED: desktop updates require network access".to_string(),
+        );
+    }
     update::download(&app_handle).await
 }
 

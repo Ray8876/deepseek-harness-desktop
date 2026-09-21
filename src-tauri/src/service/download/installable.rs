@@ -42,6 +42,21 @@ impl Installable for Nodejs {
         config::get_node_install_path(app)
     }
     fn check_installed(&self, app: &AppHandle) -> bool {
+        if config::offline_build() {
+            let expected = crate::service::download::load_offline_manifest(app)
+                .ok()
+                .flatten()
+                .and_then(|manifest| manifest.asset("node").ok().map(|asset| asset.version.clone()));
+            let Some(expected) = expected else {
+                return false;
+            };
+            let Some(node) = config::bundled_node_binary(app) else {
+                return false;
+            };
+            return config::get_node_version_of_path(&node).is_some_and(|version| {
+                version == expected.trim_start_matches('v') && config::is_runtime_compatible(app)
+            });
+        }
         // 原生模块 ABI 探测已判定本地 node 无法加载核心的原生模块（issue #441）：
         // 此时不能再以"本机有版本兼容的 node"为由跳过捆绑运行时，否则服务进程仍会
         // 用那个 ABI 不匹配的运行时启动。
@@ -99,6 +114,26 @@ impl Installable for Pnpm {
         config::get_pnpm_install_path(app)
     }
     fn check_installed(&self, app: &AppHandle) -> bool {
+        if config::offline_build() {
+            let Some(expected) = crate::service::download::load_offline_manifest(app)
+                .ok()
+                .flatten()
+                .and_then(|manifest| manifest.asset("pnpm").ok().map(|asset| asset.version.clone()))
+            else {
+                return false;
+            };
+            if !config::get_pnpm_binary_path(app).is_file() {
+                return false;
+            }
+            let manifest = config::get_pnpm_install_path(app).join("package.json");
+            let Ok(content) = std::fs::read_to_string(manifest) else {
+                return false;
+            };
+            return serde_json::from_str::<serde_json::Value>(&content)
+                .ok()
+                .and_then(|value| value.get("version")?.as_str().map(str::to_string))
+                .is_some_and(|version| version == expected);
+        }
         // "有则跳过"：用户 PATH 中已有 pnpm 时不再安装捆绑版
         if crate::service::cli::find_user_pnpm(app).is_some() {
             log::info!("Detected user-installed pnpm, skipping bundled pnpm");
@@ -131,6 +166,9 @@ impl Installable for Git {
     }
 
     fn check_installed(&self, app: &AppHandle) -> bool {
+        if config::offline_build() {
+            return config::bundled_git_runtime_ready(app);
+        }
         if let Some(system_git) = config::find_system_git_binary() {
             log::info!(
                 "Detected usable system Git ({}), skipping bundled MinGit",

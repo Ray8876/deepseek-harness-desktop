@@ -510,6 +510,10 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     envs.insert("DSH_TELEMETRY_DISABLED".to_string(), "1".to_string());
     envs.insert("NO_COLOR".to_string(), "1".to_string());
     envs.insert("DSH_WEB_PORT".to_string(), setting.port.to_string());
+    if config::offline_build() {
+        envs.insert("npm_config_offline".to_string(), "true".to_string());
+        envs.insert("pnpm_config_offline".to_string(), "true".to_string());
+    }
     // 把服务实际使用的 node 路径显式交给子进程（pnpm/dsh shim 的 DSH_NODE
     // 优先）：市场（dsh-market）等子进程经 PATH 解析 node 可能与桌面端预检
     // 不一致（相对 PATH 条目 / junction / 子进程 PATH 布局差异），导致 pnpm
@@ -561,14 +565,16 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     // GUI 进程可能启动在 pnpm 安装之前，继承的 PATH 因而没有 npm 全局目录。
     // 直接注入探测到的绝对路径，避免 dsh-market 的 pnpm --version 落到自身 shim
     // 后又因 PATH 看不到真正的 pnpm（issue #139）。
-    if let Some(user_pnpm) = crate::service::cli::find_user_pnpm(&app_handle) {
-        // Unix mise shim 依赖调用路径中的 argv[0]；只做字面绝对化，不能解析
-        // `pnpm -> mise` 链接。Windows 仍由同一辅助函数处理连接点与 `\\?\`。
-        if let Some(pnpm_value) = crate::service::cli::pnpm_env_value(
-            &user_pnpm,
-            &crate::service::cli::get_bin_dir(&app_handle),
-        ) {
-            envs.insert("DSH_PNPM".to_string(), pnpm_value);
+    if !config::offline_build() {
+        if let Some(user_pnpm) = crate::service::cli::find_user_pnpm(&app_handle) {
+            // Unix mise shim 依赖调用路径中的 argv[0]；只做字面绝对化，不能解析
+            // `pnpm -> mise` 链接。Windows 仍由同一辅助函数处理连接点与 `\\?\`。
+            if let Some(pnpm_value) = crate::service::cli::pnpm_env_value(
+                &user_pnpm,
+                &crate::service::cli::get_bin_dir(&app_handle),
+            ) {
+                envs.insert("DSH_PNPM".to_string(), pnpm_value);
+            }
         }
     }
 
