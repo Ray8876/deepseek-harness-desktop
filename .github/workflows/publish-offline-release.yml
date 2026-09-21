@@ -1,0 +1,87 @@
+name: Publish Offline Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: Existing successful Offline Windows Build run ID
+        required: true
+        type: string
+      tag:
+        description: Release tag to create or update
+        required: true
+        default: v0.15.8-offline
+        type: string
+      target_sha:
+        description: Commit that the release tag should point to
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    name: Publish existing offline artifact
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download existing Actions artifact
+        uses: actions/download-artifact@v7
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.artifact_run_id }}
+          name: deepseek-harness-desktop-windows-x64-offline
+          path: release-assets
+
+      - name: Verify release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(find release-assets -type f -print0)
+          printf '%s\n' "${files[@]}"
+          test "${#files[@]}" -eq 3
+          installer="$(find release-assets -type f -iname '*.exe' -print -quit)"
+          manifest="$(find release-assets -type f -name 'offline-manifest.json' -print -quit)"
+          checksums="$(find release-assets -type f -name 'SHA256SUMS' -print -quit)"
+          test -n "$installer"
+          test -n "$manifest"
+          test -n "$checksums"
+          mkdir -p publish-assets
+          cp "$installer" publish-assets/
+          cp "$manifest" publish-assets/
+          cp "$checksums" publish-assets/
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          ## 离线安装修改版
+
+          Windows x64 offline installer built from commit ${TARGET_SHA}.
+
+          请运行 deepseek-harness-desktop-0.15.8-windows-x64-offline-setup.exe 安装。安装器已内置 WebView2 Runtime；如果旧版本升级时缺少 Runtime，会自动补装。
+
+          构建来源：[GitHub Actions run](https://github.com/${GH_REPO}/actions/runs/${ARTIFACT_RUN_ID})
+          EOF
+          if ! gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --repo "$GH_REPO" \
+              --target "$TARGET_SHA" \
+              --title "DeepSeek Harness Desktop 0.15.8 离线安装修改版" \
+              --notes-file release-notes.md
+          else
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GH_REPO" \
+              --title "DeepSeek Harness Desktop 0.15.8 离线安装修改版" \
+              --notes-file release-notes.md
+          fi
+          gh release upload "$RELEASE_TAG" publish-assets/* --repo "$GH_REPO" --clobber
