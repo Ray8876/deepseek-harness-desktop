@@ -65,34 +65,46 @@ jobs:
           DSH_OFFLINE_BUILD: "1"
         run: pnpm tauri build --config src-tauri/tauri.offline.conf.json
 
-      - name: Verify embedded offline WebView2 payload
+      - name: Verify separate offline WebView2 installer
         shell: pwsh
         run: |
-          $cache = Get-ChildItem 'src-tauri/target/.tauri/x64' -Recurse -Filter 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe' | Select-Object -First 1
-          if ($null -eq $cache) {
-            throw 'Pinned WebView2 standalone installer was not staged in Tauri local tools cache.'
+          $sidecar = Get-Item 'src-tauri/target/offline-staging/MicrosoftEdgeWebView2RuntimeInstallerX64.exe' -ErrorAction SilentlyContinue
+          if ($null -eq $sidecar) {
+            throw 'Pinned WebView2 standalone installer was not staged beside the app bundle.'
           }
-          if ($cache.Length -lt 100MB) {
-            throw "WebView2 payload is too small to be the standalone installer: $($cache.Length) bytes"
+          if ($sidecar.Length -lt 100MB) {
+            throw "WebView2 sidecar is too small to be the standalone installer: $($sidecar.Length) bytes"
           }
-          Write-Host "WebView2 standalone payload: $($cache.FullName) ($($cache.Length) bytes)"
+          Write-Host "WebView2 standalone sidecar: $($sidecar.FullName) ($($sidecar.Length) bytes)"
+          $resourceCopy = Get-ChildItem 'src-tauri/resources' -Recurse -Filter 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -ne $resourceCopy) {
+            throw 'WebView2 standalone installer must not be included in Tauri resources.'
+          }
           $nsis = Get-ChildItem 'src-tauri/target/release/bundle/nsis' -Recurse -Filter 'installer.nsi' | Select-Object -First 1
           if ($null -eq $nsis) {
             throw 'Generated NSIS script was not found.'
           }
           $script = Get-Content $nsis.FullName -Raw
-          if ($script -notmatch 'offlineInstaller') {
-            throw 'Generated NSIS script does not contain the offlineInstaller branch.'
-          }
-          if ($script -notmatch 'MicrosoftEdgeWebView2RuntimeInstallerX64\.exe') {
-            throw 'Generated NSIS script does not embed the x64 standalone WebView2 installer.'
-          }
-          if ($script -notmatch 'ExecWait `"\$6`"') {
-            throw 'Generated NSIS script does not quote the WebView2 executable path.'
+          if ($script -notmatch 'INSTALLWEBVIEW2MODE "skip"') {
+            throw 'Generated NSIS script does not skip WebView2 installation.'
           }
 
       - name: Finalize offline bundle
         run: pnpm offline:finalize
+
+      - name: Verify side-by-side offline bundle
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem 'src-tauri/target/release/bundle/offline-windows-x64' -File
+          if ($files.Count -ne 4) {
+            throw "Expected four side-by-side release files, found $($files.Count)."
+          }
+          if ($files.Name -notcontains 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe') {
+            throw 'Final bundle is missing the standalone WebView2 installer.'
+          }
+          if (($files.Name | Where-Object { $_ -like 'deepseek-harness-desktop-*-offline-setup.exe' }).Count -ne 1) {
+            throw 'Final bundle must contain exactly one app installer.'
+          }
 
       - name: Upload offline bundle
         uses: actions/upload-artifact@v6
