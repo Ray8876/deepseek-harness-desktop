@@ -65,6 +65,32 @@ jobs:
           DSH_OFFLINE_BUILD: "1"
         run: pnpm tauri build --config src-tauri/tauri.offline.conf.json
 
+      - name: Verify embedded offline WebView2 payload
+        shell: pwsh
+        run: |
+          $cache = Get-ChildItem 'src-tauri/target/.tauri/x64' -Recurse -Filter 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe' | Select-Object -First 1
+          if ($null -eq $cache) {
+            throw 'Pinned WebView2 standalone installer was not staged in Tauri local tools cache.'
+          }
+          if ($cache.Length -lt 100MB) {
+            throw "WebView2 payload is too small to be the standalone installer: $($cache.Length) bytes"
+          }
+          Write-Host "WebView2 standalone payload: $($cache.FullName) ($($cache.Length) bytes)"
+          $nsis = Get-ChildItem 'src-tauri/target/release/bundle/nsis' -Recurse -Filter 'installer.nsi' | Select-Object -First 1
+          if ($null -eq $nsis) {
+            throw 'Generated NSIS script was not found.'
+          }
+          $script = Get-Content $nsis.FullName -Raw
+          if ($script -notmatch 'offlineInstaller') {
+            throw 'Generated NSIS script does not contain the offlineInstaller branch.'
+          }
+          if ($script -notmatch 'MicrosoftEdgeWebView2RuntimeInstallerX64\.exe') {
+            throw 'Generated NSIS script does not embed the x64 standalone WebView2 installer.'
+          }
+          if ($script -notmatch 'ExecWait `"\$6`"') {
+            throw 'Generated NSIS script does not quote the WebView2 executable path.'
+          }
+
       - name: Finalize offline bundle
         run: pnpm offline:finalize
 

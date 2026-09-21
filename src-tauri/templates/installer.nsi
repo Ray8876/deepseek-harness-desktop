@@ -606,9 +606,10 @@ Section WebView2
 
     !if "${INSTALLWEBVIEW2MODE}" == "offlineInstaller"
       Delete "$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe"
-      File "/oname=$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe" "${WEBVIEW2INSTALLERPATH}"
+      Delete "$TEMP\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+      File "/oname=$TEMP\MicrosoftEdgeWebView2RuntimeInstallerX64.exe" "${WEBVIEW2INSTALLERPATH}"
       DetailPrint "$(installingWebview2)"
-      StrCpy $6 "$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe"
+      StrCpy $6 "$TEMP\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
       Goto install_webview2
     !endif
 
@@ -617,7 +618,7 @@ Section WebView2
     install_webview2:
       DetailPrint "$(installingWebview2)"
       ; $6 holds the path to the webview2 installer
-      ExecWait "$6 ${WEBVIEW2INSTALLERARGS} /install" $1
+      ExecWait `"$6" ${WEBVIEW2INSTALLERARGS} /install` $1
       ${If} $1 = 0
         DetailPrint "$(webview2InstallSuccess)"
       ${ElseIf} $1 = 3010
