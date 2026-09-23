@@ -99,7 +99,7 @@ def main():
     run('git', 'fetch', '--no-tags', f'https://github.com/{settings["repository"]}.git', f'refs/tags/{tag}')
     upstream_sha = run('git', 'rev-parse', 'FETCH_HEAD^{commit}')
     run('git', 'merge-base', '--is-ancestor', baseline, upstream_sha)
-    patch = run('git', 'diff', '--binary', baseline, upstream_sha, '--', '.', ':(exclude).github',
+    patch = run('git', 'diff', '--binary', baseline, upstream_sha, '--', '.', ':(exclude).github', ':(exclude)README.md',
                 ':(exclude)scripts/auto-offline-release.py', ':(exclude)scripts/offline-upstream.json',
                 ':(exclude)scripts/offline-harness-lock.json', ':(exclude)scripts/offline-windows.mjs',
                 ':(exclude)scripts/test-auto-offline-release.py', ':(exclude)scripts/publish-offline-release.py', ':(exclude)docs/OFFLINE_WINDOWS.md', preserve=True)
