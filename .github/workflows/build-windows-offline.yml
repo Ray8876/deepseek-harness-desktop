@@ -11,7 +11,7 @@ on:
       source_ref:
         description: Git ref to build
         required: false
-        default: ""
+        default: ''
         type: string
 
 permissions:
@@ -67,7 +67,7 @@ jobs:
 
       - name: Build unsigned offline NSIS installer
         env:
-          DSH_OFFLINE_BUILD: "1"
+          DSH_OFFLINE_BUILD: '1'
         run: pnpm tauri build --config src-tauri/tauri.offline.conf.json
 
       - name: Verify separate offline WebView2 installer
