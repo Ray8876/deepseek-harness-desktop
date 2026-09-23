@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -69,7 +70,20 @@ def output(**values):
             file.write(f'{key}={value}\n')
 
 
+def keep_schedule_active():
+    if os.environ.get('GITHUB_REF') != 'refs/heads/main':
+        return
+    age = time.time() - int(run('git', 'log', '-1', '--format=%ct'))
+    if age < 30 * 24 * 60 * 60:
+        return
+    run('git', 'config', 'user.name', 'github-actions[bot]')
+    run('git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com')
+    run('git', 'commit', '--allow-empty', '-m', 'ci: keep scheduled upstream monitoring active')
+    run('git', 'push', 'origin', 'HEAD:refs/heads/main')
+
+
 def main():
+    keep_schedule_active()
     settings = json.loads((ROOT / 'scripts/offline-upstream.json').read_text())
     repo = os.environ['GITHUB_REPOSITORY']
     release = api(f'repos/{settings["repository"]}/releases/latest')

@@ -4,7 +4,7 @@ This workflow builds an unsigned NSIS installer plus a separate WebView2 Runtime
 
 ## Automatic releases
 
-`Automatic Offline Windows Release` runs entirely on GitHub-hosted runners every six hours (00:23, 06:23, 12:23, 18:23 UTC). No local computer, Codex task, personal access token, or manual approval is needed. GitHub may delay scheduled runs; public repositories may have schedules disabled after 60 days without repository activity.
+`Automatic Offline Windows Release` runs entirely on GitHub-hosted runners every six hours (00:23, 06:23, 12:23, 18:23 UTC). No local computer, Codex task, personal access token, or manual approval is needed. GitHub may delay scheduled runs. If the default branch has no commits for 30 days, the monitor adds an empty maintenance commit to keep public-repository scheduling active before GitHub's 60-day inactivity cutoff.
 
 The workflow follows the latest stable desktop Release, skips already published versions, applies upstream changes to the maintained offline baseline, and resolves the exact recommended Harness version to a tagged asset with a GitHub SHA-256 digest. It creates a source branch for traceability, invokes the Windows build, and publishes `v<version>-offline-sidecar` only after all build and artifact checks pass. Draft releases are temporary upload staging and become public automatically after remote asset digest verification.
 
