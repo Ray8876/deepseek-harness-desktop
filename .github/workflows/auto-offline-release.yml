@@ -1,0 +1,56 @@
+name: Automatic Offline Windows Release
+
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: automatic-offline-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      should_build: ${{ steps.prepare.outputs.should_build }}
+      source_ref: ${{ steps.prepare.outputs.source_ref }}
+      tag: ${{ steps.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Test automation guards
+        run: python scripts/test-auto-offline-release.py
+      - name: Check stable upstream release and prepare pinned source
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/auto-offline-release.py
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    uses: ./.github/workflows/build-windows-offline.yml
+    with:
+      source_ref: ${{ needs.prepare.outputs.source_ref }}
+
+  publish:
+    needs: [prepare, build]
+    permissions:
+      actions: read
+      contents: write
+    uses: ./.github/workflows/publish-offline-release.yml
+    with:
+      artifact_run_id: ${{ github.run_id }}
+      tag: ${{ needs.prepare.outputs.tag }}
+      target_sha: ${{ needs.prepare.outputs.source_ref }}

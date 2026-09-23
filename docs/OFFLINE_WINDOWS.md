@@ -2,18 +2,15 @@
 
 This workflow builds an unsigned NSIS installer plus a separate WebView2 Runtime installer for a Windows x64 machine that has no network access at first launch. The normal online build and release workflows are unchanged.
 
-## Audit baseline
+## Automatic releases
 
-- Audited upstream baseline: `c2d2a9dec6120ad96410bb368a54a1c359ebc392`
-- Desktop version: `0.15.8`
-- Harness: `0.1.5-rc.2`, tag `dsh-0.1.5-rc.2-34495473237`, commit `a9582858297904ee7d7ffe613cfd28faaa5f6462`
-- Node.js: `v22.22.0`, SHA-256 `c97fa376d2becdc8863fcd3ca2dd9a83a9f3468ee7ccf7a6d076ec66a645c77a`
-- pnpm: `11.7.0`, SHA-256 `deafa7ec98a1218b6a047289b92fbe2395c1e22d3495bb711653013218ee15ee`
-- MinGit: `2.53.0.2`, SHA-256 `d4bf83d6a860ccae9af44e508e1e00a39f09db6fa78a9ba5543b94d87ca22a29`
-- WebView2 Evergreen Standalone x64 sidecar, SHA-256 `ad9b350625e132481bc0953eee9e032810134df9fedbd7be364c3f4e0e4dbd64`
-- Harness Windows package SHA-256 `328780f453d89f01543bfc1e055ada75a6ff2c6204c7973254c61f95be81076a`
+`Automatic Offline Windows Release` runs entirely on GitHub-hosted runners every six hours (00:23, 06:23, 12:23, 18:23 UTC). No local computer, Codex task, personal access token, or manual approval is needed. GitHub may delay scheduled runs; public repositories may have schedules disabled after 60 days without repository activity.
 
-The fixed Harness tag and commit are registered in `src-tauri/resources/version-recommend.json`. `scripts/offline-windows.mjs` rejects any other version, URL, redirect host, or digest.
+The workflow follows the latest stable desktop Release, skips already published versions, applies upstream changes to the maintained offline baseline, and resolves the exact recommended Harness version to a tagged asset with a GitHub SHA-256 digest. It creates a source branch for traceability, invokes the Windows build, and publishes `v<version>-offline-sidecar` only after all build and artifact checks pass. Draft releases are temporary upload staging and become public automatically after remote asset digest verification.
+
+Conflicting source changes, changed Node/pnpm/MinGit pins, missing asset digests, failed tests, and incomplete uploads stop publication. GitHub Actions records the failure and uses the account's normal workflow notification settings. The next scheduled check retries unpublished versions; published releases are never overwritten. Incompatible upstream changes still require code maintenance.
+
+The integration baseline is recorded in `scripts/offline-upstream.json`; the exact Harness tag, commit, digest and desktop upstream commit are recorded in `scripts/offline-harness-lock.json`. WebView2 remains the pinned Evergreen Standalone x64 sidecar. The main installer uses `webviewInstallMode: skip`.
 
 ## Build
 
@@ -46,7 +43,7 @@ The final output is under `src-tauri/target/release/bundle/`:
 
 The GitHub Actions artifact uploads only the `offline-windows-x64/` directory. The artifact therefore contains the two side-by-side installers, the manifest, and checksums; the separately generated full `.zip` remains a local build output and is not nested into the artifact.
 
-The installer is unsigned. Signing and publication are separate authorization steps.
+The installer is unsigned. Successful automatic builds are authorized for public publication; signing is not configured.
 
 ## Required disconnected VM acceptance
 

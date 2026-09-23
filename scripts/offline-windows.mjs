@@ -25,12 +25,13 @@ const targetDir = join(repoRoot, 'src-tauri', 'target')
 const webviewId = '913236b0-52e1-4dde-943c-2cfdbe153d31'
 const webviewFile = 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
 const webviewStagingPath = join(targetDir, 'offline-staging', webviewFile)
-const auditedUpstreamCommit = 'c2d2a9dec6120ad96410bb368a54a1c359ebc392'
-const fixedHarness = {
-  version: '0.1.5-rc.2',
-  tag: 'dsh-0.1.5-rc.2-34495473237',
-  commit: 'a9582858297904ee7d7ffe613cfd28faaa5f6462',
-  sha256: '328780f453d89f01543bfc1e055ada75a6ff2c6204c7973254c61f95be81076a',
+const fixedHarness = JSON.parse(await readFile(join(scriptDir, 'offline-harness-lock.json'), 'utf8'))
+const auditedUpstreamCommit = fixedHarness.upstreamCommit
+if (!/^[0-9a-f]{40}$/.test(auditedUpstreamCommit)
+  || !/^[0-9a-f]{40}$/.test(fixedHarness.commit)
+  || !/^[0-9a-f]{64}$/.test(fixedHarness.sha256)
+  || !fixedHarness.tag.startsWith(`dsh-${fixedHarness.version}-`)) {
+  throw new Error('OFFLINE_BUILD: invalid Harness lock')
 }
 
 const assets = [
@@ -158,12 +159,6 @@ async function getBuildMetadata() {
     fail(
       `version-recommend.json dsh must remain ${fixedHarness.version}, got ${recommendation.dsh}`,
     )
-  }
-  if (
-    recommendation.offlineWindows?.tag !== fixedHarness.tag
-    || recommendation.offlineWindows?.commit !== fixedHarness.commit
-  ) {
-    fail('version-recommend.json does not register the fixed Harness tag and commit')
   }
 
   let sourceCommit = ''

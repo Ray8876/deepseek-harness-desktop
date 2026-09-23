@@ -31,3 +31,5 @@ source/
 .gitmodules
 .tmp-alpha-inspect
 .dsh.dev
+
+__pycache__/

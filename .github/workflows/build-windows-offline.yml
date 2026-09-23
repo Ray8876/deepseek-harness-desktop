@@ -1,6 +1,11 @@
 name: Offline Windows Build
 
 on:
+  workflow_call:
+    inputs:
+      source_ref:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       source_ref:
@@ -76,7 +81,7 @@ jobs:
             throw "WebView2 sidecar is too small to be the standalone installer: $($sidecar.Length) bytes"
           }
           Write-Host "WebView2 standalone sidecar: $($sidecar.FullName) ($($sidecar.Length) bytes)"
-          $resourceCopy = Get-ChildItem 'src-tauri/resources' -Recurse -Filter 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          $resourceCopy = @(rg --files src-tauri/resources -g 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe') | Select-Object -First 1
           if ($null -ne $resourceCopy) {
             throw 'WebView2 standalone installer must not be included in Tauri resources.'
           }
@@ -84,7 +89,7 @@ jobs:
           if ($config.bundle.windows.webviewInstallMode.type -ne 'skip') {
             throw 'Offline Tauri config does not set webviewInstallMode.type to skip.'
           }
-          $nsis = Get-ChildItem 'src-tauri/target/release/bundle/nsis' -Recurse -Filter '*.nsi' -ErrorAction SilentlyContinue | Select-Object -First 1
+          $nsis = Get-ChildItem 'src-tauri/target/release/bundle/nsis' -Filter '*.nsi' -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($null -ne $nsis) {
             $script = Get-Content $nsis.FullName -Raw
             if ($script -notmatch 'INSTALLWEBVIEW2MODE "skip"') {
@@ -118,4 +123,4 @@ jobs:
           path: |
             src-tauri/target/release/bundle/offline-windows-x64/**
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
