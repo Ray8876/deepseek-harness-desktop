@@ -1,10 +1,8 @@
 import type { ReactElement } from 'react'
 import type { SessionsRuntime, WorkspacesRuntime } from '../service/session-switch.types'
 import type { WorktreeDialogProps } from './dialog.types'
-import { useMountStyle } from 'dsh-tauri-ui/client'
-import { find, useEventListener } from 'dsh-tauri/client'
-import { useRef } from 'react'
-import { DIALOG_STYLE_ID } from '../constants'
+import { Button, Input, Modal } from 'dsh-tauri-ui/client'
+import { find } from 'dsh-tauri/client'
 import { useCurrentSession } from '../hooks/use-current-session'
 import { useDiscard } from '../hooks/use-discard'
 import { useWaiter } from '../hooks/use-waiter'
@@ -13,11 +11,9 @@ import { locale } from '../locales'
 import { openSession, waitForSessionListed } from '../service/session-switch'
 import { checkout } from '../service/worktree'
 import { store } from '../store'
-import dialogStyle from './dialog.cssr'
 
 export function WorktreeDialog({ workspacesRuntime, sessionsRuntime }: WorktreeDialogProps): ReactElement | null {
   locale.useLocale()
-  useMountStyle(dialogStyle, DIALOG_STYLE_ID)
   const sessionId = useCurrentSession(sessionsRuntime)
   const state = useWorktreeSession(sessionId)
   const discardWorktree = useDiscard(sessionId)
@@ -25,44 +21,34 @@ export function WorktreeDialog({ workspacesRuntime, sessionsRuntime }: WorktreeD
   const abandonOpen = state.abandonOpen
   const closeAll = (): void => store.worktree.patch(sessionId, { checkoutOpen: false, abandonOpen: false })
 
-  const documentRef = useRef<Document | null | undefined>(
-    typeof document === 'undefined' ? undefined : document,
-  )
-  useEventListener(documentRef, 'keydown', (event: KeyboardEvent) => {
-    if ((checkoutOpen || abandonOpen) && event.key === 'Escape')
-      closeAll()
-  })
-
   if (!sessionId || (!checkoutOpen && !abandonOpen))
     return null
 
   return (
-    <div className="dshp-worktree">
-      <div className="dshp-worktree__modal" data-dsh-worktree-dialog="1" onClick={closeAll}>
-        {checkoutOpen && (
-          <CheckoutDialog
-            sessionId={sessionId}
-            worktreeKey={state.worktreeKey}
-            projectPath={state.projectPath}
-            branchName={state.branchName}
-            error={state.error}
-            workspacesRuntime={workspacesRuntime}
-            sessionsRuntime={sessionsRuntime}
-            onCancel={closeAll}
-          />
-        )}
-        {abandonOpen && (
-          <AbandonDialog
-            sessionId={sessionId}
-            worktreeKey={state.worktreeKey}
-            error={state.error}
-            workspacesRuntime={workspacesRuntime}
-            discardWorktree={discardWorktree}
-            onCancel={closeAll}
-          />
-        )}
-      </div>
-    </div>
+    <>
+      {checkoutOpen && (
+        <CheckoutDialog
+          sessionId={sessionId}
+          worktreeKey={state.worktreeKey}
+          projectPath={state.projectPath}
+          branchName={state.branchName}
+          error={state.error}
+          workspacesRuntime={workspacesRuntime}
+          sessionsRuntime={sessionsRuntime}
+          onCancel={closeAll}
+        />
+      )}
+      {abandonOpen && (
+        <AbandonDialog
+          sessionId={sessionId}
+          worktreeKey={state.worktreeKey}
+          error={state.error}
+          workspacesRuntime={workspacesRuntime}
+          discardWorktree={discardWorktree}
+          onCancel={closeAll}
+        />
+      )}
+    </>
   )
 }
 
@@ -114,47 +100,41 @@ function CheckoutDialog(props: {
   }
 
   return (
-    <div
-      className="dshp-worktree__dialog-card"
-      role="dialog"
-      aria-modal="true"
-      aria-label={locale.text('checkoutTitle')}
-      onClick={event => event.stopPropagation()}
+    <Modal
+      open
+      onClose={onCancel}
+      title={locale.text('checkoutTitle')}
+      closeLabel={locale.text('close')}
+      footer={(
+        <>
+          <Button variant="outline" onClick={onCancel}>{locale.text('checkoutCancel')}</Button>
+          <Button variant="primary" disabled={disabled} onClick={() => void confirm()}>
+            {locale.text('checkoutConfirm')}
+          </Button>
+        </>
+      )}
     >
-      <h2 className="dshp-worktree__dialog-title">{locale.text('checkoutTitle')}</h2>
-      <div className="dshp-worktree__dialog-field">
-        <label className="dshp-worktree__dialog-field-label" htmlFor="wt-checkout-branch">{locale.text('checkoutBranchLabel')}</label>
-        <div className="dshp-worktree__dialog-input-wrap">
-          <input
+      <div className="dshp-worktree__dialog-form">
+        <div className="dshp-worktree__dialog-field">
+          <label className="dshp-worktree__dialog-field-label" htmlFor="wt-checkout-branch">{locale.text('checkoutBranchLabel')}</label>
+          <Input
             id="wt-checkout-branch"
-            className="dshp-worktree__dialog-input"
             value={branchName}
             placeholder={locale.text('branchPlaceholder')}
             onChange={event => updateBranch(event.target.value)}
           />
         </div>
+        <div className="dshp-worktree__dialog-path-row">
+          <span className="dshp-worktree__dialog-path-key">{locale.text('checkoutCurrentPath')}</span>
+          <span className="dshp-worktree__dialog-path-value">{worktreeKey || '—'}</span>
+        </div>
+        <div className="dshp-worktree__dialog-path-row">
+          <span className="dshp-worktree__dialog-path-key">{locale.text('checkoutTargetPath')}</span>
+          <span className="dshp-worktree__dialog-path-value">{projectPath.replaceAll('\\', '/') || '—'}</span>
+        </div>
+        {props.error && <div className="dshp-worktree__dialog-error">{props.error}</div>}
       </div>
-      <div className="dshp-worktree__dialog-path-row">
-        <span className="dshp-worktree__dialog-path-key">{locale.text('checkoutCurrentPath')}</span>
-        <span className="dshp-worktree__dialog-path-value">{worktreeKey || '—'}</span>
-      </div>
-      <div className="dshp-worktree__dialog-path-row">
-        <span className="dshp-worktree__dialog-path-key">{locale.text('checkoutTargetPath')}</span>
-        <span className="dshp-worktree__dialog-path-value">{projectPath.replaceAll('\\', '/') || '—'}</span>
-      </div>
-      {props.error && <div className="dshp-worktree__dialog-error">{props.error}</div>}
-      <div className="dshp-worktree__dialog-footer">
-        <button type="button" className={`${'dshp-worktree__dialog-button'} ${'dshp-worktree__dialog-button--ghost'}`} onClick={onCancel}>{locale.text('checkoutCancel')}</button>
-        <button
-          type="button"
-          className={`${'dshp-worktree__dialog-button'} ${'dshp-worktree__dialog-button--primary'} ${disabled ? 'dshp-worktree__dialog-button--disabled' : ''}`}
-          disabled={disabled}
-          onClick={() => void confirm()}
-        >
-          {locale.text('checkoutConfirm')}
-        </button>
-      </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -174,26 +154,22 @@ function AbandonDialog(props: {
     await workspacesRuntime.archiveSession(sessionId)
   }
   return (
-    <div
-      className="dshp-worktree__dialog-card"
-      role="dialog"
-      aria-modal="true"
-      aria-label={locale.text('abandonTitle')}
-      onClick={event => event.stopPropagation()}
+    <Modal
+      open
+      onClose={onCancel}
+      title={locale.text('abandonTitle')}
+      description={locale.text('abandonBody')}
+      closeLabel={locale.text('close')}
+      footer={(
+        <>
+          <Button variant="outline" onClick={onCancel}>{locale.text('abandonCancel')}</Button>
+          <Button variant="primary" onClick={() => void abandon()}>
+            {locale.text('abandonConfirm')}
+          </Button>
+        </>
+      )}
     >
-      <h2 className="dshp-worktree__dialog-title">{locale.text('abandonTitle')}</h2>
-      <p className="dshp-worktree__dialog-body">{locale.text('abandonBody')}</p>
-      {props.error && <div className="dshp-worktree__dialog-error">{props.error}</div>}
-      <div className="dshp-worktree__dialog-footer">
-        <button type="button" className={`${'dshp-worktree__dialog-button'} ${'dshp-worktree__dialog-button--ghost'}`} onClick={onCancel}>{locale.text('abandonCancel')}</button>
-        <button
-          type="button"
-          className={`${'dshp-worktree__dialog-button'} ${'dshp-worktree__dialog-button--danger'}`}
-          onClick={() => void abandon()}
-        >
-          {locale.text('abandonConfirm')}
-        </button>
-      </div>
-    </div>
+      {props.error === '' ? undefined : <div className="dshp-worktree__dialog-error">{props.error}</div>}
+    </Modal>
   )
 }

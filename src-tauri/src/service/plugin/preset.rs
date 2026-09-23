@@ -27,6 +27,8 @@ pub struct PreinstallPluginInfo {
     pub id: String,
     /// 传给 `dsh plugin add` 的依赖形式（npm 包名或 git 依赖形式）
     pub spec: String,
+    #[serde(default)]
+    pub version: Option<String>,
     /// 内置插件：条目来自发布清单，或 debug 下仓库根 `packages/*` 中带有
     /// 有效 `dsh` 对象的 workspace 包。内置插件固定从本地捆绑目录安装，启动时
     /// 强制核对「已安装 + 路径指向当前捆绑目录」，因此不出现在首次引导清单里。
@@ -48,9 +50,31 @@ pub struct PreinstallPluginInfo {
     /// 无 chip 但默认勾选（不标「推荐」，首次引导仍直接勾上）
     #[serde(default)]
     pub default_checked: bool,
+    /// 显式声明首次引导不默认勾选：仍可标「推荐」chip，但不预选（如 dsh-im）
+    #[serde(default)]
+    pub default_unchecked: bool,
+    #[serde(default)]
+    pub dsh_supported_version: Option<String>,
     /// 仅 Windows 平台列出
     #[serde(default)]
     pub win_only: bool,
+}
+
+impl PreinstallPluginInfo {
+    /// 当前核心是否已高于该预设声明的支持上限。
+    ///
+    /// 任一侧版本缺失或无法解析时按兼容处理：清单字段是发布侧提示，解析失败
+    /// 不应把插件在界面上误标为「不支持当前核心」。
+    pub(crate) fn unsupported_on(&self, core_version: Option<&str>) -> bool {
+        let (Some(core), Some(limit)) = (core_version, self.dsh_supported_version.as_deref())
+        else {
+            return false;
+        };
+        match (semver::Version::parse(core), semver::Version::parse(limit)) {
+            (Ok(core), Ok(limit)) => core > limit,
+            _ => false,
+        }
+    }
 }
 
 /// debug workspace 插件 package.json 中用于生成内置元数据的字段。
@@ -183,6 +207,9 @@ fn discover_dev_internal_plugins_at(root: &Path) -> Vec<DevPluginCandidate> {
                 recommended: false,
                 fix: false,
                 default_checked: false,
+                default_unchecked: false,
+                dsh_supported_version: None,
+                version: None,
                 win_only: false,
             };
             Some(DevPluginCandidate { info, directory })
@@ -230,7 +257,12 @@ fn merge_dev_internal_plugins_at(
             .collect();
     for plugin in internal.iter_mut() {
         if let Some(candidate) = by_id.remove(&plugin.id) {
+            // 上限是发布侧对核心的计划（清单声明），dev 候选不带该字段，覆盖时沿用静态条目。
+            let supported = plugin.dsh_supported_version.take();
+            let version = plugin.version.take();
             *plugin = candidate.info;
+            plugin.dsh_supported_version = supported;
+            plugin.version = version;
         }
     }
     internal.extend(by_id.into_values().map(|candidate| candidate.info));
@@ -581,6 +613,85 @@ mod tests {
     }
 
     #[test]
+    fn preset_manifest_declares_core_and_automatic_removal_ceilings() {
+        let presets = load_presets_for_test();
+        let expected = [
+            ("dshmarket", "0.1.7", "1.58.0"),
+            ("dsh-better-sidebar", "0.1.5-rc.2", "0.19.1"),
+            ("dsh-rewind-plugin", "0.1.5-rc.2", "0.12.2"),
+            ("@xmanrui/dsh-im", "0.1.5-rc.2", "4.25.0"),
+        ];
+        assert_eq!(presets.len(), expected.len());
+        for (id, core_ceiling, removal_ceiling) in expected {
+            let preset = presets.iter().find(|p| p.id == id).expect(id);
+            assert_eq!(
+                preset.dsh_supported_version.as_deref(),
+                Some(core_ceiling),
+                "{id}"
+            );
+            assert_eq!(preset.version.as_deref(), Some(removal_ceiling), "{id}");
+            assert_eq!(preset.spec, id);
+        }
+    }
+
+    #[test]
+    fn preset_supported_version_marks_newer_cores_unsupported() {
+        let presets = load_presets_for_test();
+        for (id, equal, newer) in [
+            ("dshmarket", "0.1.7", "0.1.8-alpha.1"),
+            ("dsh-better-sidebar", "0.1.5-rc.2", "0.1.6-alpha.2"),
+            ("dsh-rewind-plugin", "0.1.5-rc.2", "0.1.7-alpha.1"),
+            ("@xmanrui/dsh-im", "0.1.5-rc.2", "0.1.7-alpha.1"),
+        ] {
+            let preset = presets.iter().find(|p| p.id == id).expect(id);
+            assert!(!preset.unsupported_on(Some("0.1.5-rc.1")), "{id}");
+            assert!(!preset.unsupported_on(Some(equal)), "{id}");
+            assert!(preset.unsupported_on(Some(newer)), "{id}");
+            assert!(!preset.unsupported_on(None), "{id}");
+            assert!(!preset.unsupported_on(Some("not-a-version")), "{id}");
+        }
+    }
+
+    #[test]
+    fn plugin_version_deserializes_as_optional_metadata_without_changing_spec() {
+        for (field, expected) in [
+            ("", None),
+            (r#", "version": null"#, None),
+            (r#", "version": "1.58.0""#, Some("1.58.0")),
+            (r#", "version": "invalid""#, Some("invalid")),
+        ] {
+            let raw = format!(
+                r#"[{{"id":"dshmarket","spec":"dshmarket","name":"Market","description":"","repoUrl":""{field}}}]"#
+            );
+            let plugins = parse_plugins(&raw, false).expect("preset manifest should parse");
+            assert_eq!(plugins.len(), 1);
+            assert_eq!(plugins[0].version.as_deref(), expected);
+            assert_eq!(plugins[0].spec, "dshmarket");
+        }
+    }
+
+    /// 内置条目默认不声明上限、对任何核心版本都兼容；通用上限机制仍在生效——
+    /// 显式声明上限后依旧走 unsupported 判定，只是当前没有任何内置条目使用它。
+    #[test]
+    fn internal_manifest_defaults_to_compatible_and_honours_declared_ceiling() {
+        let internal = load_manifest_for_test(INTERNAL_PLUGINS_FILE, true);
+        assert!(!internal.is_empty());
+
+        assert!(
+            internal
+                .iter()
+                .all(|p| p.dsh_supported_version.is_none() && !p.unsupported_on(Some("9.9.9"))),
+            "no internal entry declares a core ceiling, so every one stays compatible"
+        );
+
+        let mut capped = internal[0].clone();
+        capped.dsh_supported_version = Some("0.1.7-alpha.0".into());
+        assert!(!capped.unsupported_on(Some("0.1.5-rc.1")));
+        assert!(!capped.unsupported_on(Some("0.1.7-alpha.0")));
+        assert!(capped.unsupported_on(Some("0.1.7-alpha.1")));
+    }
+
+    #[test]
     fn plugin_manifest_ids_are_unique_across_files() {
         let plugins = load_all_plugins_for_test();
         let ids: std::collections::HashSet<&str> = plugins.iter().map(|p| p.id.as_str()).collect();
@@ -679,6 +790,19 @@ mod tests {
         let raw = std::fs::read_to_string(path).expect("deprecated manifest should exist");
         let ids = parse_deprecated_ids(&raw).expect("deprecated manifest should be valid JSON");
         assert!(ids.contains("dsh-tauri-panel"));
+    }
+
+    #[test]
+    fn deprecated_manifest_lists_absorbed_connection() {
+        // dsh-tauri-connection 的载体鉴权适配已并入 dsh-tauri 核心插件，并从
+        // internal-plugins.json 移除了条目：升级用户的 link: 依赖与 bundle 引用
+        // 只能靠弃用清单兜底卸载（残留 bundle 会导致无法进入软件页面）。
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join(DEPRECATED_PLUGINS_FILE);
+        let raw = std::fs::read_to_string(path).expect("deprecated manifest should exist");
+        let ids = parse_deprecated_ids(&raw).expect("deprecated manifest should be valid JSON");
+        assert!(ids.contains("dsh-tauri-connection"));
     }
 
     #[test]
@@ -1007,6 +1131,9 @@ mod tests {
                 recommended: false,
                 fix: false,
                 default_checked: false,
+                default_unchecked: false,
+                dsh_supported_version: None,
+                version: None,
                 win_only: false,
             },
             PreinstallPluginInfo {
@@ -1020,6 +1147,9 @@ mod tests {
                 recommended: false,
                 fix: false,
                 default_checked: false,
+                default_unchecked: false,
+                dsh_supported_version: None,
+                version: None,
                 win_only: false,
             },
         ];
@@ -1031,6 +1161,52 @@ mod tests {
         assert_eq!(dsh.description, "desc"); // dev 覆盖静态
         assert!(merged.iter().any(|p| p.id == "brand-new")); // 追加上去
         assert!(merged.iter().any(|p| p.id == "keep-static")); // 静态未覆盖项保留
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// dev 候选覆盖静态条目时必须沿用清单声明的支持上限：退役判定读的是发布侧的
+    /// 核心计划，与当前 checkout 是否存在该包源码无关。
+    #[cfg(debug_assertions)]
+    #[test]
+    fn dev_merge_carries_static_core_and_automatic_removal_ceilings() {
+        let root = temp_dev_root("merge-cap");
+        write_dev_manifest(
+            &root.join("dsh-tauri-running-changes"),
+            "dsh-tauri-running-changes",
+        );
+        let static_internal = vec![PreinstallPluginInfo {
+            id: "dsh-tauri-running-changes".into(),
+            spec: "dsh-tauri-running-changes".into(),
+            internal: true,
+            package: Some("dsh-tauri-running-changes".into()),
+            name: "DSH Running Changes".into(),
+            description: String::new(),
+            repo_url: String::new(),
+            recommended: false,
+            fix: false,
+            default_checked: false,
+            default_unchecked: false,
+            dsh_supported_version: Some("0.1.7-alpha.0".into()),
+            version: Some("1.2.3".into()),
+            win_only: false,
+        }];
+
+        let merged = merge_dev_internal_plugins_at(&root, static_internal);
+        let renamed = merged
+            .iter()
+            .find(|p| p.id == "dsh-tauri-running-changes")
+            .expect("merged entry must exist");
+        assert_eq!(
+            renamed.dsh_supported_version.as_deref(),
+            Some("0.1.7-alpha.0")
+        );
+        assert_eq!(renamed.version.as_deref(), Some("1.2.3"));
+        assert_eq!(renamed.spec, "dsh-tauri-running-changes");
+        assert_eq!(renamed.description, "desc");
+        assert!(renamed.unsupported_on(Some("0.1.7-alpha.1")));
+        assert!(!renamed.unsupported_on(Some("0.1.6-alpha.2")));
+        // dev 覆盖语义不变：条目仍来自仓库源码
+        assert!(renamed.internal);
         std::fs::remove_dir_all(&root).ok();
     }
 }

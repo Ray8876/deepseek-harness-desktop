@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs'
-import { lstat, rm, symlink } from 'node:fs/promises'
+import { existsSync, readdirSync, statSync } from 'node:fs'
+import { cp, lstat, mkdir, rm, symlink } from 'node:fs/promises'
 import process from 'node:process'
 import { filter, find, get, isEmpty, isString, map, trimEnd, uniqBy } from 'lodash-es'
 import { resolve } from 'pathe'
@@ -107,7 +107,64 @@ export async function unlinkWorktreeDependencies(
   return unlinked
 }
 
+/**
+ * 把源目录里缺失的条目复制进目标目录，供 `.agents` 这类被 gitignore、`git worktree add`
+ * 搬不过来的内容使用。两侧都有的目录会继续深合并，因此「`.agents` 一部分入库、一部分被忽略」
+ * 的仓库（例如跟踪 `.agents/skills/README.md` 但有未跟踪的 `.agents/skills/handle`）
+ * 也能补齐缺失的子孙，同时保留目标侧已有文件。
+ *
+ * 这里刻意用复制而不是符号链接：POSIX 上符号链接对 git 而言是「文件」，`.agents/skills/`
+ * 这种带尾斜杠的忽略规则匹配不到它，工作树会多出一条未跟踪记录 `?? .agents`，
+ * 既污染状态，又会在检出时被判为「存在未跟踪改动」而卡死。目标侧遗留的链接会被换成真实目录，
+ * 让重复创建能把旧实现留下的工作树修回来。
+ */
+export async function copyMissingChildren(sourceDirectory: string, targetDirectory: string): Promise<string[]> {
+  if (!existsSync(sourceDirectory))
+    return []
+  if (await isSymbolicLink(targetDirectory))
+    await rm(targetDirectory, { recursive: false, force: true })
+  await mkdir(targetDirectory, { recursive: true })
+  const copied: string[] = []
+  for (const name of readdirSync(sourceDirectory)) {
+    const source = resolve(sourceDirectory, name)
+    const target = resolve(targetDirectory, name)
+    if (await isSymbolicLink(target))
+      await rm(target, { recursive: false, force: true })
+    if (existsSync(target)) {
+      if (isDirectory(source) && isDirectory(target)) {
+        const nested = await copyMissingChildren(source, target)
+        copied.push(...nested.map(child => `${name}/${child}`))
+      }
+      continue
+    }
+    try {
+      await cp(source, target, { recursive: true })
+      copied.push(name)
+    }
+    catch {}
+  }
+  return copied
+}
+
 // --- internal ---
+
+async function isSymbolicLink(path: string): Promise<boolean> {
+  try {
+    return (await lstat(path)).isSymbolicLink()
+  }
+  catch {
+    return false
+  }
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  }
+  catch {
+    return false
+  }
+}
 
 async function pathExists(path: string): Promise<boolean> {
   try {

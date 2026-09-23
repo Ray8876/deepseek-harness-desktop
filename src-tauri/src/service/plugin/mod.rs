@@ -50,6 +50,7 @@ pub mod watch;
 
 pub(crate) use crate::service::profile::ensure_profile_pnpm_policy;
 pub use cancel::cancel;
+pub(crate) use cancel::terminate_active_installs_blocking;
 pub(crate) use install::harness_prefer_bundled_pnpm;
 pub(crate) use install::uninstall_deprecated_plugins;
 pub use install::{install, remove, update};

@@ -19,7 +19,7 @@
   <img src="https://img.shields.io/github/stars/dsh-tauri/deepseek-harness-desktop?style=flat-square&label=stars&color=4D6BFE" alt="Stars" />
   <img src="https://img.shields.io/github/license/dsh-tauri/deepseek-harness-desktop?style=flat-square&label=license&color=4D6BFE" alt="MIT License" />
   <img src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-black?style=flat-square" alt="Windows | macOS | Linux" />
-  <img src="https://img.shields.io/badge/dsh-0.1.5--rc.2-4D6BFE?style=flat-square" alt="dsh 0.1.5-rc.2" />
+  <img src="https://img.shields.io/badge/dsh-0.1.7--alpha.1-4D6BFE?style=flat-square" alt="dsh 0.1.7-alpha.1" />
 </p>
 
 <p align="center">
@@ -64,17 +64,16 @@ Plugins ofrecidos en el asistente del primer arranque; marcá los que necesites 
 
 Plugins propios incluidos con el instalador:
 
-- [DSH Tauri](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri) — provee el canal de comunicación con el shell Tauri 2
-- [DSH Tauri Connection](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-connection) — permite que el WebView integrado en un sandbox de origen cruzado alcance el Host de loopback sobrescribiendo las dos puertas de autenticación del carrier de escritorio en el servicio `connection`
-- [DSH Model Config](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-model-config) — toma el control de la página de ajustes de modelos y agrega límites de contexto y salida, entrada de imágenes, modos de pensamiento y opciones de compatibilidad para endpoints locales
+- [DSH Tauri](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri) — provee el canal de comunicación con el shell Tauri 2, y permite que el WebView integrado en un sandbox de origen cruzado alcance el Host de loopback sobrescribiendo las dos puertas de autenticación del carrier de escritorio en el servicio `connection`
 - [DSH Tauri UI](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-ui) — provee una barra lateral de ajustes personalizada para el shell Tauri 2
 - [DSH Tauri Worktree](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-worktree) — crea un Git worktree aislado por sesión, con checkout a rama local o flujos de archivar-y-abandonar
 - [DSH Tauri Panel Extension](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-panel-extension) — gestión de Skills y MCP con importación de repositorios de skills, más un panel del mercado de plugins integrado
 - [DSH Tauri Panel Scheduler](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-panel-scheduler) — crea tareas programadas diarias, por intervalo, días hábiles y semanales; las ejecuta en sesiones Agent independientes y conserva el historial
-- [DSH Tauri Turn Rewind](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-turnrewind) — registra snapshots Git privados por turno del Agent y muestra tarjetas de cambios; la restauración de archivos la realiza el plugin recomendado dsh-rewind
+- [DSH Running Changes](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-running-changes) — registra snapshots Git privados por turno del Agent y muestra un chip sobre la entrada mientras el turno está en curso; la restauración de archivos la realiza el plugin recomendado dsh-rewind
 - [DSH Tauri Session](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-session) — reemplaza el borrado de workspaces por archivado y agrega una página de chats archivados con búsqueda, orden, agrupado, filtro por proyecto y restauración
 - [DSH Tauri Pet](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-pet) — administra mascotas Chat / Codex, descargas de presets, importación de paquetes y estados de actividad
 - [DSH Tauri Rightclick](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-rightclick) — menús contextuales estilo nativo para sesiones, workspaces, texto, enlaces y entradas
+- [DSH Tauri Model Config](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-model-config) — permite seleccionar modelos y configurar sus parámetros
 - Más plugins en camino...
 
 ## Inicio rápido
@@ -89,7 +88,7 @@ brew install dsh-tauri/desktop/deepseek-harness
 
 El primer arranque descarga el runtime de Node y el núcleo Harness (si `dsh` ya está instalado, se usa la versión instalada), y te lleva directo al harness en `http://127.0.0.1:3080`; después todo corre local, sin red.
 
-**Requisitos:** Windows 10+ · macOS 10.15+ · Linux (AppImage / .deb) · red en el primer arranque · núcleo Harness **0.1.5-rc.2** o superior
+**Requisitos:** Windows 10+ · macOS 10.15+ · Linux (AppImage / .deb) · red en el primer arranque · núcleo Harness **0.1.5-rc.1** o superior
 
 > **Nota Wayland en Linux (PikaOS / GNOME Wayland / Ubuntu 22.04+):** el AppImage puede crashear o verse negro en Wayland por WebKitGTK; la app corrige sola el caso común. <details><summary>Si igual crashea / se ve negro:</summary><br>**Preferí el `.deb`** (verificado en PikaOS 4 Wayland), o ejecutá a mano `WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 GDK_BACKEND=x11 ./AppImage`. Si no aparecen los iconos, copiá los iconos `hicolor` de la app a `~/.local/share/icons` y ejecutá `update-desktop-database`.<br></details>
 >

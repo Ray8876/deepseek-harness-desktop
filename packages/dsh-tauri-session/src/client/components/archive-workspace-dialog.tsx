@@ -1,5 +1,5 @@
 import type { ArchiveWorkspaceDialogProps } from './archive-panel.types'
-import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Modal } from 'dsh-tauri-ui/client'
 import { locale } from '../locales'
 
 /** 「归档工作区」二次确认框（由 register 的工作区补丁以 createRoot 挂载）。 */

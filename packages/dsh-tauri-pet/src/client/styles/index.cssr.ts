@@ -1,77 +1,144 @@
-/**
- * styles/index.cssr.ts — 侧栏入口与设置行布局的公共样式（无组件面）。
- *
- * 入口按钮复刻官方 `.rtSEdW_iconButton`（appearance/color/border-radius/padding/hover/
- * focus-visible 与 data-tip 气泡），并叠加右上角绿色激活圆点；设置行布局复刻新版 dsh
- * 客户端 SettingsRoot 的 triggerRow（flex 行 + gap）。规则全部拆成单选择器（不依赖
- * data-slot 包裹层，由补丁直接给宿主加 `.dshp-pet__settings-row` 并同步内联样式兜底）。
- */
+/** 设置分区面骨架与侧栏入口补丁的布局样式；通用控件观感全部来自 `dsh-tauri-ui/client`。 */
 import { cssr } from 'dsh-tauri-ui/client'
 
 const { c } = cssr
 
 export default c([
-  // ── 侧栏入口：官方 iconButton 复刻（插在 .dshp-settings-trigger 右侧）──
-  c('.dshp-pet__icon-button', {
-    appearance: 'none',
-    color: 'var(--dsw-alias-label-tertiary)',
-    cursor: 'pointer',
-    background: '0 0',
-    border: '0',
-    borderRadius: '7px',
+  c('.dshp-pet__page', {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+    color: 'var(--dsw-alias-label-primary)',
+  }),
+  c('.dshp-pet__tabs', {
+    display: 'flex',
     alignItems: 'center',
-    padding: '6px',
-    display: 'inline-flex',
-    position: 'relative',
-    pointerEvents: 'auto',
+    justifyContent: 'space-between',
+    gap: '16px',
+    flexWrap: 'wrap',
+    margin: '4px 0 0',
+  }),
+  c('.dshp-pet__tab-tools', { display: 'flex', alignItems: 'center', gap: '6px' }),
+  c('.dshp-pet__tab-desc', {
+    margin: '0',
+    fontSize: '13px',
+    lineHeight: '20px',
+    color: 'var(--dsw-alias-label-secondary)',
+  }),
+  c('.dshp-pet__size-row', { display: 'flex', alignItems: 'center', gap: '12px' }),
+  c('.dshp-pet__size-label', { flex: 'none', fontWeight: '500' }),
+  c('.dshp-pet__size-slider', {
+    flex: '1',
+    accentColor: 'var(--dsw-alias-brand-primary)',
+    cursor: 'pointer',
+  }),
+  c('.dshp-pet__hint', {
+    margin: '0',
+    fontSize: '12px',
+    lineHeight: '18px',
+    color: 'var(--dsw-alias-label-secondary)',
+  }),
+  c('.dshp-pet__empty', {
+    padding: '24px 16px',
+    textAlign: 'center',
+    fontSize: '13px',
+    lineHeight: '20px',
+    borderRadius: '12px',
+    border: '1px dashed var(--dsw-alias-border-weak)',
+    color: 'var(--dsw-alias-label-secondary)',
+  }),
+  c('.dshp-pet__loading', {
+    padding: '24px 16px',
+    textAlign: 'center',
+    fontSize: '13px',
+    lineHeight: '20px',
+    color: 'var(--dsw-alias-label-secondary)',
+  }),
+  c('.dshp-pet__error', {
+    fontSize: '12px',
+    lineHeight: '18px',
+    color: 'var(--dsw-alias-state-error-primary)',
+  }),
+
+  c('.dshp-pet__cards', { display: 'flex', flexDirection: 'column', gap: '12px' }),
+  c('.dshp-pet__card-item', {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    padding: '12px 14px',
+    borderRadius: '12px',
+    border: '1px solid var(--dsw-alias-border-weak)',
+    background: 'var(--dsw-alias-bg-base)',
   }, [
-    c('&:disabled', { opacity: '0.4', cursor: 'default' }),
-    c('&:hover:not(:disabled)', {
-      background: 'var(--dsw-alias-bg-layer-1)',
-      color: 'var(--dsw-alias-label-primary)',
-    }),
-    c('&:focus-visible', {
-      outline: '2px solid var(--dsw-alias-brand-primary)',
-      outlineOffset: '-1px',
+    c('&:hover', { background: 'var(--dsw-alias-interactive-bg-hover)' }),
+  ]),
+  c('.dshp-pet__card-thumb', {
+    flex: 'none',
+    width: '56px',
+    height: '56px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '28px',
+    borderRadius: '10px',
+    background: 'var(--dsw-alias-bg-layer-1)',
+    overflow: 'hidden',
+    objectFit: 'cover',
+  }),
+  c('.dshp-pet__card-thumb > img', {
+    display: 'block',
+    width: '100%',
+    height: '100%',
+  }),
+  // 精灵图缩略图：8 列 × 11 行的雪碧图只露出左上角一帧。
+  c('.dshp-pet__card-thumbSprite', {
+    position: 'relative',
+  }, [
+    c('& > img', {
+      position: 'absolute',
+      width: '800%',
+      height: '1100%',
+      maxWidth: 'none',
+      objectFit: 'fill',
+      left: '0',
+      top: '0',
     }),
   ]),
-  // data-tip 气泡（同官方 iconButton 的 :after 提示位）。
-  c('.dshp-pet__icon-button::after', {
-    content: 'attr(data-tip)',
-    position: 'absolute',
-    bottom: 'calc(100% + 6px)',
-    left: '50%',
-    transform: 'translateX(-50%)',
-    background: 'var(--dsw-alias-label-primary)',
-    color: 'var(--dsw-alias-bg-layer-3, #fff)',
-    padding: '4px 8px',
-    borderRadius: '6px',
-    fontSize: '12px',
-    lineHeight: '16px',
+  c('.dshp-pet__card-body', {
+    flex: '1',
+    minWidth: '0',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+  }),
+  c('.dshp-pet__card-nameRow', {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    minWidth: '0',
+  }),
+  c('.dshp-pet__card-name', {
+    fontWeight: '600',
+    fontSize: '14px',
+    lineHeight: '20px',
+    minWidth: '0',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    pointerEvents: 'none',
-    opacity: '0',
-    transition: 'opacity 0.15s ease',
-    zIndex: '10',
   }),
-  c('.dshp-pet__icon-button:hover::after, .dshp-pet__icon-button:focus-visible::after', { opacity: '1' }),
-  // 激活态绿色小圆点（右上角），未激活时隐藏。
-  c('.dshp-pet__icon-dot', {
-    position: 'absolute',
-    top: '6px',
-    right: '6px',
-    width: '4px',
-    height: '4px',
-    borderRadius: '100%',
-    background: 'var(--dsw-alias-state-success-primary, #3ddc84)',
-    display: 'none',
+  c('.dshp-pet__card-desc', {
+    fontSize: '12px',
+    lineHeight: '18px',
+    color: 'var(--dsw-alias-label-secondary)',
   }),
-  c('.dshp-pet__icon-button.dshp-pet__icon--on .dshp-pet__icon-dot', { display: 'block' }),
+  c('.dshp-pet__card-actions', {
+    flex: 'none',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+  }),
 
-  // ── 设置行布局：复刻新版 dsh 客户端 SettingsRoot 的 triggerRow（flex 行）──
-  // 旧版客户端 sidebar.settings 是通栏块级触发器，图标按钮直接插会被挤到下
-  // 一行；补丁给触发器宿主加 .dshp-pet__settings-row（并同步内联 display:flex 兜
-  // 底），触发器占满剩余宽度、图标排右侧，行内 gap 对齐官方排布。
+  // 旧版客户端触发器是通栏块级元素，补丁给宿主加 flex 行，入口按钮才不会被挤到下一行。
   c('.dshp-pet__settings-row', {
     display: 'flex',
     alignItems: 'center',
@@ -83,11 +150,31 @@ export default c([
     width: 'auto',
     minWidth: '0',
   }),
-  c('.dshp-pet__settings-row > .dshp-pet__icon-button', {
-    flex: 'none',
-    marginRight: '2px',
+  c('.dshp-pet__icon-entry', { flex: 'none', marginRight: '2px' }),
+  c('[data-sidebar-collapsed] .dshp-pet__icon-entry', { display: 'none' }),
+  c('.dshp-pet__icon-dot', {
+    display: 'flex',
+    position: 'absolute',
+    top: '3px',
+    right: '3px',
   }),
-  // 侧栏折叠（AppFrame data-sidebar-collapsed）时入口按钮整体隐藏。
-  c('[data-sidebar-collapsed] .dshp-pet__icon-button', { display: 'none' }),
-
+  c('.dshp-pet__icon-entry::after', {
+    content: 'attr(data-tip)',
+    position: 'absolute',
+    bottom: 'calc(100% + 6px)',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    background: 'var(--dsw-alias-label-primary)',
+    color: 'var(--dsw-alias-bg-layer-3)',
+    padding: '4px 8px',
+    borderRadius: '6px',
+    fontSize: '12px',
+    lineHeight: '16px',
+    whiteSpace: 'nowrap',
+    pointerEvents: 'none',
+    opacity: '0',
+    transition: 'opacity 0.15s ease',
+    zIndex: '10',
+  }),
+  c('.dshp-pet__icon-entry:hover::after, .dshp-pet__icon-entry:focus-visible::after', { opacity: '1' }),
 ])

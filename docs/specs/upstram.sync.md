@@ -1,3 +1,5 @@
+> 该文档已被固定，禁止修改
+
 # 上游同步规范与管理索引
 
 > **目的**：定期核对本项目从上游参考实现移植或派生的能力，及时采纳有价值的修复与新特性。
@@ -163,7 +165,7 @@ git diff --check
 ### 5.2 已知配置与异常记录
 
 * **子模块绑定**：`source/*` 下 8 个参考仓库均已引入 `.gitmodules`。其中 `source/dsh-market` 是 2026-09 新增的**临时**参考仓库：上游 `render()` API 只存在于 main 分支，尚未发版，故先以源码子模块承载供 GitHub 源安装测试；上游发版后应改为 npm 依赖并移除该子模块。当前 gitlink 配置已暂存，待提交。
-* **内核参考仓库**：`source/deepseek-harness`（`deepseek-ai/deepseek-harness`，基线 `ddefc45fbc` = `dsh 0.1.6-alpha.2`）是 2026-09 新增的**只读对照基线**，为 Issue #496（非 Electron 壳可复用的无端口嵌入式宿主）提供契约比对依据。按 §1.2，DSH 内核**排除在本同步流程之外**：此子模块不参与择优采纳，只用于核对宿主契约与登记核心版本基线。桌面端载体鉴权适配的结论见 `docs/specs/connection.proposal.md`。
+* **内核参考仓库**：`source/deepseek-harness`（`deepseek-ai/deepseek-harness`，基线 `ddefc45fbc` = `dsh 0.1.6-alpha.2`）是 2026-09 新增的**只读对照基线**，为 Issue #496（非 Electron 壳可复用的无端口嵌入式宿主）提供契约比对依据。按 §1.2，DSH 内核**排除在本同步流程之外**：此子模块不参与择优采纳，只用于核对宿主契约与登记核心版本基线。桌面端载体鉴权适配的实现见 `packages/dsh-tauri/src/host/service/gate.ts`（`DSH_TAURI_EMBEDDED=1` 时覆写两道鉴权闸门）。
 * **路径纠偏记录**：
 * `source/dsh-automation` 已纠正 gitlink 配置，子模块 HEAD 指向 `f1bc91a`。
 * `source/dsh-automation` gitlink 为 `f1bc91a`，但工作区 checkout 停在 `e75499e`（`git submodule status` 前缀 `+`，

@@ -215,6 +215,21 @@ jobs:
           mapfile -d '' assets < <(find release-assets -type f -print0)
           gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
           if [ "$PRERELEASE" = "true" ]; then
+            # 预发布（semver pre-release 与 workflow_dispatch 的 test-* 构建）在放开草稿前
+            # 统一前置一段升级警告：finalize 是 Release 的单一 writer，各平台/各入口的说明
+            # 都汇聚到这里；重跑 finalize 时用特征串判重，避免警告被叠加多次。
+            gh release view "$RELEASE_TAG" --json body -q .body > release_notes.md
+            if ! grep -q '预发布版本' release_notes.md; then
+              cat << 'EOF' > release_notes_with_warning.md
+          > [!WARNING]
+          > 🚨 当前版本为预发布版本（pre-release），功能与稳定性可能不足。
+          > 🚨 该版本可能存在未知缺陷，请谨慎升级，勿直接用于生产环境。
+          > 🚨 建议升级前备份配置与数据，如遇异常请回退至上一正式版本。
+
+          EOF
+              cat release_notes.md >> release_notes_with_warning.md
+              gh release edit "$RELEASE_TAG" --notes-file release_notes_with_warning.md
+            fi
             gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
           else
             gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest

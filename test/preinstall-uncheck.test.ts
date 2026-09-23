@@ -40,6 +40,27 @@ describe('preinstallSetup primary button morph', () => {
   })
 })
 
+// ── Suite B2 — defaultUnchecked suppresses preselection (behavior) ────────────
+// 推荐项仍显示「推荐」chip，但声明 defaultUnchecked 时首次引导不预选。
+describe('defaultUnchecked suppresses first-run preselection', () => {
+  it('is honored by initialCheckedSet and keeps the recommended chip independent', () => {
+    const source = readFileSync(new URL('../src/layout/components/setup-preinstall.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('p.defaultUnchecked')
+    // 预选判定必须先于 recommended，否则 defaultUnchecked 永远不会生效
+    expect(source.indexOf('p.defaultUnchecked')).toBeLessThan(source.indexOf('p.recommended || p.fix'))
+  })
+
+  it('declares defaultUnchecked for the DSH IM preset entry', () => {
+    const presets = JSON.parse(
+      readFileSync(new URL('../src-tauri/resources/preset-plugins.json', import.meta.url), 'utf8'),
+    ) as Array<{ id: string, recommended?: boolean, defaultUnchecked?: boolean }>
+    const im = presets.find(p => p.id === '@xmanrui/dsh-im')
+    expect(im).toBeDefined()
+    expect(im?.defaultUnchecked).toBe(true)
+    expect(im?.recommended).toBe(true)
+  })
+})
+
 // ── Suite D — store empty-selection guard (behavior, regression lock) ────────
 // vi.mock 工厂会被提升到文件顶部，必须先经 vi.hoisted 声明模块级 mock 状态，
 // 否则工厂执行时引用未初始化的绑定（Vitest 4.x 语义）。

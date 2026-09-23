@@ -11,6 +11,7 @@ import {
   loadPatch,
   managedInsert,
   mcpRowItems,
+  normalizeStdioCommand,
   readRows,
   rowSeq,
   savePatch,
@@ -66,12 +67,13 @@ export const mcp = defineService({
         id = `mcp-${input.serverName}-${suffix++}`
     }
 
+    const stdio = normalizeStdioCommand(input.command ?? '', input.args)
     const config: Record<string, unknown> = input.transport === 'stdio'
       ? {
           serverName: input.serverName,
           transport: input.transport,
-          command: input.command,
-          ...(!isEmpty(input.args) ? { args: input.args } : {}),
+          command: stdio.command,
+          ...(!isEmpty(stdio.args) ? { args: stdio.args } : {}),
           ...(!isEmpty(input.env) ? { env: input.env } : {}),
           ...(!isEmpty(input.cwd) ? { cwd: input.cwd } : {}),
         }

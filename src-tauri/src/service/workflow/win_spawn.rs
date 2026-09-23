@@ -398,6 +398,30 @@ mod tests {
         );
     }
 
+    /// issue #647：内置插件的 `link:` spec 含空格时不再预加引号（0.1.6-alpha.2 起
+    /// dsh CLI 以 argv 数组启动 pnpm），因此这条带空格的参数必须原样往返到 node 的
+    /// argv——命令行构造（[`build_command_line`] / [`quote_arg`]）是「不加引号」方案
+    /// 成立的前提。
+    #[test]
+    fn spaced_argument_round_trips_to_child_argv() {
+        let node = find_node_on_path().expect("node.exe not found for the test");
+        let spec = "link:D:/Deepseek Harness Desktop/resources/node_modules/dsh-tauri";
+        let args = vec![
+            OsString::from("-e"),
+            OsString::from("process.stdout.write(JSON.stringify(process.argv.slice(1)))"),
+            OsString::from(spec),
+        ];
+        let (stdout, _stderr) =
+            spawn_with_hidden_console(&node, &args, None, &HashMap::new()).unwrap();
+
+        let mut output = String::new();
+        use std::io::Read;
+        let mut reader = stdout;
+        reader.read_to_string(&mut output).unwrap();
+
+        assert_eq!(output, format!("[\"{spec}\"]"));
+    }
+
     fn find_node_on_path() -> Option<std::path::PathBuf> {
         let path = std::env::var_os("PATH")?;
         for dir in std::env::split_paths(&path) {

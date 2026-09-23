@@ -1,6 +1,18 @@
 import type { InputActions, InputState } from '../service/session-switch.types'
+import type { WorktreeSessionState } from '../store/modules/worktree.types'
 
 export const NO_DRAFT_ATTACHMENTS: readonly string[] = []
+
+// 未校准（isGit 未知）与已确认非 git 的会话都必须隐藏控件：前者会凭空白冒出切换框，
+// 后者在工作树创建必然失败的情况下仍能进 pending，把会话锁死。
+export function showsModeSelect(state: Pick<WorktreeSessionState, 'isGit' | 'mode'>): boolean {
+  return state.isGit === true && state.mode !== 'worktree'
+}
+
+// 拦截和渲染必须是同一条件，否则控件消失后拦截仍在，用户失去唯一的退回入口。
+export function interceptsSubmit(state: Pick<WorktreeSessionState, 'isGit' | 'mode'>): boolean {
+  return state.mode === 'pending' && state.isGit === true
+}
 
 export function draftAttachmentIds(state: InputState | undefined): readonly string[] {
   return state?.attachmentIds ?? state?.imageIds ?? NO_DRAFT_ATTACHMENTS

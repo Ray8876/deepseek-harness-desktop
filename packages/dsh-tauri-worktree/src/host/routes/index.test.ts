@@ -2,14 +2,16 @@ import type { HostRoute, RoutesContext } from 'dsh-tauri'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { Binding } from '../types'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join } from 'pathe'
+import { basename, join } from 'pathe'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { routes } from '.'
-import { resetTestDshHome } from '../../../../.test/test-utils'
-import { clearHostRuntime } from '../config/runtime'
+import { resetTestDshHome, testDshHome } from '../../../../.test/test-utils'
+import { clearHostRuntime, setCurrentHostInstance } from '../config/runtime'
 import { ledger } from '../service/ledger'
 
 const P = '/api/desktop/dsh-tauri-worktree'
@@ -176,6 +178,123 @@ describe('工作树路由声明', () => {
       expect(response.status, path).toBe(400)
       expect(await response.json(), path).toEqual({ error: '缺少 sessionId' })
     }
+
+    dispose()
+  })
+})
+
+describe('工作树路由真实创建链路', () => {
+  function git(cwd: string, ...args: string[]): string {
+    return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+  }
+
+  function createRepository(): string {
+    const repository = mkdtempSync(join(tmpdir(), 'dsh-routes-repo-'))
+    temporaryDirectories.push(repository)
+    git(repository, 'init', '-b', 'main')
+    git(repository, 'config', 'user.email', 'test@example.com')
+    git(repository, 'config', 'user.name', 'Test')
+    git(repository, 'config', 'core.autocrlf', 'false')
+    writeFileSync(join(repository, 'README.md'), '# repo\n')
+    git(repository, 'add', '.')
+    git(repository, 'commit', '-m', 'init')
+    return repository
+  }
+
+  function bindSession(sessionId: string, cwd: string): void {
+    setCurrentHostInstance({
+      sessions: { get: (id: string) => (id === sessionId ? { header: { cwd } } : undefined) },
+    } as never)
+  }
+
+  function worktreeRegistrations(repository: string): number {
+    return git(repository, 'worktree', 'list', '--porcelain')
+      .split('\n')
+      .filter(line => line.startsWith('worktree '))
+      .length
+  }
+
+  async function postCreate(base: string, body: Record<string, unknown>): Promise<{ status: number, body: any }> {
+    const response = await sendJson(base, P, 'POST', JSON.stringify(body))
+    return { status: response.status, body: await response.json() }
+  }
+
+  it('pOST 集合根在真实 git 仓库上创建工作树并落盘绑定', async () => {
+    const repository = createRepository()
+    const sessionId = 'session-create'
+    bindSession(sessionId, repository)
+
+    const harness = createHarness()
+    const dispose = routes(harness.ctx)
+    const base = await listen(harness.registered)
+
+    const { status, body } = await postCreate(base, { sessionId, sourceSessionId: sessionId })
+    const hash = createHash('sha256').update(`${repository}:${sessionId}`).digest('hex').slice(0, 12)
+    const expected = join(testDshHome, 'worktrees', hash, basename(repository))
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({
+      ok: true,
+      hash,
+      dirname: basename(repository),
+      worktreeKey: `${hash}/${basename(repository)}`,
+      worktreePath: expected,
+      projectPath: repository,
+      sourceSessionId: sessionId,
+      existed: false,
+      inherited: false,
+    })
+    expect(git(expected, 'rev-parse', 'HEAD')).toBe(git(repository, 'rev-parse', 'refs/heads/main'))
+    expect(git(expected, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('HEAD')
+    expect(readFileSync(join(expected, 'README.md'), 'utf8')).toBe('# repo\n')
+    expect(git(repository, 'branch', '--list', 'dsh/*')).toBe('')
+    expect(worktreeRegistrations(repository)).toBe(2)
+    expect(ledger.load(sessionId)?.worktreePath).toBe(expected)
+
+    const listed = await (await fetch(`${base}${P}/bindings`)).json() as { bindings: Array<{ sessionId: string, worktreeKey: string }> }
+    expect(listed.bindings.map(binding => binding.sessionId)).toEqual([sessionId])
+    expect(listed.bindings[0].worktreeKey).toBe(`${hash}/${basename(repository)}`)
+
+    dispose()
+  })
+
+  it('pOST 集合根重复创建时幂等返回 existed 且不重复注册', async () => {
+    const repository = createRepository()
+    const sessionId = 'session-idempotent'
+    bindSession(sessionId, repository)
+
+    const harness = createHarness()
+    const dispose = routes(harness.ctx)
+    const base = await listen(harness.registered)
+
+    const first = await postCreate(base, { sessionId, sourceSessionId: sessionId })
+    const second = await postCreate(base, { sessionId, sourceSessionId: sessionId })
+
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    expect(first.body.existed).toBe(false)
+    expect(second.body.existed).toBe(true)
+    expect(second.body.worktreePath).toBe(first.body.worktreePath)
+    expect(worktreeRegistrations(repository)).toBe(2)
+    expect(ledger.load(sessionId)?.worktreePath).toBe(first.body.worktreePath)
+
+    dispose()
+  })
+
+  it('pOST 集合根解析不出会话目录时返回 400 且不落盘绑定', async () => {
+    const repository = createRepository()
+
+    const harness = createHarness()
+    const dispose = routes(harness.ctx)
+    const base = await listen(harness.registered)
+
+    const { status, body } = await postCreate(base, { sessionId: 'session-orphan', sourceSessionId: 'session-orphan' })
+
+    expect(status).toBe(400)
+    expect(body).toEqual({ error: '无法解析会话工作目录：会话尚未就绪，请稍后重试' })
+    expect(ledger.load('session-orphan')).toBeNull()
+    expect(existsSync(join(testDshHome, 'worktrees'))).toBe(false)
+    expect(worktreeRegistrations(repository)).toBe(1)
 
     dispose()
   })

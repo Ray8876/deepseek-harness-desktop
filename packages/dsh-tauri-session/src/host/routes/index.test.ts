@@ -15,10 +15,19 @@
 import type { HostRoute, RoutesContext } from 'dsh-tauri'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { mkdirSync } from 'node:fs'
 import { createServer } from 'node:http'
-import { afterEach, describe, expect, it } from 'vitest'
+import { join } from 'pathe'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { routes } from '.'
+import { resetTestDshHome, testDshHome } from '../../../../.test/test-utils'
 import { setCurrentHostInstance } from '../config/runtime'
+
+vi.mock('dsh-tauri', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('dsh-tauri')>()
+  const { testDshHome: home } = await import('../../../../.test/test-utils')
+  return { ...actual, DSH_HOME: home }
+})
 
 const P = '/api/desktop/dsh-tauri-session'
 
@@ -131,8 +140,14 @@ function postJson(base: string, path: string, method: string, body: string): Pro
   })
 }
 
+beforeEach(() => {
+  resetTestDshHome()
+})
+
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))))
+  resetTestDshHome()
+  vi.restoreAllMocks()
 })
 
 describe('归档路由声明', () => {
@@ -264,6 +279,31 @@ describe('归档路由声明', () => {
     )
     expect(unknown.status).toBe(400)
     expect(await unknown.json()).toEqual({ ok: false, error: 'session-directory-not-found' })
+
+    dispose()
+  })
+
+  it('已定位到的会话目录经 DSH_HOME 替身解析后交给 openDirectory，不触碰真实 ~/.dsh', async () => {
+    const dir = join(testDshHome, 'sessions', '--project-a--', 'session-abc')
+    mkdirSync(dir, { recursive: true })
+    const dshTauri = await import('dsh-tauri')
+    const opened = vi.spyOn(dshTauri, 'openDirectory').mockResolvedValue(undefined)
+
+    const harness = createHarness()
+    const dispose = mount(harness)
+    const base = await listen(harness.registered)
+
+    const response = await postJson(
+      base,
+      `${P}/session/open/path`,
+      'POST',
+      JSON.stringify({ sessionId: 'abc' }),
+    )
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true })
+    expect(opened).toHaveBeenCalledTimes(1)
+    expect(opened).toHaveBeenCalledWith(dir)
+    expect(dshTauri.DSH_HOME).toBe(testDshHome)
 
     dispose()
   })

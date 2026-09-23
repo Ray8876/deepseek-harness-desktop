@@ -21,22 +21,17 @@ fn dependencies_dir(app_handle: &AppHandle) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// 历史版本槽位（新命名）：`dependencies/<tag>`。release tag 本身以 `dsh-` 开头
+/// 历史版本槽位：`dependencies/<tag>`。release tag 本身以 `dsh-` 开头
 /// （如 `dsh-0.1.0-rc.8-32331963388`），因此槽位目录名即 tag，不再叠加前缀。
 fn slot_dir(app_handle: &AppHandle, tag: &str) -> PathBuf {
     dependencies_dir(app_handle).join(tag)
 }
 
-/// 定位已下载的槽位：优先新命名 `dependencies/<tag>`，兼容旧版遗留的双前缀
-/// `dependencies/dsh-<tag>`（tag 以 `dsh-` 开头时旧命名会产生 `dsh-dsh-...`）。
+/// 定位已下载的槽位：`dependencies/<tag>` 存在时返回该目录。
 fn existing_slot_dir(app_handle: &AppHandle, tag: &str) -> Option<PathBuf> {
     let deps = dependencies_dir(app_handle);
-    let new = safe_slot_path(&deps, tag).ok()?;
-    if new.is_dir() {
-        return Some(new);
-    }
-    let legacy = safe_slot_path(&deps, &format!("dsh-{tag}")).ok()?;
-    legacy.is_dir().then_some(legacy)
+    let slot = safe_slot_path(&deps, tag).ok()?;
+    slot.is_dir().then_some(slot)
 }
 
 /// 构造槽位路径，并拒绝越出 dependencies 根目录的既有路径或符号链接。
@@ -263,11 +258,8 @@ pub async fn list(app_handle: &AppHandle) -> Vec<HarnessCore> {
     if let Ok(entries) = std::fs::read_dir(dependencies_dir(app_handle)) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            // 新命名槽位目录名即 tag（`dsh-0.1.0-rc.8-...`）；旧版双前缀
-            // `dsh-dsh-...` 剥一层 `dsh-` 还原 tag。`dsh` 为激活目录，跳过。
-            let tag = if let Some(rest) = name.strip_prefix("dsh-dsh-") {
-                Some(format!("dsh-{rest}"))
-            } else if name.starts_with("dsh-") || name.starts_with("src-") {
+            // 槽位目录名即 tag（`dsh-0.1.0-rc.8-...`）。`dsh` 为激活目录，跳过。
+            let tag = if name.starts_with("dsh-") || name.starts_with("src-") {
                 Some(name.clone())
             } else {
                 None
@@ -357,13 +349,12 @@ pub async fn set_active(app_handle: &AppHandle, id: &str) -> Result<HarnessCore,
         let Some(core) = local_core(app_handle) else {
             return Err("CORE_LOCAL_NOT_FOUND: no local core detected".to_string());
         };
-        // 低于内置插件基线的本地核心无法加载随包插件（issue #596）：显式切换同样
+        // 低于最低支持版本的本地核心无法加载随包插件（issue #596）：显式切换同样
         // 拒绝并给出可操作提示，而不是让用户切过去再撞一次启动失败。
-        if !core_supports_bundled_plugins(app_handle, &core.version) {
+        if !core_supports_bundled_plugins(&core.version) {
             return Err(format!(
-                "CORE_LOCAL_UNSUPPORTED: local dsh {} is below the bundled-plugin baseline {}; update it (`npm install -g @deepseek-ai/dsh@latest`) or keep a bundled version",
+                "CORE_LOCAL_UNSUPPORTED: local dsh {} is below the minimum supported core; update it (`npm install -g @deepseek-ai/dsh@latest`) or keep a bundled version",
                 core.version,
-                config::recommended_dsh_version(app_handle).unwrap_or_default(),
             ));
         }
         stop_harness_for_core_switch(app_handle).await?;
@@ -409,17 +400,18 @@ async fn switch_app_version(app_handle: &AppHandle, tag: &str) -> Result<(), Str
     let deps = dependencies_dir(app_handle);
     let active_dir = config::get_dsh_install_path(app_handle);
     fs_guard::validate_id(tag)?;
-    let target_dir = existing_slot_dir(app_handle, tag)
-        .ok_or_else(|| format!("CORE_VERSION_NOT_DOWNLOADED: {tag}"))?;
     let cur_tag = config::get_dsh_pkg_tag(app_handle);
 
     // 激活目录已是目标版本（tag 相同）→ 仅切来源标记（如 local → app 同版本）
-    if cur_tag.as_deref() == Some(tag) {
+    if cur_tag.as_deref() == Some(tag) && config::get_dsh_binary_path(app_handle).is_file() {
+        stop_harness_for_core_switch(app_handle).await?;
         let mut setting = config::get_store_dat_setting(app_handle);
         setting.active_core = Some(CoreSource::App.as_str().to_string());
         config::set_store_dat_setting(app_handle, setting);
         return Ok(());
     }
+    let target_dir = existing_slot_dir(app_handle, tag)
+        .ok_or_else(|| format!("CORE_VERSION_NOT_DOWNLOADED: {tag}"))?;
 
     // 切换前停止运行中的服务，避免目录被进程句柄锁定
     if workflow::has_owned_process() {
@@ -470,7 +462,9 @@ async fn switch_app_version(app_handle: &AppHandle, tag: &str) -> Result<(), Str
 
     if active_dir.exists() {
         if let Err(e) = download::rename_with_retry(&active_dir, &backup_dir).await {
-            let _ = download::rename_with_retry(&holding, &backup_dir).await;
+            if holding.exists() {
+                let _ = download::rename_with_retry(&holding, &backup_dir).await;
+            }
             return Err(format!(
                 "CORE_SWITCH_FAILED: {} -> {}: {e}",
                 active_dir.display(),
@@ -580,6 +574,11 @@ pub async fn download_version(app_handle: &AppHandle, tag: &str) -> Result<Harne
 }
 
 /// 卸载已下载的历史版本（激活中的版本不可卸载）。
+///
+/// 删除**不会**先停服务：绝大多数卸载针对的是没在跑的已下载版本，其目录没有被任何
+/// 进程持有；无条件停服会连带中断用户当前正在使用的核心会话（用户视角就是「点一下
+/// 卸载，正在跑的核心全挂了」）。只有直接删除因句柄锁定失败时（例如删到上一份激活
+/// 副本、残留进程仍加载着它），才走「停服务 → 重试」的慢路径。
 pub async fn remove_version(app_handle: &AppHandle, id: &str) -> Result<(), String> {
     let Some(tag) = id.strip_prefix("app-") else {
         return Err(format!("CORE_INVALID_ID: {id}"));
@@ -596,7 +595,18 @@ pub async fn remove_version(app_handle: &AppHandle, id: &str) -> Result<(), Stri
     let dir = existing_slot_dir(app_handle, tag)
         .ok_or_else(|| format!("CORE_VERSION_NOT_FOUND: {tag}"))?;
 
-    // 停止服务避免句柄锁定（被删目录可能是上一份激活副本，句柄未释放）
+    // 快速路径：目录未被任何进程持有，一次删掉，全程不碰运行中的服务。
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => {
+            log::info!("Removed dsh core slot {tag} at {}", dir.display());
+            return Ok(());
+        }
+        Err(e) => {
+            log::warn!("dsh core slot {tag} is locked ({e}); stopping the service before retry");
+        }
+    }
+
+    // 慢路径：目录仍被句柄锁定（可能是上一份激活副本的残留进程加载着它）。
     if workflow::has_owned_process() {
         if let Err(e) = workflow::stop(app_handle.clone()).await {
             log::warn!("failed to stop harness before core removal: {e}");
@@ -608,6 +618,7 @@ pub async fn remove_version(app_handle: &AppHandle, id: &str) -> Result<(), Stri
             dir.display()
         ));
     }
+    log::info!("Removed dsh core slot {tag} after stopping the service");
     Ok(())
 }
 

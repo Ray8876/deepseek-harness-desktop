@@ -1,20 +1,17 @@
 import type { ReactElement } from 'react'
 import type { SurfaceBarProps } from './surface.types'
-import { CircleTree, Icon, useMountStyle } from 'dsh-tauri-ui/client'
+import { ArrowRightFromSquare, CircleTree, GoalBar, GoalBarAction, Icon, TerminalLine, TrashBin, Xmark } from 'dsh-tauri-ui/client'
 import { useState } from 'react'
-import { SURFACE_STYLE_ID } from '../constants'
 import { useWorktreeSession } from '../hooks/use-worktree-session'
 import { locale } from '../locales'
 import { store } from '../store'
-import surfaceStyle from './surface.cssr'
 
 export function WorktreeSurface({ sessionId }: SurfaceBarProps): ReactElement | null {
-  useMountStyle(surfaceStyle, SURFACE_STYLE_ID)
   locale.useLocale()
   const state = useWorktreeSession(sessionId)
   const [logOpen, setLogOpen] = useState(false)
 
-  if (state.phase === 'idle' || state.mode === 'local')
+  if (state.phase === 'idle' || (state.mode === 'local' && state.phase !== 'error'))
     return null
 
   const creating = state.phase === 'creating'
@@ -26,37 +23,63 @@ export function WorktreeSurface({ sessionId }: SurfaceBarProps): ReactElement | 
     : deleting
       ? locale.text('progressDeleting')
       : failed
-        ? `${locale.text('progressError')}${state.error ? `: ${state.error}` : ''}`
+        ? locale.text('progressError')
         : locale.text('surfaceWorktree')
 
   return (
     <div className="dshp-worktree">
       <div className="dshp-worktree__surface">
-        <div className="dshp-worktree__surface-bar" data-dsh-worktree-surface={sessionId}>
-          <Icon as={CircleTree} size={14} />
-          <div className="dshp-worktree__surface-content">
-            <span className="dshp-worktree__surface-label">
-              {label}
-              {creating && `...`}
-            </span>
-            {bound && state.log.length > 0 && (
-              <button type="button" className={`${'dshp-worktree__action'} ${'dshp-worktree__action--log'}`} onClick={() => setLogOpen(value => !value)}>
-                {locale.text('progressViewLogs')}
-              </button>
-            )}
-          </div>
-          <span className="dshp-worktree__spacer" />
-          {bound && !deleting && (
+        <GoalBar
+          actions={(
             <>
-              <button type="button" className="dshp-worktree__action" onClick={() => store.worktree.patch(sessionId, { checkoutOpen: true, error: '' })}>
-                {locale.text('surfaceCheckout')}
-              </button>
-              <button type="button" className={`${'dshp-worktree__action'} ${'dshp-worktree__action--danger'}`} onClick={() => store.worktree.patch(sessionId, { abandonOpen: true })}>
-                {locale.text('surfaceAbandon')}
-              </button>
+              {bound && !deleting && (
+                <>
+                  <GoalBarAction
+                    aria-label={locale.text('surfaceCheckout')}
+                    iconOnly
+                    onClick={() => store.worktree.patch(sessionId, { checkoutOpen: true, error: '' })}
+                    title={locale.text('surfaceCheckout')}
+                  >
+                    <Icon as={ArrowRightFromSquare} size={14} />
+                  </GoalBarAction>
+                  <GoalBarAction
+                    aria-label={locale.text('surfaceAbandon')}
+                    iconOnly
+                    onClick={() => store.worktree.patch(sessionId, { abandonOpen: true })}
+                    title={locale.text('surfaceAbandon')}
+                  >
+                    <Icon as={TrashBin} size={14} />
+                  </GoalBarAction>
+                </>
+              )}
+              {failed && !bound && (
+                <GoalBarAction
+                  aria-label={locale.text('surfaceDismiss')}
+                  iconOnly
+                  onClick={() => store.worktree.patch(sessionId, { phase: 'idle', error: '' })}
+                  title={locale.text('surfaceDismiss')}
+                >
+                  <Icon as={Xmark} size={14} />
+                </GoalBarAction>
+              )}
             </>
           )}
-        </div>
+          data-dsh-worktree-surface={sessionId}
+          error={failed ? state.error : undefined}
+          glyph={<Icon as={CircleTree} size={14} />}
+          label={`${label}${creating ? '...' : ''}`}
+        >
+          {bound && state.log.length > 0 && (
+            <GoalBarAction
+              aria-label={locale.text('progressViewLogs')}
+              iconOnly
+              onClick={() => setLogOpen(value => !value)}
+              title={locale.text('progressViewLogs')}
+            >
+              <Icon as={TerminalLine} size={14} />
+            </GoalBarAction>
+          )}
+        </GoalBar>
         <Logs log={state.log} open={logOpen} />
       </div>
     </div>

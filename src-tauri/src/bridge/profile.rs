@@ -1,7 +1,8 @@
 //! 多 Profile 环境隔离。
 //!
 //! 管理 `$DSH_HOME/profiles` 下的档案：列表、创建（web 模板）、切换当前使用中的
-//! 档案，以及删除（默认档案与使用中的档案不可删除）。
+//! 档案，以及删除（默认档案与使用中的档案不可删除）与重置（清空档案数据、
+//! 保留会话）。
 
 use crate::config;
 use crate::service::profile;
@@ -29,6 +30,12 @@ pub fn set_active_profile(app_handle: AppHandle, id: String) -> Result<profile::
 #[tauri::command]
 pub fn remove_profile(app_handle: AppHandle, id: String) -> Result<(), String> {
     profile::remove(&app_handle, &id)
+}
+
+/// 重置档案（清空档案目录并按模板重新初始化；会话数据在档案目录之外，保留）
+#[tauri::command]
+pub fn reset_profile(app_handle: AppHandle, id: String) -> Result<(), String> {
+    profile::reset(&app_handle, &id)
 }
 
 /// 克隆档案（全量复制源档案目录，自动递增命名或指定名称）。

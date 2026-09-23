@@ -33,11 +33,30 @@ describe('decideRunOutcome', () => {
   })
 
   it('显式的非 completed 原因仍判失败', () => {
-    const abortReason = { kind: 'aborted' }
-    expect(decideRunOutcome({ started: true, timedOut: false, reason: abortReason }))
-      .toEqual({ status: 'failed', error: describeFailure(abortReason) })
+    expect(decideRunOutcome({ started: true, timedOut: false, reason: { kind: 'aborted' } }))
+      .toEqual({ status: 'failed', error: { code: 'turn_aborted', message: '定时任务以 aborted 结束。' } })
     expect(decideRunOutcome({ started: true, timedOut: false, reason: { kind: 'error', error: { code: 'llm_error', message: 'boom' } } }))
       .toEqual({ status: 'failed', error: { code: 'llm_error', message: 'boom' } })
+  })
+})
+
+describe('describeFailure', () => {
+  it('没有 turn/end 收尾原因时归为 no_turn_result', () => {
+    expect(describeFailure(undefined)).toEqual({ code: 'no_turn_result', message: '本次定时任务没有产生完整 turn。' })
+  })
+
+  it('取消 / 中断类收尾原因按 turn_<kind> 归类', () => {
+    expect(describeFailure({ kind: 'aborted' })).toEqual({ code: 'turn_aborted', message: '定时任务以 aborted 结束。' })
+    expect(describeFailure({ kind: 'interrupted' })).toEqual({ code: 'turn_interrupted', message: '定时任务以 interrupted 结束。' })
+  })
+
+  it('error 原因透传内核错误码与文案，缺失时回落到通用失败', () => {
+    expect(describeFailure({ kind: 'error', error: { code: 'llm_error', message: 'boom' } }))
+      .toEqual({ code: 'llm_error', message: 'boom' })
+    expect(describeFailure({ kind: 'error' })).toEqual({ code: 'agent_error', message: '定时任务 Agent 执行失败。' })
+    expect(describeFailure({ kind: 'error', error: { code: 42, message: '' } }))
+      .toEqual({ code: 'agent_error', message: '' })
+    expect(describeFailure({ kind: 'error', error: 'boom' })).toEqual({ code: 'agent_error', message: '定时任务 Agent 执行失败。' })
   })
 })
 

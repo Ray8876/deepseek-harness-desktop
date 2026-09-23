@@ -30,4 +30,3 @@ export const MENU_ITEM_ICON_SELECTOR = '[class*="itemIcon"]'
 
 export const ARCHIVE_MENU_ITEM_ATTRIBUTE = 'data-dsh-tauri-session-archive-item'
 export const ARCHIVE_MENU_PATCH_ATTRIBUTE = 'data-dsh-tauri-session-archive-menu-patched'
-export const ARCHIVE_MENU_ITEM_CLASS = 'dshp-session__archive-menu-item'

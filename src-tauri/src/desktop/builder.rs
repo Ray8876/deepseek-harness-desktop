@@ -47,11 +47,15 @@ pub const SHELL_NAV_HEIGHT: u32 = 44;
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHT_INSET_X: f64 = 14.0;
 
-/// Wry 保留了 AppKit 原生按钮的纵向 frame 偏移：实测视觉圆心 = 传入 y − 2
-/// （44px 栏高配 y = 24 时圆心为 22px，而非直觉上的 24px）。因此「视觉圆心 =
-/// 栏高 / 2」对应 y = 栏高 / 2 + 2（44px 栏高 → 24）。
+/// 交通灯纵向锚点相对「栏高 / 2」的修正量（逻辑像素）。
+///
+/// tao 的 `inset_traffic_lights` 只把标题栏容器高度改成 `close_rect.height + y`，
+/// AppKit 按钮仍贴着容器底边，故传入 y 与按钮视觉圆心近似 1:1 平移（实测 y = 24
+/// 时圆心落在窗口顶端下方 26px）。2x 截图实测：圆心在设备行 54，而栏内 flex 居中
+/// 的折叠/展开按钮圆心在设备行 45（= 栏内容盒中心），低 9 设备像素 = 4.5 逻辑像素，
+/// 故锚点要回退 4.5：44 / 2 + (−2.5) = 19.5。
 #[cfg(target_os = "macos")]
-const TRAFFIC_LIGHT_VISUAL_OFFSET: f64 = 2.0;
+const TRAFFIC_LIGHT_VISUAL_OFFSET: f64 = -2.5;
 
 /// WebView2 原生拖拽区域所需的参数。
 ///
@@ -520,8 +524,8 @@ pub fn build_main_window(app: &tauri::AppHandle<Wry>) -> tauri::Result<tauri::We
         .decorations(true)
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true)
-        // 交通灯纵向位置由 SHELL_NAV_HEIGHT 推导（见常量注释），使视觉圆心落在
-        // 栏高一半，与随栏高 flex 居中的折叠/展开按钮同一水平线（issue #524）。
+        // 交通灯纵向位置由 SHELL_NAV_HEIGHT 与 TRAFFIC_LIGHT_VISUAL_OFFSET 推导
+        // （见常量注释），使视觉圆心与随栏高 flex 居中的折叠/展开按钮同一水平线（issue #524）。
         // 位置只在窗口创建时生效：Tauri 2.11.5 没有运行期交通灯 API，而 wry
         // 0.55.1 会在自身重绘时按创建时的值回放（`WryWebViewParent::drawRect:`），
         // 所以运行期改 NSWindow 会被随时覆盖——改栏高必须同步上面的常量。
@@ -583,6 +587,9 @@ pub fn build_main_window(app: &tauri::AppHandle<Wry>) -> tauri::Result<tauri::We
         .initialization_script_for_all_frames(crate::desktop::plugin_boot::PLUGIN_BOOT_RELOAD_JS);
 
     let webview_window = webview_builder.build()?;
+    // 首帧前把窗口底色设成主题画布色（见 `config::window_background`），否则
+    // 「窗口可见 → 前端取回偏好」之间会闪一次错色。
+    apply_window_background(app, &webview_window);
     let zoom_factor = crate::config::get_store_dat_setting(app).zoom_factor;
     if zoom_factor != crate::config::default_zoom_factor() {
         if let Err(error) = crate::desktop::zoom::apply_native_zoom(&webview_window, zoom_factor) {
@@ -615,6 +622,21 @@ pub fn build_main_window(app: &tauri::AppHandle<Wry>) -> tauri::Result<tauri::We
     }
 
     Ok(webview_window)
+}
+
+/// 把窗口底色设成主题画布色；`system` 按窗口当前外观折算。
+///
+/// macOS 未实现窗口底色接口，`set_background_color` 会返回错误并被忽略——那里由
+/// `config::apply_window_theme` 同步原生外观。
+fn apply_window_background(app: &tauri::AppHandle<Wry>, window: &tauri::WebviewWindow<Wry>) {
+    let Some(color) =
+        crate::config::window_background(crate::config::get_dsh_theme(app), window.theme().ok())
+    else {
+        return;
+    };
+    if let Err(error) = window.as_ref().set_background_color(Some(color)) {
+        log::debug!("[theme] window background color not applied: {error}");
+    }
 }
 
 /// 「文件 → 新建窗口」：以同一 `index.html` 再开一个独立 webview 窗口。
@@ -661,7 +683,7 @@ pub fn build_extra_window(app: &tauri::AppHandle<Wry>) -> tauri::Result<tauri::W
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true)
         // 与主窗口同一真值：附加窗口用的是同一个壳层导航栏（h-11 = 44px），
-        // 交通灯必须落在同一水平线上（写死 24.0 会随 #524 的栏高改动错位 4px）。
+        // 交通灯必须落在同一水平线上（写死锚点值会随 #524 的栏高/修正量改动错位）。
         .traffic_light_position(tauri::LogicalPosition::new(
             TRAFFIC_LIGHT_INSET_X,
             f64::from(SHELL_NAV_HEIGHT) / 2.0 + TRAFFIC_LIGHT_VISUAL_OFFSET,
@@ -694,6 +716,7 @@ pub fn build_extra_window(app: &tauri::AppHandle<Wry>) -> tauri::Result<tauri::W
     };
 
     let window = webview_builder.build()?;
+    apply_window_background(app, &window);
 
     // 启动/真值变化时由主窗口应用缩放；新窗口需要自己应用一次当前真值。
     let zoom_factor = crate::config::get_store_dat_setting(app).zoom_factor;
@@ -887,6 +910,7 @@ pub fn handler() -> impl Fn(Invoke<Wry>) -> bool + Send + Sync + 'static {
         crate::bridge::quarantine_broken_patch_layers,
         crate::bridge::strip_unresolved_patch_entries,
         crate::bridge::get_dsh_status,
+        crate::bridge::is_dev_build,
         crate::bridge::get_preinstall_plugins,
         crate::bridge::get_preinstall_pending,
         crate::bridge::install_preinstall_plugins,
@@ -913,6 +937,7 @@ pub fn handler() -> impl Fn(Invoke<Wry>) -> bool + Send + Sync + 'static {
         crate::bridge::create_profile,
         crate::bridge::set_active_profile,
         crate::bridge::remove_profile,
+        crate::bridge::reset_profile,
         crate::bridge::clone_profile,
         crate::bridge::backup_profile,
         crate::bridge::restore_profile,
@@ -976,6 +1001,12 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
         .manage(crate::desktop::pet_mouse::PetMouseStreamState::default())
         .setup(|app| {
             let app_handle = app.handle().clone();
+            // 标识符改名（app-data 目录名同步变化）：旧目录必须在任何 store 读写之前
+            // 搬过来，否则升级用户会被误判成首装（见
+            // service::migrate::migrate_app_data_dir）。失败仅告警，不阻断启动。
+            if let Err(error) = crate::service::migrate::migrate_app_data_dir(&app_handle) {
+                log::warn!("[migrate] app data dir migration failed: {error}");
+            }
             // 首装检测必须最先执行：窗口几何恢复/退出保存等任何 store 写入都会
             // 创建 store 文件，判定晚于它们会把首装误判为升级（见
             // config::detect_first_install 的时序说明）。

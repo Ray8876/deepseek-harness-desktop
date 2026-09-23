@@ -1,4 +1,4 @@
-import type { HostContext } from '../types'
+import type { ConnectionHost, HostContext } from '../types'
 
 export interface HostRuntime<C = HostContext> {
   setCurrentHostInstance: (ctx: C | undefined) => void
@@ -19,4 +19,11 @@ export function defineHostRuntime<C = HostContext>(): HostRuntime<C> {
       return current
     },
   }
+}
+
+/** dsh-tauri 自身的宿主绑定槽位（载体鉴权适配读 `connection`）。 */
+export const { setCurrentHostInstance, getCurrentHostInstance } = defineHostRuntime<ConnectionHost>()
+
+export function clearHostRuntime(): void {
+  setCurrentHostInstance(undefined)
 }

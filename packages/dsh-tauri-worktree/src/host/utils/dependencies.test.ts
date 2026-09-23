@@ -1,8 +1,10 @@
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import process from 'node:process'
 import { join } from 'pathe'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  copyMissingChildren,
   isDependencyInstallCommand,
   linkWorktreeDependencies,
   normalizeLinkDirectories,
@@ -24,6 +26,15 @@ async function createFixture(): Promise<{ project: string, worktree: string, mar
   await mkdir(join(project, 'node_modules', 'pkg'), { recursive: true })
   await writeFile(marker, 'shared-dependency\n')
   return { project, worktree, marker }
+}
+
+async function createSkillsFixture(): Promise<{ project: string, worktree: string, skill: string }> {
+  const project = await temporaryRoot('dsh-deps-project-')
+  const worktree = await temporaryRoot('dsh-deps-worktree-')
+  const skill = join(project, '.agents', 'skills', 'handle', 'SKILL.md')
+  await mkdir(join(project, '.agents', 'skills', 'handle'), { recursive: true })
+  await writeFile(skill, '# handle\n')
+  return { project, worktree, skill }
 }
 
 afterEach(async () => {
@@ -126,5 +137,45 @@ describe('unlinkWorktreeDependencies', () => {
   it('is idempotent when the directory is absent', async () => {
     const worktree = await temporaryRoot('dsh-deps-worktree-')
     await expect(unlinkWorktreeDependencies(worktree, ['node_modules'])).resolves.toEqual([])
+  })
+})
+
+describe('copyMissingChildren', () => {
+  it('copies a missing source directory into the target as a real directory', async () => {
+    const { project, skill } = await createSkillsFixture()
+    const worktree = await temporaryRoot('dsh-deps-worktree-')
+
+    await expect(copyMissingChildren(join(project, '.agents'), join(worktree, '.agents'))).resolves.toEqual(['skills'])
+    const copied = join(worktree, '.agents', 'skills')
+    expect((await lstat(copied)).isSymbolicLink()).toBe(false)
+    expect(await readFile(join(copied, 'handle', 'SKILL.md'), 'utf8')).toBe('# handle\n')
+    expect(await readFile(skill, 'utf8')).toBe('# handle\n')
+  })
+
+  it('merges missing descendants into an existing target directory and keeps its files', async () => {
+    const { project } = await createSkillsFixture()
+    const worktree = await temporaryRoot('dsh-deps-worktree-')
+    await mkdir(join(worktree, '.agents', 'skills'), { recursive: true })
+    await writeFile(join(worktree, '.agents', 'skills', 'local.md'), 'local\n')
+
+    await expect(copyMissingChildren(join(project, '.agents'), join(worktree, '.agents'))).resolves.toEqual(['skills/handle'])
+    expect(await readFile(join(worktree, '.agents', 'skills', 'local.md'), 'utf8')).toBe('local\n')
+    expect(await readFile(join(worktree, '.agents', 'skills', 'handle', 'SKILL.md'), 'utf8')).toBe('# handle\n')
+  })
+
+  it('replaces a legacy symbolic link with a real copied directory', async () => {
+    const { project, skill } = await createSkillsFixture()
+    const worktree = await temporaryRoot('dsh-deps-worktree-')
+    await symlink(join(project, '.agents'), join(worktree, '.agents'), process.platform === 'win32' ? 'junction' : 'dir')
+
+    await expect(copyMissingChildren(join(project, '.agents'), join(worktree, '.agents'))).resolves.toEqual(['skills'])
+    expect((await lstat(join(worktree, '.agents'))).isSymbolicLink()).toBe(false)
+    expect(await readFile(join(worktree, '.agents', 'skills', 'handle', 'SKILL.md'), 'utf8')).toBe('# handle\n')
+    expect(await readFile(skill, 'utf8')).toBe('# handle\n')
+  })
+
+  it('returns no copies when the source is absent', async () => {
+    const worktree = await temporaryRoot('dsh-deps-worktree-')
+    await expect(copyMissingChildren(join(worktree, 'missing'), join(worktree, 'target'))).resolves.toEqual([])
   })
 })

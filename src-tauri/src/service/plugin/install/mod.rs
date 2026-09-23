@@ -79,7 +79,7 @@ use diagnose::{
     store_mismatch_hint,
 };
 use pnpm::ensure_pnpm;
-use spec::{bundled_dir_of, normalize_git_spec, preset_spec_for_install, shell_quote_spec};
+use spec::{bundled_dir_of, normalize_git_spec, preset_spec_for_install, spec_argument};
 
 /// 允许构建重试的上限。每次重试解决 pnpm 报出的一个允许键（git depPath 或
 /// 传递构建包名），多个 git 插件 / 多个原生依赖各占一次，上限封顶防死循环。
@@ -138,6 +138,10 @@ async fn install_with_cancel(
 
     let mut specs = Vec::with_capacity(ids.len());
     let mut needs_git = false;
+    // 是否给含空格的 spec 预加引号取决于活动核心的 `dsh plugin` 实现（见
+    // [`spec_argument`]）：0.1.6-alpha.2 起 pnpm 由 argv 数组启动，预加引号会变成
+    // spec 的一部分（issue #647）。
+    let core_version = crate::service::core::active_version(app_handle);
     for id in ids {
         let preset = preset_map
             .get(id.as_str())
@@ -150,16 +154,14 @@ async fn install_with_cancel(
         // #3948 / #7243 / #13276）：公开仓库一旦落进 git+ssh，在没有 SSH 配置
         // 的桌面机上必然 `Host key verification failed` / `Permission denied (publickey)`。
         //
-        // 最后经 shell_quote_spec 给含空格的 spec 加内嵌双引号（**仅 Windows**）：
-        // dsh CLI 只在 win32 用 `shell:true` 启动 pnpm、把参数按空格拼接（Node
-        // 不引号转义，DEP0190），内置插件指向应用安装目录（如
-        // `G:\Deepseek Harness Desktop\...`，路径常含空格），拼进 shell 后会被
-        // 切碎成多个 spec，pnpm 报 `ERR_PNPM_SPEC_NOT_SUPPORTED`，插件装不上、
-        // 启动自愈每次重装（死循环）。引号让 cmd 把整条 spec 视为单一 token；
-        // pnpm 解析后自行剥离引号，落盘值仍是不带引号的 `link:<路径>`，与内核
-        // 对账的 `expected`（bundled_dep_spec）一致。macOS/Linux 是直接
-        // `spawnSync`（无 shell），spec 作为单个 argv 传递、空格天然保留，
-        // 引号只会被当作包名字符导致安装失败（见 [`shell_quote_spec`]）。
+        // 最后按活动核心决定是否为含空格的 spec 加内嵌双引号：0.1.6-alpha.2 起
+        // dsh CLI 改用 execa 以 argv 数组启动 pnpm，参数不再经 shell 拼接，预加引号
+        // 只会让 pnpm 收到带字面引号的 spec（issue #647）；更早的核心在 win32 用
+        // `shell:true` 把参数拼成命令行（Node 只拼接、不转义，DEP0190），含空格的
+        // 内置插件路径（`link:<应用安装目录>`）不预加引号就会被切碎成多个 spec，
+        // pnpm 报 `ERR_PNPM_SPEC_NOT_SUPPORTED`、启动自愈每轮重装（死循环）。两种
+        // 形态落盘 `package.json` 的值都是不带引号的 `link:<路径>`，与内核
+        // 对账的 `expected`（bundled_dep_spec）一致（见 [`spec_argument`]）。
         let raw = normalize_git_spec(&preset_spec_for_install(
             preset,
             bundled_dir_of(app_handle, preset),
@@ -178,7 +180,7 @@ async fn install_with_cancel(
         if raw.starts_with("git+") {
             needs_git = true;
         }
-        specs.push(shell_quote_spec(&raw));
+        specs.push(spec_argument(&raw, core_version.as_deref()));
     }
 
     // git 托管插件安装前预检（issue #369）：Linux/macOS 完全依赖系统 git（不在
@@ -390,13 +392,6 @@ async fn install_with_cancel(
             "PREINSTALL_ENTRY_FAILED:\n{}",
             entry_errors.join("\n")
         ));
-    }
-
-    // Windows 极简模式专项修复
-    if ids.iter().any(|id| id == "dsh-win-terminal-inspector") {
-        if let Err(e) = workflow::win_inspector::apply(app_handle) {
-            log::warn!("win inspector apply failed after install: {e}");
-        }
     }
 
     // 告知用户安装阶段结束；随后的服务重启由前端 continueAfterPreinstall 负责

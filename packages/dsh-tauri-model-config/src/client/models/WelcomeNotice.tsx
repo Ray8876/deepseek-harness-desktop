@@ -10,7 +10,6 @@ import { welcomeStyles as css } from './styles.ts'
 
 export interface WelcomeNoticeInjected {
   hooks: {
-
     welcome: SnapshotStore<WelcomeNoticeState>
   }
 

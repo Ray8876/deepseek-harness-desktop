@@ -171,9 +171,10 @@ fn ensure_lock() -> &'static tokio::sync::Mutex<EnsureCoordinator> {
 /// `node_modules` 无法消除重复 loader entry。只清理桌面端明确拥有的内置 id，
 /// 绝不触碰用户插件。
 pub(crate) fn repair_loader_state(app_handle: &AppHandle) -> Result<(), String> {
+    let core_version = crate::service::core::active_version(app_handle);
     let internal: Vec<_> = load_presets(app_handle)
         .into_iter()
-        .filter(|preset| preset.internal)
+        .filter(|preset| preset.internal && !preset.unsupported_on(core_version.as_deref()))
         .collect();
     let bundle_ids: HashSet<&str> = internal.iter().map(|preset| preset.id.as_str()).collect();
     let profile = profile_dir(app_handle);
@@ -240,7 +241,13 @@ pub(crate) fn repair_loader_state(app_handle: &AppHandle) -> Result<(), String> 
 
 pub(crate) async fn ensure(app_handle: &AppHandle) -> Result<(), String> {
     let presets = load_presets(app_handle);
-    let internal: Vec<_> = presets.into_iter().filter(|p| p.internal).collect();
+    // 被核心吸收的内置插件（声明了 dshSupportedVersion 且当前核心已超越）自愈不再装回，
+    // 与 `uninstall_deprecated_plugins` 的退役判定同源，避免两边互相拉扯。
+    let core_version = crate::service::core::active_version(app_handle);
+    let internal: Vec<_> = presets
+        .into_iter()
+        .filter(|p| p.internal && !p.unsupported_on(core_version.as_deref()))
+        .collect();
     prune_dangling_link_deps(app_handle, &internal);
     if internal.is_empty() {
         return Ok(());
@@ -630,9 +637,22 @@ async fn ensure_inner(
             .is_some_and(|actual| dep_matches_spec(actual, &expected));
         let entry = profile.join("node_modules").join(&name);
         let link_ok = internal_plugin_entry_is_ready(&entry);
-        if !dep_ok || !link_ok {
+        // ③ 挂载登记：`dsh.profile.bundles` 缺项时插件从不挂载——宿主插件的 apply
+        // （含 dsh-tauri 的载体鉴权 gate）不运行，索引恒 401、健康检查永远
+        // `boot page returned 401`。这种「依赖在、bundle 没登记」的半残状态必须判为
+        // 需重装：只按 deps/link 判定会把它当成就绪，装过一次后永远修不回来。
+        let bundle_ok = manifest
+            .as_ref()
+            .and_then(|value| value.pointer("/dsh/profile/bundles"))
+            .and_then(|bundles| bundles.as_array())
+            .is_some_and(|bundles| {
+                bundles
+                    .iter()
+                    .any(|bundle| bundle.as_str() == Some(name.as_str()))
+            });
+        if !dep_ok || !link_ok || !bundle_ok {
             log::info!(
-                "INTERNAL_PLUGIN_NEEDS_REINSTALL: {name}（dep_ok={dep_ok}, link_ok={link_ok}, expected={expected}）"
+                "INTERNAL_PLUGIN_NEEDS_REINSTALL: {name}（dep_ok={dep_ok}, link_ok={link_ok}, bundle_ok={bundle_ok}, expected={expected}）"
             );
             // 应用升级会移动 `.app` 内的捆绑目录，旧 profile 可能留下指向上个
             // 版本资源的悬空链接。pnpm 在处理这些入口时会在真正改写依赖前以
@@ -765,7 +785,52 @@ async fn ensure_inner(
         return Err(format!("INTERNAL_PLUGIN_INSTALL_FAILED: {e}"));
     }
 
+    // pnpm 成功 ≠ 清单被登记：核心的 install 会按自己解析到的插件集重写
+    // `dependencies` 与 `dsh.profile.bundles`，解析不到的内置插件会被**剪掉**
+    // （本机 web profile 实测 13→2、11→0）。剪掉即不挂载：宿主插件的 apply 不运行，
+    // 索引恒 401、健康检查永远 `boot page returned 401`、最终 Process boot 超时。
+    // 收尾回读清单，缺项就用同一套物化路径写回（幂等）——否则 `bundle_ok` 每轮判
+    // 需重装、每轮又被打回原形。
+    if let Some(missing) = presets_missing_from_manifest(&profile, &need) {
+        match materialize_internal_links(app_handle, &profile, &need) {
+            Ok(()) => log::warn!(
+                "INTERNAL_PLUGIN_MANIFEST_RECOVERED: re-registered internal plugins dropped by install: {missing:?}"
+            ),
+            Err(error) => log::error!("INTERNAL_PLUGIN_MANIFEST_RECOVER_FAILED: {error}"),
+        }
+    }
+
     Ok(())
+}
+
+/// 安装收尾校验：返回清单里缺登记的安装包名（`dependencies` 与
+/// `dsh.profile.bundles` 任一缺失即算），全都在则返回 `None`。
+fn presets_missing_from_manifest(
+    profile: &Path,
+    need: &[(String, String, PathBuf)],
+) -> Option<Vec<String>> {
+    let raw = std::fs::read_to_string(profile.join("package.json")).ok()?;
+    let manifest: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let dependencies = manifest.get("dependencies");
+    let bundles = manifest
+        .pointer("/dsh/profile/bundles")
+        .and_then(|value| value.as_array());
+    let missing: Vec<String> = need
+        .iter()
+        .filter(|(_, name, _)| {
+            let dep_ok = dependencies
+                .and_then(|deps| deps.get(name.as_str()))
+                .and_then(|value| value.as_str())
+                .is_some();
+            let bundle_ok = bundles.is_some_and(|list| {
+                list.iter()
+                    .any(|bundle| bundle.as_str() == Some(name.as_str()))
+            });
+            !dep_ok || !bundle_ok
+        })
+        .map(|(_, name, _)| name.clone())
+        .collect();
+    (!missing.is_empty()).then_some(missing)
 }
 
 /// 安全软件排除项提示：兜底失败与「同类但无法归因」时都要给，避免用户只看到裸

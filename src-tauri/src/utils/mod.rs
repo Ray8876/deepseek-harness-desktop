@@ -124,3 +124,84 @@ pub fn app_icon_temp_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> 
     img.save(&path).ok()?;
     Some(path)
 }
+
+/// 解码子进程输出的一行。
+///
+/// 中文 Windows 下子进程（cmd.exe、python MCP 服务器等）按 ANSI 代码页输出 GBK，
+/// 图省事的 `from_utf8_lossy` 会把 `系统找不到指定的路径。` 解成
+/// `ϵͳ�Ҳ���ָ����·����`——日志里认不出原话。这里先严格 UTF-8，失败再按 ANSI
+/// 代码页解码，仍失败才回落 lossy。
+///
+/// 任何情况下都不能中断读取：管道读端一关，dsh 主进程写 stderr 就收到 EPIPE
+/// 并静默退出（见 `service::workflow::utils::drain_subprocess_output`）。
+pub fn decode_process_line(bytes: &[u8]) -> String {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_owned();
+    }
+    #[cfg(windows)]
+    if let Some(text) = decode_multibyte(bytes, windows_sys::Win32::Globalization::CP_ACP) {
+        return text;
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// 按给定代码页把多字节串解成 UTF-16，再取 `String`；转换失败返回 `None`。
+#[cfg(windows)]
+fn decode_multibyte(bytes: &[u8], codepage: u32) -> Option<String> {
+    use windows_sys::Win32::Globalization::MultiByteToWideChar;
+
+    if bytes.is_empty() {
+        return Some(String::new());
+    }
+    if bytes.len() > i32::MAX as usize {
+        return None;
+    }
+    let len = bytes.len() as i32;
+    // SAFETY: 指针与长度同源于 `bytes`；空缓冲 + 0 长度只探测所需宽字符数。
+    let needed =
+        unsafe { MultiByteToWideChar(codepage, 0, bytes.as_ptr(), len, std::ptr::null_mut(), 0) };
+    if needed <= 0 {
+        return None;
+    }
+    let mut wide = vec![0u16; needed as usize];
+    // SAFETY: `wide` 恰有 `needed` 个元素，等于上一次探测出的所需长度。
+    let written =
+        unsafe { MultiByteToWideChar(codepage, 0, bytes.as_ptr(), len, wide.as_mut_ptr(), needed) };
+    if written <= 0 {
+        return None;
+    }
+    wide.truncate(written as usize);
+    Some(String::from_utf16_lossy(&wide))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_process_line;
+    #[cfg(windows)]
+    use super::decode_multibyte;
+
+    #[test]
+    fn keeps_valid_utf8_untouched() {
+        let text = "系统找不到指定的路径。";
+        assert_eq!(decode_process_line(text.as_bytes()), text);
+    }
+
+    #[test]
+    fn invalid_bytes_still_produce_a_line() {
+        assert!(!decode_process_line(&[0xFF, 0xFE, 0x80]).is_empty());
+    }
+
+    /// GBK 字节按显式 936 解码，与 runner 自身的 ANSI 代码页无关。
+    #[cfg(windows)]
+    #[test]
+    fn decodes_gbk_with_an_explicit_codepage() {
+        let gbk = [
+            0xCF, 0xB5, 0xCD, 0xB3, 0xD5, 0xD2, 0xB2, 0xBB, 0xB5, 0xBD, 0xD6, 0xB8, 0xB6, 0xA8,
+            0xB5, 0xC4, 0xC2, 0xB7, 0xBE, 0xB6, 0xA1, 0xA3,
+        ];
+        assert_eq!(
+            decode_multibyte(&gbk, 936).as_deref(),
+            Some("系统找不到指定的路径。")
+        );
+    }
+}

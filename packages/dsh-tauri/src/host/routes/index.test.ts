@@ -9,12 +9,13 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * （含「同一份声明两次注册互不串台」）。
  *
  * 走真实 node:http 服务（toNodeHandler 依赖真实 req/res 流），并在测试内复刻宿主
- * webserver 的「exact 优先 → 最长前缀优先」匹配契约；只在需要检查“未进入 h3”的分支
- * （连接拒绝、来源 403）时才用假 req/res。
+ * webserver 的「exact 优先 → 最长前缀优先」匹配契约；假 req/res 用于指定来源地址的分支
+ * （连接拒绝、来源 403）与「已过守卫、进入 h3」的放行分支。
  */
 import type { AddressInfo } from 'node:net'
 import type { HostRoute, RoutesContext, RoutesSetup } from './index.type'
 import { createServer } from 'node:http'
+import { Readable } from 'node:stream'
 import { defineEventHandler, readBody } from 'h3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { defineRoutes, dshContextOf, dshRouteDepsOf } from './index'
@@ -96,32 +97,69 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))))
 })
 
-/** 假 req/res：只够验证“未进入 h3”的守卫分支。 */
+/** 假 req：守卫只读 method / socket.remoteAddress / headers；请求体用真实空 Readable，放行分支能跑完 h3。 */
 function fakeRequest(method: string, remoteAddress: string, path = '/api/demo', headers: Record<string, string> = {}): IncomingMessage {
-  return {
+  const request = new Readable({ read() {} })
+  request.push(null)
+  Object.assign(request, {
     method,
     url: path,
     headers,
     socket: { remoteAddress },
-    on: () => {},
-  } as unknown as IncomingMessage
+  })
+  return request as unknown as IncomingMessage
 }
 
+/** 假 res：记录 status / headers / body，并补齐 srvx 写响应所需的 setHeader 与写口。 */
 function fakeResponse(): { response: ServerResponse, state: { status: number, headers: Record<string, unknown>, body: string } } {
   const state = { status: 0, headers: {} as Record<string, unknown>, body: '' }
+  const applyHeaders = (headers: unknown): void => {
+    if (Array.isArray(headers)) {
+      for (let index = 0; index < headers.length; index += 2)
+        state.headers[String(headers[index]).toLowerCase()] = headers[index + 1]
+      return
+    }
+    if (headers !== null && typeof headers === 'object') {
+      for (const [name, value] of Object.entries(headers))
+        state.headers[name.toLowerCase()] = value
+    }
+  }
   const response = {
     headersSent: false,
-    writeHead(status: number, headers?: Record<string, unknown>) {
+    writableEnded: false,
+    destroyed: false,
+    setHeader(name: string, value: unknown) {
+      state.headers[name.toLowerCase()] = value
+      return response
+    },
+    writeHead(status: number, arg2?: unknown, arg3?: unknown) {
       state.status = status
-      Object.assign(state.headers, headers)
+      if (typeof arg2 === 'string' || arg3 !== undefined)
+        applyHeaders(arg3)
+      else
+        applyHeaders(arg2)
       response.headersSent = true
       return response
     },
-    end(chunk?: unknown) {
+    write(chunk?: unknown) {
       if (chunk !== undefined)
         state.body += String(chunk)
+      return true
+    },
+    end(chunk?: unknown, callback?: () => void) {
+      if (typeof chunk === 'function')
+        (chunk as () => void)()
+      else if (chunk !== undefined)
+        state.body += String(chunk)
+      response.writableEnded = true
+      callback?.()
       return response
     },
+    on() { return response },
+    once() { return response },
+    off() { return response },
+    removeListener() { return response },
+    destroy() {},
   }
   return { response: response as unknown as ServerResponse, state }
 }
@@ -228,11 +266,13 @@ describe('defineRoutes', () => {
     expect(write.state.status).toBe(403)
     expect(write.state.body).toContain('仅限本机')
 
-    // 读操作不因来源被回环规则拦下：假 req 会在 h3 内部失败，但绝不会是 403。
+    // 读操作不因来源被回环规则拦下：放行后由 h3 正常应答（no-transform 头只在三条守卫之后才设置）
     const read = fakeResponse()
     const readRoute = routeOf(harness, 'exact', '/api/read')
-    await Promise.resolve(readRoute.handler(fakeRequest('GET', '10.0.0.5', '/api/read'), read.response)).catch(() => {})
-    expect(read.state.status).not.toBe(403)
+    await readRoute.handler(fakeRequest('GET', '10.0.0.5', '/api/read'), read.response)
+    expect(read.state.status).toBe(200)
+    expect(read.state.body).toBe(JSON.stringify({ ok: true }))
+    expect(read.state.headers['cache-control']).toBe('no-transform')
 
     dispose()
   })
@@ -253,20 +293,54 @@ describe('defineRoutes', () => {
     expect(crossOrigin.state.status).toBe(403)
     expect(crossOrigin.state.body).toContain('cross-origin-request')
 
-    // 同源 Origin：放行（进入 h3）。
+    // 同源 Origin：放行（进入 h3 并由 no-transform 头证明已过守卫）
     const sameOrigin = fakeResponse()
     const sameOriginRoute = routeOf(harness, 'exact', '/api/write')
-    await Promise.resolve(sameOriginRoute.handler(
+    await sameOriginRoute.handler(
       fakeRequest('POST', '127.0.0.1', '/api/write', { origin: 'http://127.0.0.1:3080', host: '127.0.0.1:3080' }),
       sameOrigin.response,
-    )).catch(() => {})
-    expect(sameOrigin.state.status).not.toBe(403)
+    )
+    expect(sameOrigin.state.status).toBe(200)
+    expect(sameOrigin.state.body).toBe(JSON.stringify({ ok: true }))
+    expect(sameOrigin.state.headers['cache-control']).toBe('no-transform')
 
-    // 无 Origin：放行（curl / 宿主内部调用）。
+    // 无 Origin：放行（curl / 宿主内部调用）
     const noOrigin = fakeResponse()
     const noOriginRoute = routeOf(harness, 'exact', '/api/write')
-    await Promise.resolve(noOriginRoute.handler(fakeRequest('POST', '127.0.0.1', '/api/write'), noOrigin.response)).catch(() => {})
-    expect(noOrigin.state.status).not.toBe(403)
+    await noOriginRoute.handler(fakeRequest('POST', '127.0.0.1', '/api/write'), noOrigin.response)
+    expect(noOrigin.state.status).toBe(200)
+    expect(noOrigin.state.body).toBe(JSON.stringify({ ok: true }))
+    expect(noOrigin.state.headers['cache-control']).toBe('no-transform')
+
+    dispose()
+  })
+
+  it('非回环来源的 PUT / PATCH / DELETE 同样被拒，回环来源放行', async () => {
+    const harness = createHarness()
+    const dispose = mountRoutes(harness.host, (disposer) => {
+      disposer.put({ kind: 'exact', path: '/api/put' }, defineEventHandler(() => ({ ok: true })))
+      disposer.patch({ kind: 'exact', path: '/api/patch' }, defineEventHandler(() => ({ ok: true })))
+      disposer.delete({ kind: 'exact', path: '/api/delete' }, defineEventHandler(() => ({ ok: true })))
+    })
+
+    const mutating = [
+      ['PUT', '/api/put'],
+      ['PATCH', '/api/patch'],
+      ['DELETE', '/api/delete'],
+    ] as const
+    for (const [method, path] of mutating) {
+      const rejected = fakeResponse()
+      await routeOf(harness, 'exact', path).handler(fakeRequest(method, '10.0.0.5', path), rejected.response)
+      expect(rejected.state.status).toBe(403)
+      expect(rejected.state.body).toContain('变更操作仅限本机')
+    }
+
+    for (const [method, path] of mutating) {
+      const allowed = fakeResponse()
+      await routeOf(harness, 'exact', path).handler(fakeRequest(method, '127.0.0.1', path), allowed.response)
+      expect(allowed.state.status).toBe(200)
+      expect(allowed.state.body).toBe(JSON.stringify({ ok: true }))
+    }
 
     dispose()
   })
@@ -284,6 +358,24 @@ describe('defineRoutes', () => {
       body: JSON.stringify({ pad: 'x'.repeat(2 * 1024 * 1024) }),
     })
     expect(response.status).toBe(413)
+
+    dispose()
+  })
+
+  it('交给 h3 的响应统一带 cache-control: no-transform（压掉宿主 gzip 中间件），守卫分支不带', async () => {
+    const harness = createHarness()
+    const dispose = mountRoutes(harness.host, (disposer) => {
+      disposer.get({ kind: 'exact', path: '/api/demo' }, defineEventHandler(() => ({ ok: true })))
+    })
+    const base = await listen(harness.routes)
+
+    const response = await fetch(`${base}/api/demo`)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-transform')
+
+    const notAllowed = await fetch(`${base}/api/demo`, { method: 'DELETE' })
+    expect(notAllowed.status).toBe(405)
+    expect(notAllowed.headers.get('cache-control')).toBeNull()
 
     dispose()
   })

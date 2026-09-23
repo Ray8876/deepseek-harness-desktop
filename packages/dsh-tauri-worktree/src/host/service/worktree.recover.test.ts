@@ -4,23 +4,42 @@ import { join } from 'pathe'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetTestDshHome, testDshHome } from '../../../../.test/test-utils'
 import { TRASH_DIR, WORKTREES_DIR } from '../config/constants'
-import { worktreePath } from '../utils/paths'
-import { cleaner } from './cleaner'
-import { jobs } from './jobs'
-import { ledger } from './ledger'
-import { worktree } from './worktree'
+
+const dshHome = vi.hoisted(() => ({ value: '' }))
 
 vi.mock('dsh-tauri', async (importOriginal) => {
   const actual = await importOriginal<typeof import('dsh-tauri')>()
-  const { testDshHome: home } = await import('../../../../.test/test-utils')
-  return { ...actual, DSH_HOME: home }
+  return { ...actual, DSH_HOME: dshHome.value }
 })
+
+dshHome.value = testDshHome
 
 const HASH = 'a1b2c3d4e5f6'
 const DIRNAME = 'repo'
 
-beforeEach(() => {
+type Jobs = typeof import('./jobs')['jobs']
+type Ledger = typeof import('./ledger')['ledger']
+type Worktree = typeof import('./worktree')['worktree']
+type Paths = typeof import('../utils/paths')
+
+let jobs: Jobs
+let ledger: Ledger
+let worktree: Worktree
+let paths: Paths
+
+beforeEach(async () => {
+  vi.resetModules()
   resetTestDshHome()
+  const [jobsModule, ledgerModule, worktreeModule, pathsModule] = await Promise.all([
+    import('./jobs'),
+    import('./ledger'),
+    import('./worktree'),
+    import('../utils/paths'),
+  ])
+  jobs = jobsModule.jobs
+  ledger = ledgerModule.ledger
+  worktree = worktreeModule.worktree
+  paths = pathsModule
 })
 
 function age(path: string): void {
@@ -33,13 +52,14 @@ function writeQueue(records: unknown[]): void {
   writeFileSync(join(testDshHome, WORKTREES_DIR, 'jobs.json'), `${JSON.stringify({ version: 1, jobs: records })}\n`)
 }
 
-async function settleQueue(): Promise<void> {
-  for (let attempt = 0; attempt < 400; attempt += 1) {
-    if (cleaner.unsettled().length === 0)
+async function waitFor(predicate: () => boolean, timeoutMs = 20_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate())
       return
     await new Promise(resolve => setTimeout(resolve, 25))
   }
-  throw new Error('discard queue did not settle')
+  throw new Error('condition was not met in time')
 }
 
 function makeBinding(overrides: Partial<Binding>): Binding {
@@ -48,7 +68,7 @@ function makeBinding(overrides: Partial<Binding>): Binding {
     sourceSessionId: 'session-source',
     hash: 'deadbeefcafe',
     dirname: DIRNAME,
-    worktreePath: worktreePath('deadbeefcafe', DIRNAME),
+    worktreePath: paths.worktreePath('deadbeefcafe', DIRNAME),
     projectPath: '/tmp/repo',
     branchName: '(detached)',
     ownsBranch: false,
@@ -60,7 +80,7 @@ function makeBinding(overrides: Partial<Binding>): Binding {
 
 describe('worktree.recover', () => {
   it('把上次未完成的删除任务落回队列并重跑，随后清空 jobs.json', async () => {
-    const path = worktreePath(HASH, DIRNAME)
+    const path = paths.worktreePath(HASH, DIRNAME)
     mkdirSync(path, { recursive: true })
     writeQueue([{
       jobId: 'job-restored',
@@ -76,7 +96,7 @@ describe('worktree.recover', () => {
       return
     expect(result.resumed).toBe(1)
 
-    await settleQueue()
+    await waitFor(() => jobs.load().length === 0)
 
     expect(existsSync(path)).toBe(false)
     expect(existsSync(join(testDshHome, WORKTREES_DIR, HASH))).toBe(false)
@@ -85,8 +105,8 @@ describe('worktree.recover', () => {
   })
 
   it('清扫回收站残留与空壳目录，但保留仍有内容的工作树', async () => {
-    const shell = worktreePath(HASH, DIRNAME)
-    const occupied = worktreePath('bbbcccdddeee', 'keeper')
+    const shell = paths.worktreePath(HASH, DIRNAME)
+    const occupied = paths.worktreePath('bbbcccdddeee', 'keeper')
     const trash = join(testDshHome, TRASH_DIR, 'ffffffaaaaaa', DIRNAME)
     mkdirSync(shell, { recursive: true })
     mkdirSync(occupied, { recursive: true })

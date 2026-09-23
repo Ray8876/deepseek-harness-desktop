@@ -5,19 +5,20 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { DeepSeekOnboardingInjected } from '../models/DeepSeekOnboardingDialog.tsx'
 import type { ModelsSectionInjected } from '../models/ModelsSection.tsx'
+import type {} from '../models/slot-contract.ts'
 import type { WelcomeNoticeInjected } from '../models/WelcomeNotice.tsx'
-import type { ClientRemote } from '../types/remotes.ts'
 import { defineRegister } from 'dsh-tauri/client'
-import { WELCOME_NOTICE_SETTINGS_NAMESPACE } from '../../shared/onboarding-copy.ts'
+import { ONBOARDING_CONFIG_GLOBAL } from '../../shared/onboarding-config.ts'
 import { locale } from '../locales'
 import { DeepSeekOnboardingDialog } from '../models/DeepSeekOnboardingDialog.tsx'
 import { ModelsSection } from '../models/ModelsSection.tsx'
 import { createModelsOperations } from '../models/operations.ts'
+import { resolveRemote } from '../models/remote.ts'
 import { createSettingsSchemaOperations } from '../models/schema-operations.ts'
+import { resolveModelsForms } from '../models/settings-forms.ts'
 import { ModelsSettingsStore } from '../models/store.ts'
-import { decodeWelcomeSection, WelcomeNoticeStore } from '../models/welcome-store.ts'
+import { WelcomeNoticeStore } from '../models/welcome-store.ts'
 import { WelcomeNotice } from '../models/WelcomeNotice.tsx'
-import { openConfigFile } from '../service/model-config.ts'
 
 function refreshIfLoaded(controller: ModelsSettingsStore): void {
   if (controller.store.getSnapshot().status === 'idle')
@@ -25,16 +26,23 @@ function refreshIfLoaded(controller: ModelsSettingsStore): void {
   void controller.load()
 }
 
-function remoteOf(ctx: ClientContext): ClientRemote | undefined {
-  return ctx.get('remote') as ClientRemote | undefined
+function credentialOnboardingOf(): boolean {
+  const page = globalThis as Partial<Record<typeof ONBOARDING_CONFIG_GLOBAL, unknown>>
+  const payload = page[ONBOARDING_CONFIG_GLOBAL]
+  const value = typeof payload === 'object' && payload !== null
+    ? (payload as { credentialOnboarding?: unknown }).credentialOnboarding
+    : undefined
+  return (value ?? true) === true && !('dshDesktop' in globalThis)
 }
 
-/** 装配 fork 自官方 `ui-settings-models` 的模型设置页与其引导对话框。 */
 export const registerModelsPage = defineRegister<ClientContext>((controller, ctx) => {
-  const remote = remoteOf(ctx)
+  const remote = resolveRemote(ctx)
+  const forms = resolveModelsForms(ctx)
+  if (remote === undefined || forms === undefined)
+    return
   const schema = createSettingsSchemaOperations(ctx.settingsSchema)
-  const operations = createModelsOperations(remote as ClientRemote)
-  const page = new ModelsSettingsStore(remote as ClientRemote, schema, ctx.settingsScope.describe())
+  const operations = createModelsOperations(remote)
+  const page = new ModelsSettingsStore(remote, schema, forms.describe)
   const t = locale.text as ModelsSectionInjected['t']
   const injected = (): ModelsSectionInjected => ({
     controller: page,
@@ -42,30 +50,43 @@ export const registerModelsPage = defineRegister<ClientContext>((controller, ctx
     operations,
     schema,
     t,
-    openConfig: openConfigFile,
   })
   const deepSeekOnboardingInjected = (): DeepSeekOnboardingInjected => ({
+    automatic: credentialOnboardingOf(),
     controller: page,
     hooks: { models: page.store },
     operations,
     schema,
     t,
   })
-  const welcome = new WelcomeNoticeStore(ctx.settingsScope.bind({
-    namespace: WELCOME_NOTICE_SETTINGS_NAMESPACE,
-    decode: decodeWelcomeSection,
-  }))
+  const welcome = new WelcomeNoticeStore(forms.welcome)
   const welcomeInjected = (): WelcomeNoticeInjected => ({
     controller: welcome,
     hooks: { welcome: welcome.store },
     t,
   })
 
+  const refreshModels = (): void => {
+    refreshIfLoaded(page)
+  }
+  const disposers = [
+    remote.$on('settings/document-updated', () => {
+      refreshModels()
+    }),
+    remote.$on('credentials/reference-updated', refreshModels),
+    remote.$on('llm/adapters-updated', refreshModels),
+    ctx.on('connection/reset', refreshModels),
+  ]
+  controller.add(() => {
+    welcome.dispose()
+    for (const dispose of disposers) dispose()
+  })
+
   controller.add(ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'models',
     order: 10,
-    label: () => locale.text('nav'),
+    label: () => t('nav'),
     inject: injected,
     children: {
       'settings.models.provider-card': { kind: 'keyed', scope: 'root' },
@@ -81,23 +102,8 @@ export const registerModelsPage = defineRegister<ClientContext>((controller, ctx
   controller.add(ctx.slots.inject('settings.onboarding', () => ctx.slots.register({
     name: 'settings.onboarding',
     id: 'deepseek-official',
+    children: { 'settings.models.sign-in': { kind: 'single', scope: 'root' } },
     order: 0,
     inject: deepSeekOnboardingInjected,
   }, DeepSeekOnboardingDialog)))
-
-  controller.add(welcome.dispose)
-  if (remote !== undefined) {
-    controller.add(remote.$on('settings/document-updated', () => {
-      refreshIfLoaded(page)
-    }))
-    controller.add(remote.$on('credentials/reference-updated', () => {
-      refreshIfLoaded(page)
-    }))
-    controller.add(remote.$on('llm/adapters-updated', () => {
-      refreshIfLoaded(page)
-    }))
-  }
-  controller.add(ctx.on('connection/reset', () => {
-    refreshIfLoaded(page)
-  }))
 })

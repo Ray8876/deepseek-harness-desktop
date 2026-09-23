@@ -1,16 +1,14 @@
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { ReactNode } from 'react'
-import type { JsonValue } from '../types/remotes.ts'
 import type { en } from './locales.ts'
 import type { ModelDraft } from './ModelListEditor.tsx'
 import type { ModelsOperations } from './operations.ts'
-import { useState } from 'react'
-import { loadModelCapacities } from '../service/model-config.ts'
-import { mergeModelCards, modelConfigNotice, withDetail } from '../service/model-config.utils.ts'
-import { ensurePresets } from '../service/presets.ts'
+import { useEffect, useState } from 'react'
 import { apiKeyFailure } from './apiKey.ts'
 import { validateDeepSeekModels } from './DeepSeekModelsEditor.tsx'
 import { EditorFooter } from './EditorFooter.tsx'
 import { ModelListEditor } from './ModelListEditor.tsx'
+import { protocolLabel } from './protocol-label.ts'
 import { deriveKeyRef } from './store.ts'
 import { modelStyles as styles } from './styles.ts'
 
@@ -29,24 +27,18 @@ function isHttpUrl(value: string): boolean {
 }
 
 export interface CustomProviderCardProps {
-
   taken: readonly string[]
-
   protocols: readonly string[]
-
   revision: number
-
   operations: ModelsOperations
-
   t: (key: keyof typeof en) => string
-
   readOnly: boolean
-
   onClose: (changed: boolean) => void
+  onBusyChange?: (busy: boolean) => void
 }
 
 export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
-  const { taken, protocols, operations, t } = props
+  const { taken, protocols, operations, t, onBusyChange } = props
 
   const [openedAt] = useState(() => props.revision)
   const [route, setRoute] = useState('')
@@ -56,10 +48,11 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
   const [keyDraft, setKeyDraft] = useState('')
   const [models, setModels] = useState<readonly ModelDraft[]>([])
   const [busy, setBusy] = useState(false)
+  const [listBusy, setListBusy] = useState(false)
+  useEffect(() => {
+    onBusyChange?.(busy || listBusy)
+  }, [busy, listBusy, onBusyChange])
   const [failure, setFailure] = useState<string | undefined>(undefined)
-  const [configBusy, setConfigBusy] = useState(false)
-  const [configNotice, setConfigNotice] = useState<string | undefined>(undefined)
-  const [configFailure, setConfigFailure] = useState<string | undefined>(undefined)
 
   const [committed, setCommitted] = useState(false)
   const disabled = props.readOnly || busy
@@ -140,42 +133,8 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
     }
   }
 
-  const fetchConfig = (targets?: readonly string[]): void => {
-    void (async () => {
-      setConfigBusy(true)
-      setConfigFailure(undefined)
-      const [found] = await Promise.all([
-        loadModelCapacities({
-          settingsNs: NS,
-          profilePath: ['providers', route.trim()],
-          baseURL: normalizedBaseURL,
-          api: protocol,
-          ...keyValue.length === 0 ? {} : { apiKey: keyValue },
-        }, operations),
-        ensurePresets(),
-      ])
-      setConfigBusy(false)
-      if (!found.ok) {
-        setConfigNotice(undefined)
-        setConfigFailure(withDetail(t('configUnreachable'), found.error))
-        return
-      }
-      const merged = mergeModelCards(models, found.models, { targets, overwrite: targets === undefined })
-      if (merged.applied > 0)
-        setModels(merged.models)
-      setConfigNotice(modelConfigNotice(merged, {
-        applied: t('configApplied'),
-        none: t('configNoneApplied'),
-        undisclosed: t('configUndisclosed'),
-      }))
-    })()
-  }
-
   return (
     <div className={styles.editor}>
-      <div className={styles.editorHeader}>
-        <span className={styles.editorTitle}>{t('customTitle')}</span>
-      </div>
       <div className={styles.field}>
         <span className={styles.fieldLabel}>{t('customRoute')}</span>
         <input
@@ -210,7 +169,9 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
           className={styles.input}
           type="text"
           value={baseURL}
-          placeholder={t('customBaseUrlPlaceholder')}
+          placeholder={t(protocol === 'anthropic-messages'
+            ? 'customAnthropicBaseUrlPlaceholder'
+            : 'customBaseUrlPlaceholder')}
           aria-label={t('baseUrl')}
           aria-invalid={baseUrlInvalid}
           disabled={profileDisabled}
@@ -227,7 +188,7 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
           disabled={profileDisabled}
           onChange={(event) => { setProtocol(event.target.value) }}
         >
-          {protocols.map(choice => <option key={choice} value={choice}>{choice}</option>)}
+          {protocols.map(choice => <option key={choice} value={choice}>{protocolLabel(t, choice)}</option>)}
         </select>
       </div>
       <div className={styles.field}>
@@ -262,10 +223,7 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
         operations={operations}
         t={t}
         disabled={profileDisabled}
-        onFetchConfig={fetchConfig}
-        configBusy={configBusy}
-        configNotice={configNotice}
-        configFailure={configFailure}
+        onBusyChange={setListBusy}
       />
       {failure !== undefined ? <p className={styles.error}>{failure}</p> : null}
 

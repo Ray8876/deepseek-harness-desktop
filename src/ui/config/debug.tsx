@@ -1,5 +1,5 @@
-import { ArrowRotateRight, ArrowUpRightFromSquare, ChevronRight, Copy, Folder, Power, TrashBin } from '@gravity-ui/icons'
-import { Button, Chip, Description, Input, Link, ListBox, Select, Spinner, Surface, Switch } from '@heroui/react'
+import { ArrowRotateRight, ArrowUpRightFromSquare, ChevronRight, Copy, Folder, Power } from '@gravity-ui/icons'
+import { Button, Chip, Description, Input, Link, ListBox, Select, Spinner, Switch } from '@heroui/react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { invoke } from '@tauri-apps/api/core'
 import { useState } from 'react'
@@ -14,7 +14,6 @@ import { store } from '@/store'
 import { ConfigCloseAction } from '@/ui/config/components/close-action'
 import { ConfigLaunchOnLogin } from '@/ui/config/components/launch-on-login'
 import { useCoreBreakingConfirm } from '@/ui/config/hooks/use-core-breaking-confirm'
-import { writeClipboardText } from '@/utils/clipboard'
 import { toast } from '@/utils/toast'
 
 const ZOOM_OPTIONS = Array.from({ length: 16 }, (_, index) => Number((0.5 + index * 0.1).toFixed(1)))
@@ -67,22 +66,6 @@ export function ConfigDebug() {
     queryFn: () => invoke<CliLinkStatus>('get_cli_link_status'),
   })
 
-  const { data: logs, refetch: refreshLogs } = useQuery({
-    queryKey: queryKeys.logs,
-    queryFn: () => invoke<string>('read_service_logs'),
-    refetchInterval: 2000,
-  })
-
-  async function copyLogs() {
-    try {
-      // 成功/失败提示由 writeClipboardText 统一给出，这里只记录日志
-      await writeClipboardText(logs || '', t('messages.logs_copied'))
-    }
-    catch (err) {
-      console.error('[ConfigDebug] copy logs failed:', err)
-    }
-  }
-
   /** 「存在新版本」：直接展示更新提示；破坏性更改确认推迟到点击「立即更新」时 */
   function handleShowNewVersion() {
     store.harnessUpdater.showToast(() => handleUpdate())
@@ -95,18 +78,6 @@ export function ConfigDebug() {
       return
     await store.harnessUpdater.handleUpdate()
   }
-
-  const { mutate: onClearLogs } = useMutation({
-    mutationFn: async () => {
-      await invoke('clear_service_logs')
-      await refreshLogs()
-      toast(t('messages.logs_cleared'))
-    },
-    onError: (err: unknown) => {
-      console.error('[ConfigDebug] clear logs failed:', err)
-      toast(t('messages.logs_clear_failed'), { variant: 'danger' })
-    },
-  })
 
   const { mutate: onToggleCliLink } = useMutation({
     mutationFn: async (enabled: boolean) => {
@@ -404,36 +375,6 @@ export function ConfigDebug() {
         </div>
       </div>
 
-      <div className="border-t border-line/30" />
-
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-ink">{t('ui.logs')}</span>
-          <div className="flex gap-1">
-            <Button
-              isIconOnly
-              size="sm"
-              className="rounded-md size-6"
-              variant="ghost"
-              onPress={() => { void copyLogs() }}
-            >
-              <Copy className="scale-80" />
-            </Button>
-            <Button
-              isIconOnly
-              size="sm"
-              className="rounded-md size-6"
-              variant="ghost"
-              onPress={() => onClearLogs()}
-            >
-              <TrashBin className="scale-80" />
-            </Button>
-          </div>
-        </div>
-        <Surface className="bg-default rounded-md p-2 min-h-[140px] max-h-[180px] font-mono text-[11px] w-full leading-relaxed overflow-auto">
-          {logs || t('ui.no_logs')}
-        </Surface>
-      </div>
     </div>
   )
 }

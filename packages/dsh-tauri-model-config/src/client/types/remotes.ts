@@ -35,12 +35,6 @@ export type SettingsPathOpView
   = | { op: 'set', path: string[], value: JsonValue }
     | { op: 'unset', path: string[] }
 
-export interface SettingsDescribeValue {
-  writable: boolean
-  hasDocument: boolean
-  namespaces: SettingsNamespaceView[]
-}
-
 export interface LlmProviderInfo {
   id: string
   name: string
@@ -67,6 +61,7 @@ export interface LlmDiscoveredModel {
   name?: string
   contextWindow?: number
   maxTokens?: number
+  inputModalities?: readonly string[]
 }
 
 export interface SettingsRemote {
@@ -85,9 +80,11 @@ export interface LlmRemote {
   discoverModels: (settingsNs: string, request: LlmModelDiscoveryRequest) => Promise<RemoteResult<LlmDiscoveredModel[]>>
 }
 
+export type RemoteEventName = 'settings/document-updated' | 'credentials/reference-updated' | 'llm/adapters-updated'
+
 export interface ClientRemote {
   settings: SettingsRemote
   credentials: CredentialsRemote
   llm: LlmRemote
-  $on: (event: string, listener: () => void) => () => void
+  $on: (event: RemoteEventName, listener: () => void) => () => void
 }

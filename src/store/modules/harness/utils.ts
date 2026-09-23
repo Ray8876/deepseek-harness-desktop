@@ -2,6 +2,7 @@
 import type { ReadinessPollResult, ReadinessProbeResult, StartupPhase } from './readiness'
 import type { InternalPluginsPhasePayload, StartupError } from './types'
 import type { PatchEntryStripReport, PatchQuarantineReport } from '@/types/plugin'
+import { promiseTimeout } from '@reause/core'
 import { invoke } from '@tauri-apps/api/core'
 import i18next from 'i18next'
 import { containsInotifyLimitError, pickErrorLines } from '@/components/logs.utils'
@@ -38,6 +39,34 @@ export function generateTimestampedUrl(baseUrl: string): string {
   const timestamp = Date.now()
   const separator = baseUrl.includes('?') ? '&' : '?'
   return `${baseUrl}${separator}t=${timestamp}`
+}
+
+/**
+ * 轮询 health check 确认 DSH 服务已真正停止，避免改写档案目录时撞文件锁。
+ *
+ *  - 使用剩余 timeout 约束 in-flight 的 probe（reause `promiseTimeout`），防止无限挂起
+ *  - 仅当 health check 明确失败（非 transient 错误）时才视为已停止
+ *  - 超时后继续执行（shutdown 可能仍在进行中）
+ */
+export async function waitForHarnessStopped(timeoutMs = 10_000, intervalMs = 500): Promise<void> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    const remaining = timeoutMs - (Date.now() - start)
+    if (remaining <= 0)
+      break
+    try {
+      await Promise.race([invoke('proxy_health_check'), promiseTimeout(remaining, true, 'probe timeout')])
+    }
+    catch (e) {
+      // probe 超时视为已停止
+      if (e instanceof Error && e.message === 'probe timeout')
+        return
+      // 非 transient 错误视为已停止；transient 错误（502 等）继续重试
+      if (!(e instanceof Error) || !/502|ECONNREFUSED|ETIMEDOUT/i.test(e.message))
+        return
+    }
+    await promiseTimeout(intervalMs)
+  }
 }
 
 /** 通过 Rust 代理探测服务健康状态（超时 8s，网络抖动时重试） */

@@ -38,7 +38,6 @@
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-ui-layout",
-        "@deepseek-ai/dsh-client-ui-primitives",
         "dsh-tauri",
         "dsh-tauri-ui"
       ],
@@ -61,7 +60,6 @@
   },
   "dependencies": {
     "dsh-tauri": "workspace:*",
-    "dsh-tauri-ui": "workspace:*",
     "hookable": "catalog:utils",
     "lodash-es": "catalog:utils",
     "ofetch": "catalog:utils",
@@ -75,6 +73,7 @@
     "@types/lodash-es": "catalog:types",
     "dompurify": "catalog:ui",
     "dsh-tauri-tsdown": "workspace:*",
+    "dsh-tauri-ui": "workspace:*",
     "marked": "catalog:ui",
     "smol-toml": "catalog:utils",
     "tsdown": "catalog:cli"

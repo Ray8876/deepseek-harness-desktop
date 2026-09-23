@@ -3,6 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { clearHostRuntime, setCurrentHostInstance } from '../config/runtime'
 import { handoff } from './handoff'
 
+vi.mock('dsh-tauri', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('dsh-tauri')>()
+  const { testDshHome: home } = await import('../../../../.test/test-utils')
+  return { ...actual, DSH_HOME: home }
+})
+
 const events = [
   { type: 'user/message', seq: 0, time: 1, data: { message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } } },
   { type: 'turn/end', seq: 1, time: 2, data: { reason: { kind: 'completed' } } },
@@ -122,5 +128,11 @@ describe('handoff.complete', () => {
       },
     })
     expect(followup).toHaveBeenCalledTimes(1)
+    const followupMessage = followup.mock.calls[0][0]
+    const text = followupMessage.content.map((block: any) => block.text).join('')
+    expect(text).toContain('is_worktree: true')
+    expect(text).toContain('Worktree path: C:/worktrees/w1')
+    expect(text).toContain('Project path: C:/project')
+    expect(text).toContain('The task has moved to this isolated worktree session.')
   })
 })

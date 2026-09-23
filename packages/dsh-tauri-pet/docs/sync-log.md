@@ -171,8 +171,8 @@
     `/api/dsh-pet/session-stream`）在最后一条 `workStatus=thinking` 之后**再无该会话的任何帧**；
   - 会话日志里 `turn/end` 直到 2.5 分钟后该会话被重新加载时才出现，且是崩溃修复补写的
     `{kind:'interrupted'}`；崩溃修复属于构造 seed，**不会再发 `session/event`**，桌宠永远等不到。
-  - 结论：`turn/end` 不能作为「回合收尾」的唯一信号，与 turnrewind 宿主侧早就存在的
-    `agent/status → idle` 兜底（`packages/dsh-tauri-turnrewind/src/host/apply.ts`）同源。
+  - 结论：`turn/end` 不能作为「回合收尾」的唯一信号，与 running-changes 宿主侧早就存在的
+    `agent/status → idle` 兜底（`packages/dsh-tauri-running-changes/src/host/apply.ts`）同源。
 - **修复**：
   - `src/host/reducer.ts`：抽出 `settleIdle(state)`（turn/end 中断分支与 idle 兜底共用同一份
     收尾语义），新增 `idle(id)` —— 只在会话仍处于「回合内」（`running || turnActive || stepActive`）

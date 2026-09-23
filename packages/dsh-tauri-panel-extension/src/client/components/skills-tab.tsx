@@ -1,19 +1,16 @@
 import type { ReactElement } from 'react'
 import type { SkillRowView } from '../types'
 import type { OpenTarget, SkillEditorState, SkillsTabProps } from './skills-tab.types'
-import { Button, Modal, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
-import { ArrowRotateRight, GraduationCap, Icon, LogoGithub, useMountStyle } from 'dsh-tauri-ui/client'
+import { ArrowRotateRight, Button, Checkbox, GraduationCap, Icon, IconButton, Input, LogoGithub, Modal, Pill, SegmentedControl, StateDot, Switch, Tag } from 'dsh-tauri-ui/client'
 import { orderBy, uniq } from 'dsh-tauri/client'
 import { useEffect, useMemo, useState } from 'react'
 import { deleteSkill, getSkill, getSkills, postOpenDir, postRoots, postSkill, postSkillPolicy, postSkillsRefresh } from '../apis'
 import { MarkdownPreview } from '../components/markdown'
-import { IMPORT_REFRESH_DELAYS_MS, SKILL_REFRESH_INTERVAL_MS, SKILL_REFRESH_TIMEOUT_MS, SKILLS_TAB_STYLE_ID, SOURCE_LOCALE_KEYS } from '../constants'
+import { IMPORT_REFRESH_DELAYS_MS, SKILL_REFRESH_INTERVAL_MS, SKILL_REFRESH_TIMEOUT_MS, SOURCE_LOCALE_KEYS } from '../constants'
 import { useTimers } from '../hooks/use-timers'
-import skillsTabStyle from './skills-tab.cssr'
 import { normalizeRepository, policyTag } from './skills-tab.utils'
 
 export function SkillsTab({ t, createSkill }: SkillsTabProps): ReactElement {
-  useMountStyle(skillsTabStyle, SKILLS_TAB_STYLE_ID)
   const [skills, setSkills] = useState<SkillRowView[] | null>(null)
   const [editor, setEditor] = useState<SkillEditorState | null>(null)
   const [preview, setPreview] = useState(false)
@@ -224,29 +221,30 @@ export function SkillsTab({ t, createSkill }: SkillsTabProps): ReactElement {
           </span>
         )}
         <span className="dshp-extension__spacer" />
-        <input className="dshp-extension__search" type="search" placeholder={t('searchSkills')} aria-label={t('searchSkills')} value={query} onChange={event => setQuery(event.target.value)} />
-        <button type="button" className="dshp-extension__refresh" aria-label={t('refresh')} title={t('refresh')} disabled={busy} onClick={() => void doRefresh()}><Icon as={ArrowRotateRight} /></button>
+        <Input className="dshp-extension__search" type="search" placeholder={t('searchSkills')} aria-label={t('searchSkills')} value={query} onChange={event => setQuery(event.target.value)} />
+        <IconButton variant="toolbar" icon={<Icon as={ArrowRotateRight} />} aria-label={t('refresh')} title={t('refresh')} disabled={busy} onClick={() => void doRefresh()} />
       </div>
-      {sources.length > 1 && <div className="dshp-extension__chips" role="group" aria-label={t('source')}>{[{ id: 'all', label: t('filterAll') }, ...sources.map(source => ({ id: source, label: t(SOURCE_LOCALE_KEYS[source] ?? 'sourceCustom') }))].map(chip => <button key={chip.id} type="button" className="dshp-extension__chip" data-active={sourceFilter === chip.id ? 'true' : undefined} onClick={() => setSourceFilter(chip.id)}>{chip.label}</button>)}</div>}
+      {sources.length > 1 && <div className="dshp-extension__chips" role="group" aria-label={t('source')}>{[{ id: 'all', label: t('filterAll') }, ...sources.map(source => ({ id: source, label: t(SOURCE_LOCALE_KEYS[source] ?? 'sourceCustom') }))].map(chip => <Pill key={chip.id} active={sourceFilter === chip.id} onClick={() => setSourceFilter(chip.id)}>{chip.label}</Pill>)}</div>}
       {skills === null && <p className="dshp-extension__empty">{t('loading')}</p>}
       {skills !== null && filtered.length === 0 && <p className="dshp-extension__empty">{skills.length === 0 ? t('emptySkills') : t('noMatch')}</p>}
       {filtered.length > 0 && (
         <ul className="dshp-extension__cards">
           {filtered.map((skill) => {
             const tag = policyTag(skill)
+            const githubUrl = skill.repository?.githubUrl
             return (
               <li className="dshp-extension__card" key={`${skill.source}/${skill.name}`}>
                 <div className="dshp-extension__card-top">
                   <strong className="dshp-extension__card-title" title={skill.name}>{skill.name}</strong>
-                  <span className="dshp-extension__tag" data-kind="source">{t(SOURCE_LOCALE_KEYS[skill.source] ?? 'sourceCustom')}</span>
-                  {tag.key && <span className="dshp-extension__tag" data-kind={tag.off ? 'off' : undefined}>{t(tag.key)}</span>}
+                  <Tag tone="info">{t(SOURCE_LOCALE_KEYS[skill.source] ?? 'sourceCustom')}</Tag>
+                  {tag.key && <Tag tone={tag.off ? 'warning' : 'neutral'}>{t(tag.key)}</Tag>}
                 </div>
                 <p className="dshp-extension__card-desc" title={skill.description}>{skill.description}</p>
                 <div className="dshp-extension__card-row">
-                  {skill.policyEditable && <button type="button" className="dshp-extension__switch" role="switch" aria-checked={skill.invocation.modelInvocable || skill.invocation.userInvocable} aria-label={t('toggleSkill')} title={t('toggleSkillHint')} disabled={busy} onClick={() => void doToggle(skill)}><span className="dshp-extension__switch-knob" /></button>}
-                  {skill.dir && <button type="button" className="dshp-extension__link" onClick={() => void doOpen({ target: 'skill', name: skill.name })}>{t('openFolder')}</button>}
+                  {skill.policyEditable && <Switch checked={skill.invocation.modelInvocable || skill.invocation.userInvocable} onChange={() => void doToggle(skill)} label={t('toggleSkill')} title={t('toggleSkillHint')} disabled={busy} />}
+                  {skill.dir && <Button variant="ghost" size="sm" onClick={() => void doOpen({ target: 'skill', name: skill.name })}>{t('openFolder')}</Button>}
                   <span className="dshp-extension__spacer" />
-                  {skill.repository?.githubUrl && <a className="dshp-extension__icon-link" href={skill.repository.githubUrl} target="_blank" rel="noreferrer" aria-label={t('githubRepository')} title={t('githubRepository')}><Icon as={LogoGithub} /></a>}
+                  {githubUrl !== undefined && <IconButton variant="toolbar" icon={<Icon as={LogoGithub} />} aria-label={t('githubRepository')} title={t('githubRepository')} onClick={() => window.open(githubUrl, '_blank', 'noopener,noreferrer')} />}
                   <Button variant="ghost" size="sm" disabled={busy} onClick={() => void openExisting(skill)}>{skill.editable ? t('edit') : t('view')}</Button>
                   {skill.removable && <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirmName(skill.name)}>{t('delete')}</Button>}
                 </div>
@@ -261,34 +259,37 @@ export function SkillsTab({ t, createSkill }: SkillsTabProps): ReactElement {
           <div className="dshp-extension__form">
             <label className="dshp-extension__label">
               <span>{t('skillName')}</span>
-              <input className="dshp-extension__input" value={editor.name} disabled />
+              <Input value={editor.name} disabled />
             </label>
             <label className="dshp-extension__label">
               <span>{t('skillDescription')}</span>
-              <input className="dshp-extension__input" value={editor.description} disabled={readOnly} onChange={event => setEditor({ ...editor, description: event.target.value })} />
+              <Input value={editor.description} disabled={readOnly} onChange={event => setEditor({ ...editor, description: event.target.value })} />
             </label>
             <label className="dshp-extension__label">
               <span>{t('skillWhenToUse')}</span>
-              <input className="dshp-extension__input" value={editor.whenToUse} disabled={readOnly} onChange={event => setEditor({ ...editor, whenToUse: event.target.value })} />
+              <Input value={editor.whenToUse} disabled={readOnly} onChange={event => setEditor({ ...editor, whenToUse: event.target.value })} />
             </label>
             <div className="dshp-extension__checks">
-              <label>
-                <input type="checkbox" checked={editor.modelInvocable} disabled={readOnly} onChange={event => setEditor({ ...editor, modelInvocable: event.target.checked })} />
+              <Checkbox checked={editor.modelInvocable} disabled={readOnly} onChange={next => setEditor({ ...editor, modelInvocable: next })}>
                 {t('modelInvocable')}
-              </label>
-              <label>
-                <input type="checkbox" checked={editor.userInvocable} disabled={readOnly} onChange={event => setEditor({ ...editor, userInvocable: event.target.checked })} />
+              </Checkbox>
+              <Checkbox checked={editor.userInvocable} disabled={readOnly} onChange={next => setEditor({ ...editor, userInvocable: next })}>
                 {t('userInvocable')}
-              </label>
+              </Checkbox>
             </div>
             <div className="dshp-extension__label">
               <div className="dshp-extension__card-row">
                 <span>{t('skillContent')}</span>
                 <span className="dshp-extension__spacer" />
-                <div className="dshp-extension__segments" role="tablist" aria-label={t('skillContent')}>
-                  <button type="button" role="tab" aria-selected={preview} className="dshp-extension__segment" data-active={preview ? 'true' : undefined} onClick={() => setPreview(true)}>{t('skillPreview')}</button>
-                  <button type="button" role="tab" aria-selected={!preview} className="dshp-extension__segment" data-active={!preview ? 'true' : undefined} onClick={() => setPreview(false)}>{readOnly ? t('skillPlainText') : t('edit')}</button>
-                </div>
+                <SegmentedControl
+                  label={t('skillContent')}
+                  value={preview ? 'preview' : 'text'}
+                  options={[
+                    { value: 'preview', label: t('skillPreview') },
+                    { value: 'text', label: readOnly ? t('skillPlainText') : t('edit') },
+                  ]}
+                  onChange={next => setPreview(next === 'preview')}
+                />
               </div>
               {preview ? <div className="dshp-extension__md-preview"><MarkdownPreview text={editor.content} /></div> : <textarea className="dshp-extension__textarea" value={editor.content} readOnly={readOnly} onChange={event => setEditor({ ...editor, content: event.target.value })} />}
             </div>
@@ -321,9 +322,8 @@ export function SkillsTab({ t, createSkill }: SkillsTabProps): ReactElement {
           <p className="dshp-extension__intro">{t('importRepositoryHint')}</p>
           <label className="dshp-extension__label">
             <span>{t('repository')}</span>
-            <input
+            <Input
               autoFocus
-              className="dshp-extension__input"
               placeholder={t('importRepositoryPlaceholder')}
               value={repositoryUrl}
               onChange={event => setRepositoryUrl(event.target.value)}

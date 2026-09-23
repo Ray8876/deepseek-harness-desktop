@@ -1157,6 +1157,12 @@
       "sourceType": "github",
       "skillPath": "skills/zh/testing-types/visual-regression-testing/SKILL.md",
       "computedHash": "b700e8b12660c3b0f6aac59d0439f970cfa36afa675fb541d59625bd36d5ac9c"
+    },
+    "vitest": {
+      "source": "antfu/skills",
+      "sourceType": "github",
+      "skillPath": "skills/vitest/SKILL.md",
+      "computedHash": "3594bf6d97ca50836c611d8b1907322888c03d2c41b2f26761e644b8e67fe106"
     }
   }
 }

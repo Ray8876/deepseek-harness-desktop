@@ -1,6 +1,8 @@
 import type { DshPlugin } from '@/types'
 import type { ConfigTab } from '@/ui/dialog/config'
 import {
+  ArrowRotateRight,
+  Copy,
   LayoutSideContent,
   LayoutSideContentLeft,
   Minus,
@@ -30,7 +32,7 @@ import { toast } from '@/utils/toast'
 /**
  * 壳层窗口顶部导航栏（44px，常驻）：
  *
- *   [侧边栏(展开/收起)] [文件][配置][帮助] [  空白拖拽区  ] [最小化][最大化][后台化(X)]
+ *   [侧边栏(展开/收起)] [文件][运行][帮助] [  空白拖拽区  ] [最小化][最大化][后台化(X)]
  *
  * - 侧边栏：经 postMessage 操控 iframe 内的 dsh 应用
  *   （`dsh://sidebar:toggle`，由 dsh-tauri 插件的 `client/register/sidebar.ts`
@@ -42,8 +44,9 @@ import { toast } from '@/utils/toast'
  * - 文件：新建窗口（Tauri 再开一个 webview）/ 新聊天、打开文件夹（经协议调用 dsh 官方
  *   「新建会话」「添加工作区」，接收方是 dsh-tauri 的 `client/register/navigation.ts`）/
  *   关闭（隐藏到托盘）/ 退出（完整退出）。两条依赖 iframe 的项在回调缺席时禁用。
- * - 配置：应用 / 档案 / 插件 / 核心，直接打开配置对话框并定位到对应面板
- *   （对话框与角标见 `ui/dialog/config.tsx`）。
+ * - 运行：应用 / 档案 / 插件 / 核心，直接打开配置对话框并定位到对应面板
+ *   （对话框与角标见 `ui/dialog/config.tsx`）；「应用」项右侧另挂一个快捷重启图标按钮，
+ *   就地重启服务而不必先进面板。
  * - 帮助：运行日志 / 检查更新 / 关于 Desktop / 文档（系统浏览器打开官方文档站）。
  * - 空白拖拽区：Tauri 原生 `data-tauri-drag-region`（顶层文档直接生效），
  *   Windows/Linux 上双击切换最大化，macOS 上交由系统标题栏偏好。
@@ -52,11 +55,12 @@ import { toast } from '@/utils/toast'
  *   「文件」「帮助」在 macOS 上由原生菜单栏承载（见 `desktop/builder.rs` 的
  *   `install_macos_menu`），本组按钮不渲染。
  *   交通灯的纵向位置由 `src-tauri/src/desktop/builder.rs` 的 `SHELL_NAV_HEIGHT`
- *   推导（视觉圆心 = 栏高 / 2），与下面根元素的 `h-11` 是同一真值；两者的一致性
+ *   推导（视觉圆心与栏内 flex 居中控件同线），与下面根元素的 `h-11` 是同一真值；两者的一致性
  *   由 Rust 测试 `shell_nav_height_matches_navbar_height_class` 守住——改这个
  *   class 就必须同步那个常量，否则 CI 失败（issue #524）。
  * - Windows/Linux：右侧窗口按钮直接调用 Tauri API；
- *   后台化 = 隐藏到托盘（服务保持运行）。
+ *   最大化的字形随窗口状态在「最大化 / 还原」间切换（`useMaximized` 订阅 `onResized`，
+ *   因此按钮、拖拽区双击、Win+↑ 等任何原生路径都同步），后台化 = 隐藏到托盘（服务保持运行）。
  *
  * 未传入 onToggleSidebar（安装/错误/预装引导页，无 iframe 可操控）时
  * 只渲染窗口控制与不依赖 iframe 的菜单项。
@@ -78,7 +82,7 @@ type FileAction = 'new-window' | 'new-chat' | 'open-folder' | 'close' | 'quit'
 /** 「帮助」菜单的动作 id。 */
 type HelpAction = 'copy-run-logs' | 'check-update' | 'about' | 'documentation'
 
-/** 「配置」菜单项：直接打开配置对话框并定位到对应面板。 */
+/** 「运行」菜单项：直接打开配置对话框并定位到对应面板。 */
 const CONFIG_TABS: { id: ConfigTab, labelKey: string }[] = [
   { id: 'application', labelKey: 'config.application' },
   { id: 'profiles', labelKey: 'config.profiles' },
@@ -142,6 +146,53 @@ function useMacOSFullscreen() {
   return isFullscreen
 }
 
+/** 最大化状态：Windows/Linux 自绘的最大化按钮据此在「最大化 / 还原」字形间切换（issue #673）。 */
+function useMaximized() {
+  const [isMaximized, setIsMaximized] = useState(false)
+
+  // keep:effect 显式注册/注销原生窗口 onResized 订阅（@reause/core 不覆盖窗口事件）
+  useEffect(() => {
+    const appWindow = getCurrentWindow()
+    let mounted = true
+    let unlisten: (() => void) | undefined
+
+    async function syncMaximized() {
+      try {
+        const maximized = await appWindow.isMaximized()
+        if (mounted)
+          setIsMaximized(maximized)
+      }
+      catch (error) {
+        console.error('[Navbar] failed to sync maximized state:', error)
+      }
+    }
+
+    async function setupListener() {
+      try {
+        await syncMaximized()
+        const stopListening = await appWindow.onResized(() => {
+          void syncMaximized()
+        })
+        if (mounted)
+          unlisten = stopListening
+        else
+          stopListening()
+      }
+      catch (error) {
+        console.error('[Navbar] failed to listen for maximized state:', error)
+      }
+    }
+
+    void setupListener()
+    return () => {
+      mounted = false
+      unlisten?.()
+    }
+  }, [])
+
+  return isMaximized
+}
+
 export interface NavbarProps {
   /** iframe 回报的 dsh 侧边栏折叠状态（导航桥逻辑在 `iframe.tsx`） */
   sidebarCollapsed?: boolean
@@ -156,6 +207,7 @@ export interface NavbarProps {
 export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, onOpenFolder }: NavbarProps) {
   const { t } = useTranslation()
   const isFullscreen = useMacOSFullscreen()
+  const isMaximized = useMaximized()
   // 只读取「dsh-tauri 插件是否已安装」；查询键与「插件」面板共用（同一份缓存），
   // 挂载时自动拉取，服务重启 / 插件操作后的失效由 store 与该缓存同步共同保证。
   const { data: plugins = [] } = useQuery({
@@ -164,6 +216,9 @@ export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, o
   })
   const { updateInfo } = useStore(store.desktopUpdater)
   const [dshStyle] = useDshStyle()
+  // 「运行」菜单受控开合：快捷重启按钮不是菜单项，走不到 React Aria 的
+  // 「项选中即收起」，收起得自己来，否则重启期间菜单会一直挂在新页面上。
+  const [runMenuOpen, setRunMenuOpen] = useState(false)
 
   const openConfigDialog = useOverlay(ConfigDialog)
   const openAboutDialog = useOverlay(DesktopAboutDialog)
@@ -262,6 +317,12 @@ export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, o
 
   function handleOpenConfig(tab?: ConfigTab) {
     void openConfigDialog({ tab }).catch(() => { })
+  }
+
+  /** 「应用」项右侧的快捷重启：收起菜单再重启服务（与 macOS 原生菜单「重启」同一入口） */
+  function handleQuickRestart() {
+    setRunMenuOpen(false)
+    void store.harness.restart()
   }
 
   function handleOpenAbout() {
@@ -432,15 +493,15 @@ export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, o
               </Dropdown.Menu>
             </Dropdown.Popover>
           </Dropdown>
-          <Dropdown>
+          <Dropdown isOpen={runMenuOpen} onOpenChange={setRunMenuOpen}>
             <Button
               className="rounded-lg h-6 text-[12.5px] px-1.5"
               size="sm"
               variant="ghost"
-              aria-label={t('app.config')}
+              aria-label={t('menu.run')}
               data-testid="dsh-navbar-menu-config"
             >
-              {t('app.config')}
+              {t('menu.run')}
             </Button>
             <Dropdown.Popover className="rounded-md min-w-55" data-testid="dsh-navbar-menu-popover">
               <Dropdown.Menu>
@@ -453,7 +514,33 @@ export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, o
                     textValue={t(item.labelKey)}
                     onAction={() => handleOpenConfig(item.id)}
                   >
-                    <Label>{t(item.labelKey)}</Label>
+                    <div className="flex w-full items-center justify-between gap-2">
+                      <Label>{t(item.labelKey)}</Label>
+                      <If cond={item.id === 'application'}>
+                        {/* 菜单项整行是 pressable，按钮外包一层专门拦冒泡：React Aria 的
+                            pressable 只在 pointerdown / click 上收口，pointerup 会冒泡到菜单项，
+                            被菜单项当成「按在别处、松手落在我身上」而自行补一次 click，
+                            顺带把菜单项动作（打开配置面板）也触发了——所以 pointerup 必须在这里拦。 */}
+                        <span
+                          className="flex shrink-0 items-center"
+                          onClick={event => event.stopPropagation()}
+                          onPointerDown={event => event.stopPropagation()}
+                          onPointerUp={event => event.stopPropagation()}
+                        >
+                          <Button
+                            className="rounded-md size-6 hover:bg-background-tertiary"
+                            isIconOnly
+                            size="sm"
+                            variant="ghost"
+                            aria-label={t('app.restart')}
+                            data-testid="dsh-navbar-item-application-restart"
+                            onPress={handleQuickRestart}
+                          >
+                            <ArrowRotateRight className="size-3.5" />
+                          </Button>
+                        </span>
+                      </If>
+                    </div>
                   </Dropdown.Item>
                 ))}
               </Dropdown.Menu>
@@ -571,10 +658,14 @@ export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, o
           isIconOnly
           size="sm"
           variant="ghost"
-          aria-label={t('nav.maximize')}
+          aria-label={t(isMaximized ? 'nav.restore' : 'nav.maximize')}
           onPress={() => { handleWindowAction('maximize') }}
         >
-          <Square style={{ width: 14, height: 14 }} />
+          <If
+            cond={isMaximized}
+            then={<Copy style={{ width: 14, height: 14 }} />}
+            else={<Square style={{ width: 14, height: 14 }} />}
+          />
         </Button>
 
         <Button

@@ -549,6 +549,26 @@ pub fn remove(app_handle: &AppHandle, id: &str) -> Result<(), String> {
     fs::remove_dir_all(&dir).map_err(|e| format!("PROFILE_REMOVE_FAILED: {e}"))
 }
 
+/// 重置档案：清空档案目录后按官方模板重新初始化。
+///
+/// 只重建 `$DSH_HOME/profiles/<id>`：会话数据存放在 `$DSH_HOME/sessions`（档案
+/// 目录之外），因此重置不影响任何会话。档案内的插件、补丁与设置随目录一并清除，
+/// 随后由 [`init_profile_dir`] 写回 web 模板清单 —— 即回到「刚新建」的状态。
+pub fn reset(app_handle: &AppHandle, id: &str) -> Result<(), String> {
+    let profiles_root = config::get_dsh_data_path(app_handle).join("profiles");
+    reset_with_root(&profiles_root, id)
+}
+
+/// [`reset`] 的根目录显式版本（便于单测注入临时目录，与 [`clone_with_root`] 同形）。
+pub fn reset_with_root(profiles_root: &Path, id: &str) -> Result<(), String> {
+    // 目录缺失（全新安装/被外部清理）时无需删除，直接按模板初始化出干净档案。
+    if fs_guard::join_safe(profiles_root, id)?.is_dir() {
+        let dir = fs_guard::safe_remove_target(profiles_root, id)?;
+        fs::remove_dir_all(&dir).map_err(|e| format!("PROFILE_RESET_FAILED: {e}"))?;
+    }
+    init_profile_dir(&profiles_root.join(id), id)
+}
+
 /// 克隆档案：全量复制源档案目录，自动递增命名（web → web-1 → web-2）。
 ///
 /// 以 `profiles_root` 为根，便于单测注入临时目录；调用方（`bridge::clone_profile`）
@@ -1578,6 +1598,54 @@ mod tests {
         // 档案的其余文件同样补齐（半初始化目录 → 完整档案）
         assert!(dir.join("cordis.patch.yml").is_file());
         assert!(dir.join("pnpm-workspace.yaml").is_file());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn reset_wipes_profile_data_but_keeps_sessions() {
+        let tmp = std::env::temp_dir().join(format!("dsh-profile-reset-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let profiles_root = tmp.join("profiles");
+        let sessions = tmp.join("sessions");
+
+        // 档案：模板初始化后再塞入用户数据（插件依赖、补丁层、桌面禁用清单）
+        init_profile_dir(&profiles_root.join("web"), "web").unwrap();
+        std::fs::write(
+            profiles_root.join("web").join("package.json"),
+            r#"{"name":"dsh-profile-web","dependencies":{"some-plugin":"1.2.3"}}"#,
+        )
+        .unwrap();
+        std::fs::write(profiles_root.join("web").join("cordis.patch.yml"), "[]\n").unwrap();
+        std::fs::write(
+            profiles_root.join("web").join("disabled-plugins.json"),
+            r#"["some-plugin"]"#,
+        )
+        .unwrap();
+        // 会话位于档案目录之外，重置不得触碰
+        std::fs::create_dir_all(sessions.join("_no-cwd")).unwrap();
+        std::fs::write(sessions.join("_no-cwd").join("s1.json"), "{}").unwrap();
+
+        reset_with_root(&profiles_root, "web").unwrap();
+
+        // 用户数据被清空，清单回到模板形态（dependencies 为空）
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(profiles_root.join("web").join("package.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["name"], "dsh-profile-web");
+        assert_eq!(manifest["dependencies"], serde_json::json!({}));
+        assert_eq!(
+            manifest["dsh"]["profile"]["bundles"],
+            serde_json::json!(["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"])
+        );
+        assert!(!profiles_root.join("web").join("disabled-plugins.json").exists());
+        // 会话数据完整保留
+        assert!(sessions.join("_no-cwd").join("s1.json").is_file());
+
+        // 目录不存在时也能初始化出干净档案（全新安装/被外部清理）
+        reset_with_root(&profiles_root, "fresh").unwrap();
+        assert!(profiles_root.join("fresh").join("package.json").is_file());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

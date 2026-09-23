@@ -1,6 +1,9 @@
 import type { ClientContext } from 'dsh-tauri/client'
-import { circleTreeSvg, mountStyle } from 'dsh-tauri-ui/client'
+import type { Root } from 'react-dom/client'
+import { CircleTree, Icon, mountStyle } from 'dsh-tauri-ui/client'
 import { defineRegister, findKey } from 'dsh-tauri/client'
+import { createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import {
   SESSION_ICON_ATTRIBUTE,
   SESSION_ICON_STYLE_ID,
@@ -8,6 +11,14 @@ import {
 } from '../constants'
 import { store } from '../store'
 import sessionIconStyle from '../styles/index.cssr'
+
+const ICON_ROOTS = new WeakMap<Element, Root>()
+
+function removeIcon(icon: Element): void {
+  ICON_ROOTS.get(icon)?.unmount()
+  ICON_ROOTS.delete(icon)
+  icon.remove()
+}
 
 export const sessionIconsFeature = defineRegister<ClientContext>((controller) => {
   if (typeof document === 'undefined')
@@ -44,7 +55,9 @@ export const sessionIconsFeature = defineRegister<ClientContext>((controller) =>
     const icon = document.createElement('span')
     icon.setAttribute(SESSION_ICON_ATTRIBUTE, '1')
     icon.style.marginRight = '5px'
-    icon.innerHTML = circleTreeSvg(12)
+    const root = createRoot(icon)
+    root.render(createElement(Icon, { as: CircleTree, size: 12 }))
+    ICON_ROOTS.set(icon, root)
     row.insertBefore(icon, time)
   }
 
@@ -57,8 +70,8 @@ export const sessionIconsFeature = defineRegister<ClientContext>((controller) =>
         if (!icon)
           applyIcon(row)
       }
-      else {
-        icon?.remove()
+      else if (icon) {
+        removeIcon(icon)
       }
     })
   }

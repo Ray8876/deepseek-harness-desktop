@@ -15,6 +15,9 @@ interface ToastProviderProps {
 /**
  * 应用共用的 HeroUI queue/provider。桌宠窗口通过 custom 渲染精简气泡，
  * 主窗口保留 HeroUI 默认的操作和关闭按钮。
+ *
+ * 非 custom 分支必须传 `undefined`：HeroUI 以 `typeof children === 'undefined'`
+ * 判定「用默认气泡」，传 `null` 会被当作「渲染空内容」而整条提示不落地。
  */
 export function ToastProvider(props: ToastProviderProps) {
   const [updates, setUpdates] = useState(() => new Map<string, ToastUpdateEvent['options']>())
@@ -62,7 +65,7 @@ export function ToastProvider(props: ToastProviderProps) {
                   </Toast>
                 )
               }
-            : null}
+            : undefined}
         </Toast.Provider>
       ))}
       {props.children}

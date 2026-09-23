@@ -2,6 +2,7 @@ import { defineLocale } from 'dsh-tauri/client'
 import { PLUGIN_ID } from '../constants'
 
 const zh = {
+  close: '关闭',
   modeLabel: '工作模式',
   modeLocal: '本地',
   modeWorktree: '工作树',
@@ -11,6 +12,7 @@ const zh = {
   surfaceWorktree: '该会话正在工作树进行',
   surfaceCheckout: '检出本地',
   surfaceAbandon: '放弃',
+  surfaceDismiss: '关闭',
   checkoutTitle: '将更改带回本地检出并继续',
   checkoutBranchLabel: '本地检出分支名',
   checkoutCurrentPath: '关联路径',
@@ -34,6 +36,7 @@ const zh = {
 } as const
 
 const en: Record<keyof typeof zh, string> = {
+  close: 'Close',
   modeLabel: 'Mode',
   modeLocal: 'Local',
   modeWorktree: 'Worktree',
@@ -43,6 +46,7 @@ const en: Record<keyof typeof zh, string> = {
   surfaceWorktree: 'This session is running in a worktree',
   surfaceCheckout: 'Checkout local',
   surfaceAbandon: 'Abandon',
+  surfaceDismiss: 'Dismiss',
   checkoutTitle: 'Bring changes back to local and continue',
   checkoutBranchLabel: 'Local checkout branch name',
   checkoutCurrentPath: 'Current path',

@@ -1,13 +1,10 @@
-import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MenuEntry } from 'dsh-tauri-ui/client'
 import type { ReactElement } from 'react'
 import type { LocaleKey, Translate } from '../locales/index.types'
 import type { TaskView } from '../types'
-import { Menu, Modal, Toast, IconWarningOutline16 as Warning } from '@deepseek-ai/dsh-client-ui-primitives'
-import { CirclePause, CirclePlay, EllipsisVertical, Icon, TrashBin, useMountStyle } from 'dsh-tauri-ui/client'
+import { Button, CirclePause, CirclePlay, EllipsisVertical, Icon, IconButton, Menu, Modal, Tag, Toast, TrashBin, TriangleExclamation as Warning } from 'dsh-tauri-ui/client'
 import { useRef, useState } from 'react'
-import { TASK_CARD_STYLE_ID } from '../constants'
 import { deleteTask, runTask, toggleTask } from '../service/scheduler'
-import taskCardStyle from './task-card.cssr'
 
 export interface TaskCardProps {
   task: TaskView
@@ -19,7 +16,6 @@ export interface TaskCardProps {
 }
 
 export function TaskCard({ task, t, describe, nextRun, paused, onEdit }: TaskCardProps): ReactElement {
-  useMountStyle(taskCardStyle, TASK_CARD_STYLE_ID)
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [actionError, setActionError] = useState('')
@@ -87,16 +83,15 @@ export function TaskCard({ task, t, describe, nextRun, paused, onEdit }: TaskCar
       }}
     >
       <div style={{ height: 36 }}>
-        <span
-          className="dshp-scheduler__task-toggle"
+        <IconButton
+          variant="action"
+          icon={paused ? <Icon as={CirclePlay} /> : <Icon as={CirclePause} />}
           aria-label={paused ? t('resume') : t('pause')}
           onClick={(event) => {
             event.stopPropagation()
             void onToggle()
           }}
-        >
-          {paused ? <Icon as={CirclePlay} /> : <Icon as={CirclePause} />}
-        </span>
+        />
       </div>
       <div style={{ flex: 1 }}>
         <span className="dshp-scheduler__card-title" title={task.name}>
@@ -119,7 +114,7 @@ export function TaskCard({ task, t, describe, nextRun, paused, onEdit }: TaskCar
               : <strong>{t('paused')}</strong>}
           </span>
           {task.waiting === true
-            ? <span className="dshp-scheduler__card-waiting">{t('waiting')}</span>
+            ? <Tag variant="status" tone="info">{t('waiting')}</Tag>
             : null}
         </div>
       </div>
@@ -141,9 +136,9 @@ export function TaskCard({ task, t, describe, nextRun, paused, onEdit }: TaskCar
         portal
         align="end"
         anchor={(
-          <button
-            type="button"
-            className="dshp-scheduler__icon-button"
+          <IconButton
+            variant="action"
+            icon={<Icon as={EllipsisVertical} size={12} />}
             aria-label={task.name}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
@@ -151,9 +146,7 @@ export function TaskCard({ task, t, describe, nextRun, paused, onEdit }: TaskCar
               event.stopPropagation()
               setMenuOpen(openState => !openState)
             }}
-          >
-            <Icon as={EllipsisVertical} size={12} />
-          </button>
+          />
         )}
       />
       {actionError ? <p className="dshp-scheduler__error" role="alert">{actionError}</p> : null}
@@ -177,8 +170,8 @@ export function TaskCard({ task, t, describe, nextRun, paused, onEdit }: TaskCar
         closeLabel={t('close')}
         footer={(
           <>
-            <button className="dshp-scheduler__btn" type="button" onClick={() => setConfirmOpen(false)}>{t('cancel')}</button>
-            <button className={`${'dshp-scheduler__btn'} ${'dshp-scheduler__btn--danger'}`} type="button" onClick={() => void onDelete()}>{t('deleteConfirmAction')}</button>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}>{t('cancel')}</Button>
+            <Button variant="danger" onClick={() => void onDelete()}>{t('deleteConfirmAction')}</Button>
           </>
         )}
       />

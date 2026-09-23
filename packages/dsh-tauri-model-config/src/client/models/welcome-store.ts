@@ -1,5 +1,4 @@
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
   WELCOME_NOTICE_ACK_FIELD,
@@ -13,6 +12,16 @@ export interface WelcomeNoticeState {
 }
 
 export type WelcomeSection = Record<string, unknown>
+
+export interface WelcomeSettingsForm {
+  getSnapshot: () => {
+    status: 'loading' | 'ready' | 'unavailable'
+    value?: WelcomeSection
+    mode: 'host' | 'memory'
+  }
+  subscribe: (listener: () => void) => () => void
+  set: (field: string, value: unknown) => Promise<boolean>
+}
 
 export function decodeWelcomeSection(section: unknown): WelcomeSection {
   return typeof section === 'object' && section !== null && !Array.isArray(section)
@@ -35,7 +44,7 @@ export class WelcomeNoticeStore {
   private saving = false
   private following: (() => void) | undefined
 
-  constructor(private readonly scope: SettingsScope<WelcomeSection>) {}
+  constructor(private readonly scope: WelcomeSettingsForm) {}
 
   load(): Promise<void> {
     this.following ??= this.scope.subscribe(() => {

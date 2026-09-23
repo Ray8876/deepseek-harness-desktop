@@ -74,6 +74,40 @@ export async function archiveSession(input: {
   }
 }
 
+/** Query：官方是否提供置顶会话能力（0.1.7 起）；旧核心缺席时右键菜单不展示该入口。 */
+export function supportsSessionPin(workspaces: WorkspacesRuntimeLike): boolean {
+  return typeof workspaces.pinSession === 'function' && typeof workspaces.unpinSession === 'function'
+}
+
+/** Query：会话是否已置顶（旧核心无置顶集合时按未置顶处理）。 */
+export function isSessionPinned(input: {
+  workspaces: WorkspacesRuntimeLike
+  sessionId: SessionId
+}): boolean {
+  return input.workspaces.list.getSnapshot().pinnedSessionIds?.includes(input.sessionId) ?? false
+}
+
+/** Action：置顶/取消置顶会话（官方 0.1.7 能力；能力缺席时不执行）。 */
+export async function togglePinSession(input: {
+  workspaces: WorkspacesRuntimeLike
+  sessionId: SessionId
+  pinned: boolean
+}): Promise<ActionOutcome> {
+  const { workspaces, sessionId, pinned } = input
+  const pin = workspaces.pinSession
+  const unpin = workspaces.unpinSession
+  if (!pin || !unpin)
+    return { ok: false, error: locale.text('pinSessionUnavailable') }
+  try {
+    // 以服务实例为接收者调用：官方实现依赖 this。
+    await (pinned ? unpin : pin).call(workspaces, sessionId)
+    return { ok: true }
+  }
+  catch (error) {
+    return fail(error)
+  }
+}
+
 /** Action：分叉会话（官方分叉不可用时的回退路径）。 */
 export async function forkSession(input: {
   sessions: SessionsRuntimeLike
@@ -81,7 +115,7 @@ export async function forkSession(input: {
 }): Promise<ActionOutcome> {
   try {
     const childId = await input.sessions.fork({ sessionId: input.sessionId, increaseTitle: true })
-    input.sessions.open(childId)
+    input.sessions.open?.(childId)
     return { ok: true }
   }
   catch (error) {

@@ -1,15 +1,16 @@
+import type { Config } from './config/onboarding'
 import type { HostContext } from './types'
 import { PLUGIN_ID } from '../shared/constants'
-import { setCurrentHostInstance } from './config/runtime'
-import { routes } from './routes'
+import { ONBOARDING_CONFIG_GLOBAL } from '../shared/onboarding-config'
 
-const ROUTES_EFFECT = `${PLUGIN_ID}: routes`
+const INDEX_EFFECT = `${PLUGIN_ID}: onboarding config global`
 
-const RUNTIME_EFFECT = `${PLUGIN_ID}: host runtime`
-
-export function apply(ctx: HostContext): void {
-  setCurrentHostInstance(ctx)
-
-  ctx.effect(() => routes(ctx), ROUTES_EFFECT)
-  ctx.effect(() => () => setCurrentHostInstance(undefined), RUNTIME_EFFECT)
+export function apply(ctx: HostContext, config?: Config): void {
+  ctx.effect(() => ctx.on('webserver/index-inject', (table) => {
+    table.push({
+      kind: 'global',
+      name: ONBOARDING_CONFIG_GLOBAL,
+      value: { credentialOnboarding: config?.credentialOnboarding ?? true },
+    })
+  }), INDEX_EFFECT)
 }

@@ -1,18 +1,16 @@
 import type { ReactElement } from 'react'
 import type { Translate } from '../locales/index.types'
 import type { RunView, TaskFormState, TaskView } from '../types'
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
-import { Check, CommentPlus, Icon, Magnifier, Plus, useMountStyle } from 'dsh-tauri-ui/client'
+import { Button, Check, CommentPlus, Icon, Input, Magnifier, Plus, SegmentedControl } from 'dsh-tauri-ui/client'
 import { filter, includes, isEmpty, lowerCase, omit, useEventListener } from 'dsh-tauri/client'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { REFRESH_INTERVAL_MS, SCHEDULER_PANEL_STYLE_ID } from '../constants'
+import { REFRESH_INTERVAL_MS } from '../constants'
 import { useScheduler } from '../hooks/use-scheduler'
 import { deleteRun, loadScheduler } from '../service/scheduler'
 import { store } from '../store'
 import { Recommendations } from './recommendations'
 import { RunsTab } from './runs-tab'
 import { countUnreadRuns, describeSchedule, formatRelative, isTaskPaused } from './schedule.utils'
-import schedulerPanelStyle from './scheduler-panel.cssr'
 import { TaskCard } from './task-card'
 import { TaskCreateDialog } from './task-create-dialog'
 
@@ -22,14 +20,12 @@ interface SchedulerPanelProps {
   onOpenSession: (sessionId: string) => 'opened' | 'archived' | 'unavailable'
 }
 
-/** 对话框状态：手动创建（无 initial/taskId）、编辑（taskId + initial）、推荐（initial）。 */
 type DialogState = { taskId?: string, initial?: TaskFormState } | null
 
 /** 由任务视图构造编辑表单（去掉 timeZone 等宿主字段）。 */
 function taskToForm(task: TaskView): TaskFormState {
   return {
     name: task.name,
-    // ScheduleForm 不含 timeZone；仅保留 kind 相关字段。
     schedule: omit(task.schedule, 'timeZone') as TaskFormState['schedule'],
     prompt: task.prompt,
     workspaceId: task.workspaceId ?? '',
@@ -42,7 +38,6 @@ function taskToForm(task: TaskView): TaskFormState {
 }
 
 export function SchedulerPanel({ t, onViaChat, onOpenSession }: SchedulerPanelProps): ReactElement {
-  useMountStyle(schedulerPanelStyle, SCHEDULER_PANEL_STYLE_ID)
   const state = useScheduler()
   const [tab, setTab] = useState<'tasks' | 'runs'>('tasks')
   const [search, setSearch] = useState('')
@@ -62,8 +57,7 @@ export function SchedulerPanel({ t, onViaChat, onOpenSession }: SchedulerPanelPr
     return () => clearInterval(timer)
   }, [])
 
-  // 回到前台 / 重新聚焦时立刻补一次刷新（离开期间轮询可能被浏览器节流）。
-  // reause 的 useEventListener 收的是 ref 目标（与 dsh-tauri-worktree 的 dialog 一致）。
+  // 回到前台 / 重新聚焦时立刻补一次刷新（离开期间轮询可能被浏览器节流）
   const refreshOnResume = useCallback((): void => {
     if (document.visibilityState === 'visible')
       void loadScheduler(false)
@@ -106,27 +100,25 @@ export function SchedulerPanel({ t, onViaChat, onOpenSession }: SchedulerPanelPr
           <p>{t('subtitle')}</p>
         </div>
         <div className="dshp-scheduler__toolbar">
-          <Button style={{ flexShrink: 0 }} variant="outline" size="sm" icon={<Icon as={CommentPlus} />} onClick={onViaChat}>
+          <Button style={{ flexShrink: 0 }} variant="addGhost" icon={<Icon as={CommentPlus} />} onClick={onViaChat}>
             {t('viaChat')}
           </Button>
-          <Button style={{ flexShrink: 0 }} variant="primary" size="sm" icon={<Icon as={Plus} size={13} />} onClick={() => setDialog({})}>
+          <Button style={{ flexShrink: 0 }} variant="add" icon={<Icon as={Plus} size={13} />} onClick={() => setDialog({})}>
             {t('createManual')}
           </Button>
         </div>
       </header>
 
       <div className="dshp-scheduler__search-bar">
-        <div className="dshp-scheduler__search-wrap">
-          <Icon as={Magnifier} className="dshp-scheduler__search-icon" />
-          <input
-            className="dshp-scheduler__input"
-            type="search"
-            aria-label={t('searchPlaceholder')}
-            placeholder={t('searchPlaceholder')}
-            value={search}
-            onChange={event => setSearch(event.target.value)}
-          />
-        </div>
+        <Input
+          className="dshp-scheduler__search-wrap"
+          type="search"
+          icon={<Icon as={Magnifier} />}
+          aria-label={t('searchPlaceholder')}
+          placeholder={t('searchPlaceholder')}
+          value={search}
+          onChange={event => setSearch(event.target.value)}
+        />
         {tab === 'runs' && unread > 0
           ? (
               <Button variant="ghost" size="sm" icon={<Icon as={Check} />} onClick={() => store.scheduler.markAllRunsRead()}>
@@ -136,25 +128,17 @@ export function SchedulerPanel({ t, onViaChat, onOpenSession }: SchedulerPanelPr
           : null}
       </div>
 
-      <div className="dshp-scheduler__tabs" role="tablist" aria-label={t('scheduler')}>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'tasks'}
-          className={tab === 'tasks' ? `${'dshp-scheduler__tab'} ${'dshp-scheduler__tab--active'}` : 'dshp-scheduler__tab'}
-          onClick={() => setTab('tasks')}
-        >
-          {t('tasksTab')}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'runs'}
-          className={tab === 'runs' ? `${'dshp-scheduler__tab'} ${'dshp-scheduler__tab--active'}` : 'dshp-scheduler__tab'}
-          onClick={() => setTab('runs')}
-        >
-          {t('runsTab')}
-        </button>
+      <div className="dshp-scheduler__tabs">
+        <SegmentedControl
+          id="dshp-scheduler-tabs"
+          label={t('scheduler')}
+          value={tab}
+          options={[
+            { value: 'tasks', label: t('tasksTab') },
+            { value: 'runs', label: t('runsTab') },
+          ]}
+          onChange={next => setTab(next === 'runs' ? 'runs' : 'tasks')}
+        />
       </div>
 
       {state.error ? <p className="dshp-scheduler__error" role="alert">{state.error}</p> : null}

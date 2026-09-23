@@ -8,33 +8,23 @@ import type {
 } from '../types/remotes.ts'
 
 export type SettingsWriteOutcome
-
   = | { readonly kind: 'written', readonly view: SettingsNamespaceView }
-
     | { readonly kind: 'conflict', readonly message: string }
-
     | { readonly kind: 'refused', readonly message: string }
 
 export type ModelDiscoveryOutcome
-
   = | { readonly kind: 'found', readonly models: readonly LlmDiscoveredModel[] }
-
     | { readonly kind: 'refused', readonly message: string }
 
 export interface ModelsOperations {
-
   describeCredential: (ref: string) => Promise<CredentialInfo | undefined>
-
   storeCredential: (ref: string, value: string) => Promise<string | undefined>
-
   removeCredential: (ref: string) => Promise<string | undefined>
-
   writeSettings: (
     ns: string,
     ops: SettingsPathOpView[],
     expectedRevision: number | undefined,
   ) => Promise<SettingsWriteOutcome>
-
   discoverModels: (settingsNs: string, request: LlmModelDiscoveryRequest) => Promise<ModelDiscoveryOutcome>
 }
 

@@ -1,3 +1,5 @@
+> 该文档已被固定，禁止修改
+
 # 插件客户端面板协议 (Plugin Client Panel Protocol)
 
 > 本规范是 [plugin.client.md](./plugin.client.md) 在**全局面板**子系统上的协议规范，受 [devlopment.md](./devlopment.md)[cite: 1] 约束。

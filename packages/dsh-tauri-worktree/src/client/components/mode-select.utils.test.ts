@@ -1,12 +1,50 @@
+import type { WorktreeSessionState } from '../store/modules/worktree.types'
 import { describe, expect, it, vi } from 'vitest'
+import { EMPTY_SESSION_STATE } from '../store/modules/worktree.utils'
 import {
   addDraftAttachments,
   canAddDraftAttachments,
   draftAttachmentIds,
+  interceptsSubmit,
   NO_DRAFT_ATTACHMENTS,
   removeDraftAttachment,
   resolveAccessModeGroup,
+  showsModeSelect,
 } from './mode-select.utils'
+
+function sessionState(patch: Partial<WorktreeSessionState> = {}): WorktreeSessionState {
+  return { ...EMPTY_SESSION_STATE, ...patch }
+}
+
+describe('工作树模式选择框的可见性与发送拦截（issue #648）', () => {
+  it('未校准的会话不得把 isGit 当成 true，未知或非 git 都不渲染控件', () => {
+    expect(EMPTY_SESSION_STATE.isGit).toBeNull()
+    expect(sessionState().isGit).toBeNull()
+    expect(showsModeSelect(sessionState({ isGit: null }))).toBe(false)
+    expect(showsModeSelect(sessionState({ isGit: false }))).toBe(false)
+    expect(showsModeSelect(sessionState({ isGit: null, mode: 'pending' }))).toBe(false)
+  })
+
+  it('只有在确认为 git 且未处于工作树模式时才渲染控件', () => {
+    expect(showsModeSelect(sessionState({ isGit: true, mode: 'local' }))).toBe(true)
+    expect(showsModeSelect(sessionState({ isGit: true, mode: 'pending' }))).toBe(true)
+    expect(showsModeSelect(sessionState({ isGit: true, mode: 'worktree' }))).toBe(false)
+  })
+
+  it('拦截条件与渲染条件一致：控件不显示就绝不吞发送事件', () => {
+    for (const isGit of [null, false]) {
+      const state = sessionState({ isGit, mode: 'pending' })
+      expect(showsModeSelect(state)).toBe(false)
+      expect(interceptsSubmit(state)).toBe(false)
+    }
+  })
+
+  it('仅本地/待建工作树的已校准会话拦截发送', () => {
+    expect(interceptsSubmit(sessionState({ isGit: true, mode: 'pending' }))).toBe(true)
+    expect(interceptsSubmit(sessionState({ isGit: true, mode: 'local' }))).toBe(false)
+    expect(interceptsSubmit(sessionState({ isGit: true, mode: 'worktree' }))).toBe(false)
+  })
+})
 
 describe('draftAttachmentIds', () => {
   it('prefers the alpha attachmentIds field', () => {

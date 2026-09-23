@@ -1,6 +1,10 @@
 import type { RegisterController } from 'dsh-tauri/client'
+import { Icon, IconButton, StateDot } from 'dsh-tauri-ui/client'
 import { defineRegister } from 'dsh-tauri/client'
+import { createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import {
+  PET_ICON_ATTRIBUTE,
   PET_ICON_RETRY_MAX,
   PET_ICON_RETRY_MS,
   SETTINGS_TRIGGER_SELECTOR,
@@ -11,40 +15,25 @@ import { loadPetStatus, togglePet } from '../service/pet'
 import { store } from '../store'
 import {
   applySettingsRow,
-  createIconButton,
   isRailTrigger,
+  PetPawIcon,
   revertSettingsRow,
-  syncIconState,
 } from './sidebar-icon.utils'
 
 /**
- * register/sidebar-icon.ts — 侧栏「桌宠入口」DOM 补丁。
- *
- * 入口是 `.sidebar.settings` 容器（dsh-tauri-ui 的设置触发器所在处）的子元素：紧贴
- * `.dshp-settings-trigger` 右侧的原生按钮，样式复刻官方 iconButton。按钮两态（绿点 =
- * 已启用），点击即切换启用状态，不弹面板（设置走 settings.section 页）。
- *
- * 挂载策略：MutationObserver 监听 document.body，侧栏就绪后插入并持续看护（React
- * 重渲染容器后自动补插）；guard 属性 + 位置校验防止重复插入与死循环。观察器、重试
- * 计时器、订阅、事件与收尾全部登记进控制器，卸载即释放。
+ * 侧栏桌宠入口补丁：入口由 dsh-tauri-ui 的 IconButton 渲染，插在 `.dshp-settings-trigger`
+ * 右侧；两态（绿点 = 已启用），点击切换启用状态，设置页走 settings.section。
  */
 export const sidebarIconFeature = defineRegister((controller) => {
   registerSidebarPetIcon(controller)
 })
-
-// --- internal ---
 
 /** 当前是否启用（绿点两态的唯一真值来自共享 store）。 */
 function iconActive(): boolean {
   return store.pet.$state.status?.enabled ?? false
 }
 
-/**
- * 切换桌宠启用状态（失败由服务层记录，设置页内有完整错误展示）。
- *
- * 纯持久开关：关掉就落盘 `enabled=false`，重启后不会自己再起来。用户点这个按钮的语义
- * 是「关掉宠物」，不是「这次先收起来」。
- */
+/** 纯持久开关：关掉即落盘 `enabled=false`，重启后不会自己再起来（失败由服务层记录）。 */
 async function toggleEnabled(): Promise<void> {
   await togglePet({ enabled: !iconActive() })
 }
@@ -53,24 +42,54 @@ function registerSidebarPetIcon(controller: RegisterController): void {
   if (typeof document === 'undefined')
     return
 
-  const button = createIconButton(locale.text('name'))
-  /** 当前打过设置行类的宿主（卸载时移除，React 重渲染换宿主时随旧节点废弃）。 */
+  const label = locale.text('name')
+  // 按钮渲染在脱离文档的 React 根里再搬进侧栏：根外收不到合成事件（交互走原生监听），
+  // 卸载前必须搬回容器（React 只从自己的容器里摘节点）。
+  const entryHost = document.createElement('div')
+  const entryRoot = createRoot(entryHost)
+  let button: HTMLButtonElement | undefined
   let rowHost: HTMLElement | undefined
-  /** 上一次做过内联宽度修正的触发器（折叠态/卸载时撤销）。 */
   let patchedTrigger: HTMLElement | undefined
-  /** 上次修正时触发器是否为折叠态（Rail），状态翻转时需重写内联样式。 */
   let patchedRail: boolean | undefined
 
   const onClick = (): void => {
     void toggleEnabled()
   }
-  button.addEventListener('click', onClick)
-  controller.add(() => button.removeEventListener('click', onClick))
 
-  // 状态缓存订阅：绿点两态随 store 变化；首屏再拉取一次权威状态。
-  controller.add(store.pet.$subscribe(() => syncIconState(button, iconActive())))
-  void loadPetStatus()
-  syncIconState(button, iconActive())
+  function render(): void {
+    const active = iconActive()
+    entryRoot.render(createElement(
+      IconButton,
+      {
+        'variant': 'round',
+        'className': 'dshp-pet__icon-entry',
+        'icon': createElement(Icon, { as: PetPawIcon }),
+        'aria-label': label,
+        'aria-pressed': active,
+      },
+      active
+        ? createElement(
+            'span',
+            { className: 'dshp-pet__icon-dot' },
+            createElement(StateDot, { state: 'done', size: 6 }),
+          )
+        : null,
+    ))
+  }
+
+  /** 按钮由 React 异步渲染进宿主，落到宿主后才挂守卫属性、提示气泡与点击监听。 */
+  function capture(): void {
+    if (button !== undefined)
+      return
+    const node = entryHost.firstElementChild
+    if (!(node instanceof HTMLButtonElement))
+      return
+    button = node
+    button.setAttribute(PET_ICON_ATTRIBUTE, '1')
+    button.setAttribute('data-tip', label)
+    button.addEventListener('click', onClick)
+    scan()
+  }
 
   /** 行布局只在宿主/触发器/折叠态真的变化时才重写（观察器回调高频）。 */
   function applyRowStyles(host: HTMLElement, trigger: HTMLElement): void {
@@ -89,10 +108,9 @@ function registerSidebarPetIcon(controller: RegisterController): void {
     if (!trigger?.parentElement)
       return
     applyRowStyles(trigger.parentElement, trigger)
-    if (button.isConnected && button.previousElementSibling === trigger)
+    if (button === undefined || (button.isConnected && button.previousElementSibling === trigger))
       return
     trigger.after(button)
-    syncIconState(button, iconActive())
   }
 
   function scan(): void {
@@ -102,22 +120,31 @@ function registerSidebarPetIcon(controller: RegisterController): void {
     ensurePlaced()
   }
 
+  // 按钮异步落到宿主，宿主一变就去认领；两态随 store 变化，首屏再拉一次权威状态。
+  controller.observe(entryHost, capture, { childList: true })
+  render()
+  controller.add(store.pet.$subscribe(render))
+  void loadPetStatus()
+
   controller.observe(document.body, scan, { childList: true, subtree: true })
 
-  // 观察器已覆盖侧栏子树，这里再保留一条短暂轮询兜底（侧栏出现即停、最多
-  // PET_ICON_RETRY_MAX 次）：应用晚挂载时可能长时间没有任何 DOM 变更。
+  // 观察器覆盖不到「应用晚挂载、长时间无 DOM 变更」的空窗，补一条短暂轮询（侧栏出现即停）。
   let tries = 0
   const stopPolling = controller.interval(() => {
     scan()
     if (document.querySelector(SIDEBAR_SELECTOR) || ++tries > PET_ICON_RETRY_MAX)
       stopPolling()
   }, PET_ICON_RETRY_MS)
-  // 首轮立即尝试（侧栏可能已就绪）。
   scan()
 
   // 收尾：注册顺序保证它在观察器断开之后执行（否则移除按钮会触发 scan 重新插入）。
   controller.add(() => {
-    button.remove()
+    if (button !== undefined) {
+      button.removeEventListener('click', onClick)
+      entryHost.append(button)
+      button = undefined
+    }
+    entryRoot.unmount()
     revertSettingsRow(rowHost, patchedTrigger)
     rowHost = undefined
     patchedTrigger = undefined

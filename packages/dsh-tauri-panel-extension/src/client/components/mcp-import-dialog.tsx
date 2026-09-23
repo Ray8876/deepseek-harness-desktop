@@ -1,10 +1,7 @@
 import type { ReactElement } from 'react'
 import type { Translate } from '../locales/index.types'
 import type { McpImportItem } from './mcp-tab.types'
-import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-import { useMountStyle } from 'dsh-tauri-ui/client'
-import { MCP_IMPORT_DIALOG_STYLE_ID } from '../constants'
-import mcpImportDialogStyle from './mcp-import-dialog.cssr'
+import { Button, Checkbox, Modal, Tag } from 'dsh-tauri-ui/client'
 import { importGroups } from './mcp-tab.utils'
 
 export interface McpImportDialogProps {
@@ -20,7 +17,6 @@ export interface McpImportDialogProps {
 }
 
 export function McpImportDialog(props: McpImportDialogProps): ReactElement {
-  useMountStyle(mcpImportDialogStyle, MCP_IMPORT_DIALOG_STYLE_ID)
   const { t, open, items, busy, formError, onClose, onToggle, onToggleGroup, onImport } = props
   return (
     <Modal
@@ -45,17 +41,14 @@ export function McpImportDialog(props: McpImportDialogProps): ReactElement {
               return (
                 <section className="dshp-extension__import-group" key={group.agent}>
                   <div className="dshp-extension__import-head">
-                    <span className="dshp-extension__tag" data-kind="source">{group.label}</span>
+                    <Tag tone="info">{group.label}</Tag>
                     <span className="dshp-extension__import-count">{group.items.length}</span>
                     {selectable.length > 0 && (
-                      <label className="dshp-extension__import-all">
-                        <input
-                          type="checkbox"
-                          checked={allChecked}
-                          onChange={event => onToggleGroup(selectable, event.target.checked)}
-                        />
-                        {t('importSelectAll')}
-                      </label>
+                      <div className="dshp-extension__import-all">
+                        <Checkbox checked={allChecked} onChange={next => onToggleGroup(selectable, next)}>
+                          {t('importSelectAll')}
+                        </Checkbox>
+                      </div>
                     )}
                   </div>
                   <ul className="dshp-extension__cards dshp-extension__cards--single">
@@ -66,17 +59,16 @@ export function McpImportDialog(props: McpImportDialogProps): ReactElement {
                       return (
                         <li className={`dshp-extension__card${item.existing ? ' dshp-extension__card--muted' : ''}`} key={`${item.server.agent}/${item.server.name}`}>
                           <div className="dshp-extension__card-top">
-                            <label className={`dshp-extension__import-choice${item.existing ? ' dshp-extension__import-choice--disabled' : ''}`}>
-                              <input
-                                type="checkbox"
-                                checked={item.checked}
-                                disabled={item.existing}
-                                onChange={event => onToggle(index, event.target.checked)}
-                              />
+                            <Checkbox
+                              checked={item.checked}
+                              disabled={item.existing}
+                              onChange={next => onToggle(index, next)}
+                              title={item.server.name}
+                            >
                               <strong className="dshp-extension__card-title" title={item.server.name}>{item.server.name}</strong>
-                            </label>
-                            <span className="dshp-extension__tag">{item.server.transport}</span>
-                            {item.existing && <span className="dshp-extension__tag">{t('importExisting')}</span>}
+                            </Checkbox>
+                            <Tag tone="neutral">{item.server.transport}</Tag>
+                            {item.existing && <Tag tone="quiet">{t('importExisting')}</Tag>}
                           </div>
                           <p className="dshp-extension__card-desc" title={command}>{command}</p>
                         </li>

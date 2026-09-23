@@ -42,7 +42,15 @@ describe('setup error page copy-logs contract (SYST-04)', () => {
 
   it('decorates the button with the Copy icon from the project icon set', () => {
     const source = readFileSync(new URL('../src/layout/components/setup.tsx', import.meta.url), 'utf8')
-    expect(source).toContain('Copy')
-    expect(source).toContain('@gravity-ui/icons')
+    expect(source).toContain(`from '@gravity-ui/icons'`)
+
+    // 图标必须落在 copy_logs 按钮自己的 JSX 里，光有 import 不算。
+    const label = source.indexOf(`t('buttons.copy_logs')`)
+    const open = source.lastIndexOf('<button', label)
+    const close = source.indexOf('</button>', label)
+    expect(label).toBeGreaterThan(-1)
+    expect(open).toBeGreaterThan(-1)
+    expect(close).toBeGreaterThan(label)
+    expect(source.slice(open, close)).toContain('<Copy')
   })
 })

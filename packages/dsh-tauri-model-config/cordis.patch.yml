@@ -1,6 +1,5 @@
-# 官方「模型」设置页：本插件是它的完整 fork（新增「支持图片输入」开关、打开配置文件、
-# 从提供方端点补全模型上限）。两者在 `settings.section/models` 上互斥，同开会在
-# 加载期报槽位重复声明，因此必须关掉官方入口。
+# 官方「模型」设置页：本插件是它的完整 fork，注册同一个 `settings.section/models` 声明。
+# 两者在加载期互斥（同开会报槽位重复声明），因此必须关掉官方入口。
 - id: ui-settings-models
   disabled: true
 

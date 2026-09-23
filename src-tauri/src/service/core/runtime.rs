@@ -313,15 +313,21 @@ fn link_required_plugins(app_handle: &AppHandle, core_root: &Path) -> Result<(),
     })?;
 
     let presets = crate::service::plugin::load_presets(app_handle);
-    let internal_ids: HashSet<String> = presets
+    // 被核心吸收的内置插件（上限已被超越）不再链接到核心根：与启动退役、自愈的
+    // 判定同源，避免为已卸载插件留下悬空入口。
+    let core_version = crate::service::core::active_version(app_handle);
+    let internal: Vec<_> = presets
         .iter()
-        .filter(|preset| preset.internal)
+        .filter(|preset| preset.internal && !preset.unsupported_on(core_version.as_deref()))
+        .collect();
+    let internal_ids: HashSet<String> = internal
+        .iter()
         .map(|preset| crate::service::plugin::installed_name(preset).to_string())
         .collect();
 
     // 内置插件必须始终从当前安装包资源（debug 时为 workspace 源码）取源，不能信任
     // profile 中旧版本遗留的 link 路径。这样应用升级后旧 link 会被精确替换。
-    for preset in presets.iter().filter(|preset| preset.internal) {
+    for preset in internal {
         let name = crate::service::plugin::installed_name(preset);
         let Some(source) = crate::service::plugin::bundled_plugin_dir(app_handle, &preset.id)
         else {

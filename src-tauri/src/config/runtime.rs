@@ -624,9 +624,6 @@ pub struct RuntimeInfo {
     pub log_path: String,
     pub platform: String,
     pub arch: String,
-    /// 依赖自动下载是否被环境禁用（E2E）。前端据此把「装配失败」渲染成
-    /// 「下载已被环境禁用」，而不是当成真实故障。
-    pub auto_download_disabled: bool,
 }
 
 pub fn runtime_info<R: Runtime>(app: &AppHandle<R>, port: u16) -> RuntimeInfo {
@@ -641,7 +638,6 @@ pub fn runtime_info<R: Runtime>(app: &AppHandle<R>, port: u16) -> RuntimeInfo {
         log_path: get_service_log_path(app).to_string_lossy().into_owned(),
         platform: env::consts::OS.to_string(),
         arch: env::consts::ARCH.to_string(),
-        auto_download_disabled: crate::config::setting::auto_download_disabled(),
     }
 }
 

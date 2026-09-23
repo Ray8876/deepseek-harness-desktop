@@ -37,9 +37,33 @@ describe('configPlugin preset chip', () => {
     expect(source).toContain('plugins.preset')
   })
 
+  it('renders internal plugins in a collapsible group instead of hiding them', () => {
+    const source = readFileSync(new URL('../src/ui/config/plugin.tsx', import.meta.url), 'utf8')
+    expect(source, '内置插件分组标题').toContain('plugins.builtin_title')
+    expect(source, '内置插件默认折叠').toContain('const [showInternal, toggleShowInternal] = useToggle()')
+    expect(source, '内置插件与可管理插件分开成两个列表').toContain('const managedPlugins = plugins.filter(plugin => !plugin.internal)')
+    expect(source, '内置插件行由分组条件渲染').toContain('cond={internalPlugins.length > 0}')
+  })
+
+  it('drives the empty state from the managed list only', () => {
+    const source = readFileSync(new URL('../src/ui/config/plugin.tsx', import.meta.url), 'utf8')
+    // 仅剩内置插件时，可管理列表为空态必须显式提示，而不是留下悬空的折叠分组。
+    expect(source, '空态绑定可管理插件列表').toContain(`<If cond={managedPlugins.length > 0} else={<Empty>{t('plugins.empty')}</Empty>}>`)
+  })
+
   it('guards the chip on recommended (preset, non-internal)', () => {
     const source = readFileSync(new URL('../src/ui/config/plugin.tsx', import.meta.url), 'utf8')
-    expect(source).toContain('!plugin.internal && plugin.recommended')
+    // 预设 chip 只对「预设且非内置」渲染：内置插件即便在预设清单中也不打「预设」标。
+    expect(source, '预设 chip 仅对非内置的 recommended 渲染').toContain('cond={!plugin.internal && plugin.recommended}')
+    // 内置插件保留「内置」徽标，但与普通插件分组隔离。
+    expect(source).toContain('plugins.builtin')
+  })
+
+  it('withholds uninstall/disable/snapshot from internal plugins', () => {
+    const source = readFileSync(new URL('../src/ui/config/plugin.tsx', import.meta.url), 'utf8')
+    expect(source, '禁用入口排除内置插件').toContain('cond={!plugin.internal && !plugin.patchDisabled && !plugin.disabled}')
+    expect(source, '启用入口排除内置插件的桌面禁用态').toContain('cond={plugin.patchDisabled || (!plugin.internal && plugin.disabled)}')
+    expect(source, '快照入口由 !plugin.internal 守卫').toContain('<If cond={!plugin.internal}>')
   })
 })
 

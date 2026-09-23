@@ -1,16 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { resetTestDshHome } from '../../../../.test/test-utils'
-import { cleaner } from './cleaner'
-import { jobs } from './jobs'
+import { resetTestDshHome, testDshHome } from '../../../../.test/test-utils'
+
+const dshHome = vi.hoisted(() => ({ value: '' }))
 
 vi.mock('dsh-tauri', async (importOriginal) => {
   const actual = await importOriginal<typeof import('dsh-tauri')>()
-  const { testDshHome: home } = await import('../../../../.test/test-utils')
-  return { ...actual, DSH_HOME: home }
+  return { ...actual, DSH_HOME: dshHome.value }
 })
 
-beforeEach(() => {
+dshHome.value = testDshHome
+
+type Cleaner = typeof import('./cleaner')['cleaner']
+type Jobs = typeof import('./jobs')['jobs']
+
+let cleaner: Cleaner
+let jobs: Jobs
+
+beforeEach(async () => {
+  vi.resetModules()
   resetTestDshHome()
+  const [cleanerModule, jobsModule] = await Promise.all([import('./cleaner'), import('./jobs')])
+  cleaner = cleanerModule.cleaner
+  jobs = jobsModule.jobs
 })
 
 async function waitFor(predicate: () => boolean, timeoutMs = 20_000): Promise<void> {

@@ -22,3 +22,6 @@
 [submodule "source/deepseek-harness"]
 	path = source/deepseek-harness
 	url = https://github.com/deepseek-ai/deepseek-harness
+[submodule "source/zcode"]
+	path = source/zcode
+	url = https://github.com/zai-org/ZCode.git

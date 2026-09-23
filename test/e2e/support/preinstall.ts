@@ -4,8 +4,8 @@
  * 引导页由 `preinstall_pending()` 门控（`src-tauri/src/service/plugin/preset.rs:532-545`）：
  * `.store.test.dat` 的 `preinstall_done` 为假、或 preset 指纹与当前内容不一致时出现，
  * 用户装完/跳过后才拉起服务。harness 每次启动都会删掉 `.store.test.dat`
- * （`resetTestStore()`），所以走真实装配车道（`disableDownload: false`）的用例必然
- * 先过这一关——不过关就没有 `serviceHealthy`，也就没有 iframe。
+ * （`resetTestStore()`），所以桌面端冒烟必然先过这一关——不过关就没有
+ * `serviceHealthy`，也就没有 iframe。
  *
  * 引导页自身的用例归批次 `08`；这里只做「跳过它并让启动继续」。
  */

@@ -1,5 +1,5 @@
 import type { HarnessCore } from '@/types'
-import { ArrowRotateRight, CircleArrowDown as DownloadIcon, FolderOpen } from '@gravity-ui/icons'
+import { ArrowRotateRight, ChevronRight, CircleArrowDown as DownloadIcon, FolderOpen } from '@gravity-ui/icons'
 import { Button, Checkbox, Chip, Description, Label, Spinner } from '@heroui/react'
 import { useOverlay } from '@overlastic/react'
 import { useToggle } from '@reause/core'
@@ -17,7 +17,7 @@ import { useInvalidateOnSettingUpdated } from '@/hooks/use-invalidate-on-setting
 import { store } from '@/store'
 import { useCoreBreakingConfirm } from '@/ui/config/hooks/use-core-breaking-confirm'
 import { DownloadCoreDialog } from '@/ui/dialog/update-core'
-import { compareVersions, isCoreBelowBaseline } from '@/utils/core-version'
+import { compareVersions, isCoreUnsupported, MIN_SUPPORTED_CORE_VERSION } from '@/utils/core-version'
 import { silence } from '@/utils/silence'
 import { toast } from '@/utils/toast'
 
@@ -25,7 +25,7 @@ import { toast } from '@/utils/toast'
  * 「核心」面板：管理 Harness 引擎来源与多版本。
  *
  * - 列表来自 `get_cores` 查询（`setting_updated` 事件一并失效刷新）：
- *   `local` = 用户通过 CLI 全局安装的本地核心（存在且不低于内置插件基线时优先使用，
+ *   `local` = 用户通过 CLI 全局安装的本地核心（存在且不低于最低支持基线时优先使用，
  *   需求 3；低于基线时后端改用预打包核心，行内标注「不兼容」并给出更新提示）；
  *   `app-<tag>` = deepseek-harness-pkg 各发布版本（GitHub releases 拉取失败时
  *   降级为 git tags / 磁盘扫描，仅显示已下载版本）。预览版（Pre-release label
@@ -84,6 +84,8 @@ export function ConfigCore() {
 
   /** 行内操作进行中的核心 id（该行的下载/卸载按钮显示 Spinner 并禁用重复点击） */
   const [busyId, setBusyId] = useState<string | null>(null)
+  /** 「不兼容版本」分组是否展开：默认折叠，旧版本不参与首选 */
+  const [showIncompatible, setShowIncompatible] = useState(false)
   const [refreshing, toggleRefreshing] = useToggle()
 
   // 本地核心未检测到时不渲染 local 行（保留 local_missing_hint 提示）
@@ -103,7 +105,13 @@ export function ConfigCore() {
   const localCore = cores.find(c => c.source === 'local')
   const currentRows = rows.filter(core => !core.orphaned)
   const orphanRows = rows.filter(core => core.orphaned)
-  const displayRows = [...currentRows, ...orphanRows]
+  // 低于最低支持基线的旧版本统一排到最后，收进默认折叠的「不兼容版本」分组：它们无法
+  // 加载随包内置插件（issue #596），与可用版本并列只会让用户误选。
+  const orderedRows = [...currentRows, ...orphanRows]
+  const incompatibleRows = orderedRows.filter(core => isUnsupportedCore(core))
+  const displayRows = [...orderedRows.filter(core => !isUnsupportedCore(core)), ...incompatibleRows]
+  /** 「已废弃」分组头锚点：取重排后的首个已废弃行，避免分组头落进折叠区里 */
+  const firstOrphanRow = displayRows.find(core => core.orphaned)
 
   // 本地核心是否有新版可更新：仅当存在更新的预打包发布时才显示「更新本地核心」。
   // 版本行按 releases 最新在前，取第一个**非预览版** app 版本作为"当前最新可用
@@ -129,12 +137,12 @@ export function ConfigCore() {
   async function onActivate(core: HarnessCore) {
     if (core.active || busy || !core.present)
       return
-    // 低于内置插件基线的本地核心无法加载随包插件（issue #596）：桌面端此时使用
+    // 低于最低支持基线的本地核心无法加载随包插件（issue #596）：桌面端此时使用
     // 预打包核心，激活入口改为给出可操作提示，而不是切过去再撞一次启动失败。
     if (isUnsupportedLocal(core)) {
       toast(t('core.local_unsupported_toast'), {
         variant: 'warning',
-        description: t('core.local_unsupported_hint', { version: core.recommendedVersion ?? '' }),
+        description: t('core.local_unsupported_hint', { version: MIN_SUPPORTED_CORE_VERSION }),
         timeout: 10_000,
       })
       return
@@ -316,14 +324,31 @@ export function ConfigCore() {
       {/* 加载 / 失败 / 列表 */}
       <Panel.Loadable loading={loading} error={error}>
         <div className="flex flex-col gap-4">
+          {/* 本地核心提示：未检测到时说明如何安装。放在列表首位，先解释「为什么没有本地行」 */}
+          <If cond={!localCore?.present}>
+            <Empty>{t('core.local_missing_hint')}</Empty>
+          </If>
           {displayRows.map(core => (
             <Fragment key={core.id}>
-              <If cond={core.orphaned && (core === orphanRows[0])}>
+              {/* 「不兼容版本」分组头：默认折叠，点标题展开/收起 */}
+              <If cond={core === incompatibleRows[0]}>
+                <button
+                  type="button"
+                  className="flex items-center gap-1 px-1 pt-2 text-left text-xs font-medium text-muted"
+                  aria-expanded={showIncompatible}
+                  onClick={() => setShowIncompatible(value => !value)}
+                >
+                  <ChevronRight className={showIncompatible ? 'size-3.5 rotate-90' : 'size-3.5'} />
+                  {t('core.incompatible_title', { count: incompatibleRows.length })}
+                </button>
+              </If>
+              <If cond={core.orphaned && (core === firstOrphanRow)}>
                 <div className="px-1 pt-2 text-xs font-medium text-muted">
                   {t('core.orphaned_title')}
                 </div>
               </If>
               <Item
+                className={!showIncompatible && isUnsupportedCore(core) ? 'hidden' : undefined}
                 onClick={core.present && !core.active ? () => onActivate(core) : undefined}
                 left={(
                   <>
@@ -333,11 +358,6 @@ export function ConfigCore() {
                     <If cond={core.source === 'local'}>
                       <Chip size="sm" variant="soft" color="accent" className="shrink-0 font-medium">
                         {t('core.local')}
-                      </Chip>
-                    </If>
-                    <If cond={core.source === 'app'}>
-                      <Chip size="sm" variant="soft" color="default" className="shrink-0 font-medium">
-                        {t('core.app')}
                       </Chip>
                     </If>
                     <If cond={core.orphaned}>
@@ -351,7 +371,7 @@ export function ConfigCore() {
                         {t('core.preview')}
                       </Chip>
                     </If>
-                    {/* 低于内置插件基线的本地核心：桌面端改用预打包核心，激活会被拒绝并给出更新提示 */}
+                    {/* 低于最低支持基线的本地核心：桌面端改用预打包核心，激活会被拒绝并给出更新提示 */}
                     <If cond={isUnsupportedLocal(core)}>
                       <Chip size="sm" variant="soft" color="danger" className="shrink-0 font-medium">
                         {t('core.local_unsupported')}
@@ -451,10 +471,6 @@ export function ConfigCore() {
               />
             </Fragment>
           ))}
-          {/* 本地核心提示：未检测到时说明如何安装 */}
-          <If cond={!localCore?.present}>
-            <Empty>{t('core.local_missing_hint')}</Empty>
-          </If>
         </div>
       </Panel.Loadable>
 
@@ -471,9 +487,20 @@ function displayVersion(version: HarnessCore): string {
 }
 
 /**
- * 本地核心是否低于内置插件基线（推荐核心版本）。低于基线时随包内置插件无法加载
- * （见 `isCoreBelowBaseline`），桌面端自动改用预打包核心。
+ * 本地核心是否低于最低支持基线。判据与「不兼容版本」分组完全一致（同一基线，
+ * `isUnsupportedCore`），低于基线时随包内置插件无法加载（issue #596），桌面端自动
+ * 改用预打包核心。不可与推荐核心版本（`version-recommend.json`）混用——后者只用于
+ * 更新提示，拿它当基线会把「高于基线、低于推荐版本」的可用本地核心误判为不兼容
+ * （推荐版本为 0.1.7-alpha.1 时，0.1.5-rc.3 就是这么被挡下的）。
  */
 function isUnsupportedLocal(core: HarnessCore): boolean {
-  return core.source === 'local' && core.present && isCoreBelowBaseline(core.version, core.recommendedVersion)
+  return core.source === 'local' && core.present && isUnsupportedCore(core)
+}
+
+/**
+ * 核心是否低于最低支持基线（按版本判定，与来源无关）。低于基线的旧版本无法加载随包
+ * 内置插件（issue #596），核心列表把它们收进默认折叠的「不兼容版本」分组。
+ */
+function isUnsupportedCore(core: HarnessCore): boolean {
+  return isCoreUnsupported(core.version || core.tag)
 }

@@ -64,6 +64,10 @@ pub fn run() {
             // 残留并把原生模块 DLL（如 sharp 的 libvips-42.dll）锁在内存，
             // 下次启动重新解压时会失败（Windows os error 32）
             tauri::RunEvent::Exit => {
+                // 进行中的插件安装子进程是独立进程组，父进程退出不会连带回收；
+                // 不显式结束就会留下占着档案 / pnpm store 的孤儿，让下一次启动
+                // 永久卡在安装阶段（且日志无任何输出）。必须先于其它收尾动作。
+                service::plugin::terminate_active_installs_blocking();
                 let setting = config::get_store_dat_setting(app_handle);
                 if setting.installed {
                     service::workflow::stop_on_exit(app_handle);

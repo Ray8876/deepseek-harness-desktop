@@ -60,6 +60,15 @@ pub const DSH_HOME_DIR_NAME: &str = ".dsh";
 /// 同时运行时互不干扰，也不会互相污染对方的会话数据。
 pub const DSH_HOME_DEV_DIR_NAME: &str = ".dsh.dev";
 
+/// 应用标识符：`app_data_dir()` / `app_local_data_dir()` 的目录名，必须与
+/// `tauri.conf.json` 的 `identifier` 逐字一致（日志目录同样由它派生）。
+pub const APP_IDENTIFIER: &str = "dsh-tauri";
+
+/// 历史应用标识符（`io.github.hairyf.deepseek-harness-desktop`）：标识符缩短为
+/// `dsh-tauri` 后旧用户的 app-data 目录名，仅用于迁移来源识别（见
+/// `service::migrate::migrate_app_data_dir`）。
+pub const LEGACY_APP_IDENTIFIER: &str = "io.github.hairyf.deepseek-harness-desktop";
+
 /// 开发构建在 AppData 下使用的独立子目录。Node、Harness、pnpm、Git 等可执行
 /// 核心不应与 release 共用，否则开发版更新/切换核心会替换正在运行的生产文件。
 pub const APP_DATA_DEV_DIR_NAME: &str = "dev";
@@ -102,19 +111,6 @@ pub const STORE_DAT_TEST_FILE: &str = ".store.test.dat";
 /// E2E 信号环境变量：与 `tauri-plugin-wdio-webdriver` 的门控同源——该插件只在
 /// 此变量存在时监听，应用也据此切到测试 Store，二者不会各走各的。
 pub const E2E_PORT_ENV_VAR: &str = "TAURI_WEBDRIVER_PORT";
-
-/// 手动开关：为 `true` 时禁用环境（Node/pnpm/Git）与 Harness 核心的自动下载。
-///
-/// 默认 `false`——正常使用不受影响。置 `true` 后 `install_dependencies` 直接返回
-/// 「未安装」、`download_core` 拒绝执行，应用只能使用已落盘的运行时与预打包核心。
-/// 想临时省流量又不想改代码时，用 `E2E_DISABLE_DOWNLOAD_ENV_VAR`。
-pub const DISABLE_AUTO_DOWNLOAD: bool = false;
-
-/// 运行期选择禁用自动下载的环境变量：值为 `1` / `true` 时生效。
-///
-/// 供 E2E 按需选择：只验壳层行为的用例可置位以跳过一次联网核对；需要覆盖
-/// 启动装配流程的用例则保持不置位，让应用正常走安装路径。
-pub const E2E_DISABLE_DOWNLOAD_ENV_VAR: &str = "DSH_E2E_DISABLE_DOWNLOAD";
 
 /// 下载缓存根的环境变量：覆盖 `<app-data>[/dev]` 这个基础目录。
 ///

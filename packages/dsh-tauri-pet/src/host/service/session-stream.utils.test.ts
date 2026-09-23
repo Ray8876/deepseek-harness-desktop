@@ -376,4 +376,71 @@ describe('petSessionReducer (host)', () => {
     expect(pushes.at(-1)!.payload).toMatchObject({ running: false })
     expect(pushes.at(-1)!.payload.status).toBeUndefined()
   })
+
+  it('remove(id) 下发 remove 载荷并丢弃累计态：移除后的 idle 兜底不再命中', () => {
+    const { reducer, pushes } = collect()
+    reducer.create(peer())
+    reducer.apply(peer(), ev('turn/start', { turn: 1 }, 1))
+
+    reducer.remove('a')
+    expect(pushes.at(-1)).toEqual({ action: 'remove', payload: { id: 'a' } })
+
+    const afterRemove = pushes.length
+    reducer.idle('a')
+    expect(pushes.length).toBe(afterRemove)
+  })
+
+  it('remove(id) 清空去重快照：与移除前同形的 payload 会重新下发', () => {
+    const { reducer, pushes } = collect()
+    reducer.create(peer())
+    reducer.remove('a')
+
+    reducer.apply(peer(), ev('session/title', {}, 2))
+    expect(pushes).toHaveLength(3)
+    expect(pushes.at(-1)!.action).toBe('update')
+    expect(pushes.at(-1)!.payload).toMatchObject({ id: 'a', running: false })
+    expect(pushes.at(-1)!.payload.status).toBeUndefined()
+    expect(pushes.at(-1)!.payload.workStatus).toBeUndefined()
+  })
+
+  it('remove(id) 清空推理节流时钟：重建后 100ms 内的推理增量立即下发', () => {
+    let t = 1000
+    const { reducer, pushes } = collect({ now: () => t })
+    reducer.apply(peer(), ev('turn/start', { turn: 1 }, 1))
+    t += 100
+    reducer.apply(peer(), ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: '思考' } }, 2))
+    expect(pushes.at(-1)!.payload).toMatchObject({ liveActivity: { kind: 'reasoning', text: '思考' } })
+    const afterReasoning = pushes.length
+
+    reducer.remove('a')
+    t += 100
+    reducer.apply(peer(), ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: '续' } }, 3))
+
+    expect(pushes.length).toBe(afterReasoning + 2)
+    expect(pushes.at(-1)!.payload).toMatchObject({ id: 'a', liveActivity: { kind: 'reasoning', text: '续' } })
+  })
+
+  it('clear() 不产生回调并清空去重快照：与清空前同形的 payload 会重新下发', () => {
+    const { reducer, pushes } = collect()
+    reducer.create(peer())
+    reducer.clear()
+    expect(pushes).toHaveLength(1)
+
+    reducer.apply(peer(), ev('session/title', {}, 2))
+    expect(pushes).toHaveLength(2)
+    expect(pushes.at(-1)!.action).toBe('update')
+    expect(pushes.at(-1)!.payload).toMatchObject({ id: 'a', running: false })
+    expect(pushes.at(-1)!.payload.status).toBeUndefined()
+  })
+
+  it('clear() 丢弃累计态：清空后的 idle 兜底不再命中', () => {
+    const { reducer, pushes } = collect()
+    reducer.create(peer())
+    reducer.apply(peer(), ev('turn/start', { turn: 1 }, 1))
+    reducer.clear()
+
+    const afterClear = pushes.length
+    reducer.idle('a')
+    expect(pushes.length).toBe(afterClear)
+  })
 })

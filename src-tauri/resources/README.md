@@ -3,8 +3,8 @@
 This directory is bundled into the installer as `resources/**`.
 
 At runtime, the application downloads everything it needs into the OS user-data
-directory (the Tauri app-data dir for identifier
-`io.github.hairyf.deepseek-harness-desktop`, e.g. `%APPDATA%/io.github.hairyf.deepseek-harness-desktop/` on Windows):
+directory (the Tauri app-data dir for identifier `dsh-tauri`, e.g.
+`%APPDATA%/dsh-tauri/` on Windows):
 
 - `runtime/` — the bundled Node.js runtime (downloaded on first run)
 - `dependencies/dsh/` — the packaged DeepSeek Harness distribution (downloaded from the
@@ -14,6 +14,13 @@ directory (the Tauri app-data dir for identifier
 - `.store.dat` — desktop settings (port, auto-start, language, etc.)
 
 No manual Node.js or pnpm installation is required.
+
+On the first launch after the identifier was shortened from
+`io.github.hairyf.deepseek-harness-desktop` to `dsh-tauri`, the app **moves** the
+whole legacy app-data directory (settings store, logs, downloaded runtime and
+`dependencies/`) into the new one, so upgrades keep their configuration. The move
+runs before the first-install check and is non-fatal on failure (legacy data stays
+in place and the next launch retries).
 
 ## `$DSH_HOME` — shared with the official Node.js install
 
@@ -62,16 +69,33 @@ that adds one entry to the JSON array:
 | ------------- | -------- | ----------------------------------------------------------------------- |
 | `id`          | yes      | Unique front-end key; must be a legal npm dependency name               |
 | `spec`        | yes      | Dependency form passed to `dsh plugin add` (npm name or `github:owner/repo`) |
+| `version`     | no       | Inclusive installed-plugin version cap for core-driven automatic removal; not an installation pin |
+| `dshSupportedVersion` | no | Highest supported core version; a newer core disables the preset in the UI and makes it eligible for automatic cleanup |
 | `name`        | yes      | Display name                                                            |
 | `description` | yes      | Shown in the wizard; bilingual (`en. · 中文`) is encouraged             |
 | `repoUrl`     | yes      | Repository page, opened via the "open repo" button                      |
 | `recommended` | no       | Green "recommended" chip, checked by default (defaults to `false`)      |
 | `fix`         | no       | Yellow "fix" chip, checked by default — reserved for Windows minimal-mode fixes (defaults to `false`) |
+| `defaultUnchecked` | no  | Listed with the "recommended" chip but **not** pre-checked in the wizard (defaults to `false`) |
 | `winOnly`     | no       | Only listed on Windows (defaults to `false`)                            |
 
 `id` must be unique across the file. The plugin itself is **not** vendored into
 this repository — it is installed on the user's machine from `spec` at setup
 time, so the PR only needs to add the JSON entry.
+
+### Core-driven automatic removal
+
+When the running core is newer than `dshSupportedVersion`, startup cleanup can
+remove the installed plugin. An optional `version` limits this cleanup to installed
+versions **less than or equal to** that cap, using semantic-version precedence.
+Higher installed versions are kept. If a cap is present but the installed version
+is unknown or invalid, or the cap itself is invalid, core-driven cleanup is skipped.
+Omitting `version` retains the previous uncapped cleanup behavior.
+
+`version` is metadata for automatic removal, **not** an installation pin: installation
+still uses `spec`. It does not change the core-based UI compatibility check or manual
+uninstall. The separate `deprecated-plugins.json` list is unaffected and continues
+to remove listed plugins independently of these version caps.
 
 ### Built-in (internal) plugins
 

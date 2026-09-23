@@ -33,7 +33,7 @@ import { defineService } from 'dsh-tauri'
 
 
 * **禁止导出其它内容**：类型归入 `types/`，常量归入 `config/`[cite: 1]。单模块专属类型与所属模块**同目录同名**（`<module>.types.ts`，见 [plugin.host.md](./plugin.host.md) 第二章）。私有函数统一收敛于文件末尾 `// --- internal ---` 且不导出[cite: 1]。
-* **常量归属**：见 [agents.plugins.md](./agents.plugins.md) 的《通用协议：常量归属》——单一消费方的常量定义在消费方文件（不导出、放 import 之后），`config/constants.ts` 只留多消费方常量。
+* **常量归属**：见 [plugin.baisc.md](./plugin.baisc.md) 的《通用协议：常量归属》——单一消费方的常量定义在消费方文件（不导出、放 import 之后），`config/constants.ts` 只留多消费方常量。
 * **类型归属**：`config/` 下**不允许**出现 `*.types.ts`；跨模块共享的宿主面类型（`SessionHost` / `PanelExtensionHost` 等）放 `host/types/index.ts`。
 
 ### 2. 动词白名单 (Verb Whitelist)

@@ -2,22 +2,19 @@ import type { ReactElement } from 'react'
 import type { McpSaveBody } from '../apis/index.type'
 import type { McpRow } from '../types'
 import type { McpEditorMode, McpEditorState, McpImportItem, McpTabProps } from './mcp-tab.types'
-import { Button, Modal, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
-import { ArrowRotateRight, Icon, PlugConnection, useMountStyle } from 'dsh-tauri-ui/client'
+import { ArrowRotateRight, Button, ChevronDown, Chip, Icon, IconButton, Menu, Modal, PlugConnection, StateDot, Tag } from 'dsh-tauri-ui/client'
 import { compact } from 'dsh-tauri/client'
 import { useEffect, useState } from 'react'
 import { deleteMcp, getImportScan, getMcp, postImportApply, postMcp, postMcpCheck, postMcpToggle } from '../apis'
-import { MCP_RESTART_INITIAL_DELAY_MS, MCP_RESTART_POLL_INTERVAL_MS, MCP_RESTART_TIMEOUT_MS, MCP_TAB_STYLE_ID } from '../constants'
+import { MCP_RESTART_INITIAL_DELAY_MS, MCP_RESTART_POLL_INTERVAL_MS, MCP_RESTART_TIMEOUT_MS } from '../constants'
 import { useTimers } from '../hooks/use-timers'
 import { restartHost } from '../service/restart'
 import { isDesktopHost } from '../service/restart.utils'
 import { McpEditorForm } from './mcp-editor-form'
 import { McpImportDialog } from './mcp-import-dialog'
-import mcpTabStyle from './mcp-tab.cssr'
 import { mapToPairs, parseMcpJson, parsePairs } from './mcp-tab.utils'
 
 export function McpTab({ t }: McpTabProps): ReactElement {
-  useMountStyle(mcpTabStyle, MCP_TAB_STYLE_ID)
   const [servers, setServers] = useState<McpRow[] | null>(null)
   const [editor, setEditor] = useState<McpEditorState | null>(null)
   const [confirmId, setConfirmId] = useState<string | null>(null)
@@ -34,6 +31,7 @@ export function McpTab({ t }: McpTabProps): ReactElement {
   const [pasteJson, setPasteJson] = useState('')
   const [pasteError, setPasteError] = useState<string | null>(null)
   const [scope, setScope] = useState<'all' | 'global' | 'profile'>('all')
+  const [scopeOpen, setScopeOpen] = useState(false)
   const [checking, setChecking] = useState<string | null>(null)
   const [globalError, setGlobalError] = useState('')
   const { later } = useTimers()
@@ -304,6 +302,12 @@ export function McpTab({ t }: McpTabProps): ReactElement {
     </div>
   )
 
+  const scopeOptions = [
+    { id: 'all', label: t('scopeAll') },
+    { id: 'global', label: t('global') },
+    { id: 'profile', label: t('profile') },
+  ]
+
   return (
     <div className="dshp-extension__section">
       <div className="dshp-extension__head">
@@ -327,15 +331,33 @@ export function McpTab({ t }: McpTabProps): ReactElement {
       <div className="dshp-extension__list-head">
         <h3>{t('mcpTab')}</h3>
         {servers !== null && <span className="dshp-extension__count">{servers.length}</span>}
-        <select className="dshp-extension__scope" aria-label={t('scope')} value={scope} onChange={event => setScope(event.target.value as typeof scope)}>
-          <option value="all">{t('scopeAll')}</option>
-          <option value="global">{t('global')}</option>
-          <option value="profile">{t('profile')}</option>
-        </select>
+        <Menu
+          open={scopeOpen}
+          onClose={() => setScopeOpen(false)}
+          onSelect={(id) => {
+            setScope(id as typeof scope)
+            setScopeOpen(false)
+          }}
+          items={scopeOptions}
+          selectedId={scope}
+          portal
+          align="end"
+          anchor={(
+            <Chip
+              variant="selector"
+              aria-label={t('scope')}
+              aria-haspopup="menu"
+              open={scopeOpen}
+              aria-expanded={scopeOpen}
+              chevron={<Icon as={ChevronDown} />}
+              onClick={() => setScopeOpen(value => !value)}
+            >
+              {scopeOptions.find(option => option.id === scope)?.label}
+            </Chip>
+          )}
+        />
         <span className="dshp-extension__spacer" />
-        <button type="button" className="dshp-extension__refresh" aria-label={t('view')} title={t('view')} disabled={busy} onClick={() => setReload(value => value + 1)}>
-          <Icon as={ArrowRotateRight} />
-        </button>
+        <IconButton variant="toolbar" icon={<Icon as={ArrowRotateRight} />} aria-label={t('view')} title={t('view')} disabled={busy} onClick={() => setReload(value => value + 1)} />
       </div>
 
       {servers === null && <p className="dshp-extension__empty">{t('loading')}</p>}
@@ -346,9 +368,9 @@ export function McpTab({ t }: McpTabProps): ReactElement {
             <li className="dshp-extension__card" key={row.id}>
               <div className="dshp-extension__card-top">
                 <strong className="dshp-extension__card-title" title={row.id}>{row.serverName}</strong>
-                <span className="dshp-extension__tag" data-kind={(row.scope ?? row.layer) === 'global' ? 'source' : undefined}>{(row.scope ?? row.layer) === 'global' ? t('scopeGlobal') : t('scopeProfile')}</span>
-                <span className="dshp-extension__tag">{row.transport}</span>
-                <span className="dshp-extension__tag" data-kind={row.disabled ? 'off' : undefined}>{row.disabled ? t('disabled') : t('enabled')}</span>
+                <Tag tone={(row.scope ?? row.layer) === 'global' ? 'info' : 'neutral'}>{(row.scope ?? row.layer) === 'global' ? t('scopeGlobal') : t('scopeProfile')}</Tag>
+                <Tag tone="neutral">{row.transport}</Tag>
+                <Tag tone={row.disabled ? 'warning' : 'neutral'}>{row.disabled ? t('disabled') : t('enabled')}</Tag>
               </div>
               <p className="dshp-extension__card-desc">
                 {row.transport === 'stdio' ? `${row.command ?? ''} ${(row.args ?? []).join(' ')}` : row.url ?? ''}

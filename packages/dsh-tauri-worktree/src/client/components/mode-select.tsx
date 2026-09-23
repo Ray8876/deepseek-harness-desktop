@@ -1,8 +1,7 @@
 import type { ReactElement } from 'react'
 import type { InputActions } from '../service/session-switch.types'
 import type { ModeSelectProps } from './mode-select.types'
-import { IconChevronDownOutline14 as ChevronDown, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
-import { CircleTree, Icon } from 'dsh-tauri-ui/client'
+import { ChevronDown, Chip, CircleTree, Icon, Menu } from 'dsh-tauri-ui/client'
 import { forEach, get } from 'dsh-tauri/client'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -19,7 +18,7 @@ import { locale } from '../locales'
 import { waitForInputActions, waitForSessionListed } from '../service/session-switch'
 import { attach, create } from '../service/worktree'
 import { store } from '../store'
-import { addDraftAttachments, canAddDraftAttachments, draftAttachmentIds, removeDraftAttachment, resolveAccessModeGroup } from './mode-select.utils'
+import { addDraftAttachments, canAddDraftAttachments, draftAttachmentIds, interceptsSubmit, removeDraftAttachment, resolveAccessModeGroup, showsModeSelect } from './mode-select.utils'
 
 export function WorktreeModeSelect(props: ModeSelectProps): ReactElement {
   const { sessionId } = props
@@ -86,7 +85,7 @@ function WorktreeModeControl({ sessionId, useInput, inputActions, sessionsRuntim
 
   // keep:effect 发送拦截依赖官方 composer 私有 DOM，没有 pre-submit 钩子可用
   useEffect(() => {
-    if (state.mode !== 'pending')
+    if (!interceptsSubmit({ isGit: state.isGit, mode: state.mode }))
       return
     const root = document.querySelector<HTMLElement>(`[${MODE_ANCHOR_ATTRIBUTE}="${CSS.escape(sessionId)}"]`)
     const composerSeat = root?.closest<HTMLElement>(COMPOSER_SEAT_SELECTOR)
@@ -168,8 +167,9 @@ function WorktreeModeControl({ sessionId, useInput, inputActions, sessionsRuntim
           inputActions.setDraft(draft)
           addDraftAttachments(inputActions, imageIds)
         }
+        // 失败必须退回 local：停在 pending 会让拦截器一直吞掉发送事件，会话彻底不可用。
         store.worktree.patch(sessionId, {
-          mode: 'pending',
+          mode: 'local',
           phase: 'error',
           loadingLabel: '',
           error: message,
@@ -177,7 +177,7 @@ function WorktreeModeControl({ sessionId, useInput, inputActions, sessionsRuntim
         // 没能切回源会话时源提示条不再渲染：错误同步到当前会话，避免静默失败。
         if (!restored) {
           store.worktree.patch(targetSessionId, {
-            mode: 'pending',
+            mode: 'local',
             phase: 'error',
             loadingLabel: '',
             error: message,
@@ -200,6 +200,9 @@ function WorktreeModeControl({ sessionId, useInput, inputActions, sessionsRuntim
       }
       if (event instanceof KeyboardEvent && (event.key !== 'Enter' || event.shiftKey || event.isComposing))
         return
+      // 没有草稿就没什么可接管的，放行；吞掉事件却什么都不做，等价于把发送键焊死。
+      if (draft.trim() === '')
+        return
       event.preventDefault()
       event.stopImmediatePropagation()
       void start()
@@ -211,30 +214,26 @@ function WorktreeModeControl({ sessionId, useInput, inputActions, sessionsRuntim
       composerSeat.removeEventListener('click', intercept, true)
       composerSeat.removeEventListener('keydown', intercept, true)
     }
-  }, [draft, imageIds, inputActions, sessionId, sessionsRuntime, state.mode, wait, workspacesRuntime])
+  }, [draft, imageIds, inputActions, sessionId, sessionsRuntime, state.isGit, state.mode, wait, workspacesRuntime])
 
-  if (state.mode === 'worktree')
-    return null
-  if (state.isGit === false)
+  if (!showsModeSelect(state))
     return null
 
   const pending = state.mode === 'pending'
   const activeLabel = pending ? locale.text('modeNewWorktree') : locale.text('modeLocal')
   const trigger = (
-    <button
-      type="button"
+    <Chip
+      variant="composerTrigger"
       aria-label={locale.text('modeLabel')}
       aria-haspopup="menu"
       aria-expanded={open}
+      open={open}
+      icon={<Icon as={CircleTree} size={14} />}
+      chevron={<Icon as={ChevronDown} />}
       onClick={() => setOpen(value => !value)}
-      className={open ? 'dshp-mode-select__trigger dshp-mode-select__trigger--open' : 'dshp-mode-select__trigger'}
     >
-      <span className="dshp-mode-select__icon">
-        <Icon as={CircleTree} size={13} />
-      </span>
       <span className="dshp-mode-select__label">{activeLabel}</span>
-      <Icon as={ChevronDown} className={open ? 'dshp-mode-select__chevron dshp-mode-select__chevron--open' : 'dshp-mode-select__chevron'} />
-    </button>
+    </Chip>
   )
 
   return (

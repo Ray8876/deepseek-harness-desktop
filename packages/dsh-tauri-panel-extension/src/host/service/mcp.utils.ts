@@ -11,6 +11,39 @@ const SERVER_NAME_RE = /^[\w-]{1,32}$/
 
 const EMPTY_PATCH = '[]'
 
+const COMMAND_TOKEN_RE = /"([^"]*)"|'([^']*)'|(\S+)/g
+
+/** 按 shell 习惯切 token，保留引号内的空格（`"C:/Program Files/node.exe" --flag`）。 */
+export function splitCommandLine(line: string): string[] {
+  const tokens: string[] = []
+  for (const match of line.matchAll(COMMAND_TOKEN_RE)) {
+    const token = match[1] ?? match[2] ?? match[3]
+    if (token !== undefined && token !== '')
+      tokens.push(token)
+  }
+  return tokens
+}
+
+/**
+ * 把 stdio 源归一成内核契约（`command` 是可执行文件，参数进 `args`）。
+ *
+ * Cursor 等客户端会把整条命令行塞进 `command`（`args` 留空），内核拿它当可执行文件
+ * spawn，条目必然起不来；写入侧拆开，历史条目读出来也走同一条归一。
+ * 显式给了 args、或本身就是一个存在的路径（含空格，如 Program Files）时原样保留。
+ */
+export function normalizeStdioCommand(command: string, args: readonly string[] | undefined): { command: string, args?: string[] } {
+  const given = args ?? []
+  if (given.length > 0)
+    return { command, args: [...given] }
+  const trimmed = command.trim()
+  if (trimmed === '' || !/\s/.test(trimmed) || existsSync(trimmed))
+    return { command }
+  const [head, ...rest] = splitCommandLine(trimmed)
+  if (head === undefined)
+    return { command }
+  return rest.length === 0 ? { command: head } : { command: head, args: rest }
+}
+
 export function normalizeMcpScope(value: unknown): McpScope {
   return value === 'global' ? 'global' : 'profile'
 }

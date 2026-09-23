@@ -26,7 +26,7 @@ pub(super) fn persist_harness_pid(app_handle: &tauri::AppHandle, pid: u32, port:
     let _ = fs::write(&path, format!("{pid}\n{port}\n"));
 }
 
-/// 启动前清扫上次崩溃残留的孤儿 Harness。端口与 PID 双重确认后才动手：
+/// 启动前清扫上次崩溃残留的孤儿 Harness。Unix 标记回收经端口与 PID 双重确认：
 /// - 标记进程已死 → 仅清理陈旧标记；
 /// - 端口占用者正是标记中的 PID → 本应用残留，结束其进程树并清标记；
 /// - 其余情况（标记不可解析、端口被其他程序占用、无法探测占用者）一律不动，
@@ -36,12 +36,12 @@ pub fn sweep_orphan_harness(app_handle: &tauri::AppHandle) {
         return;
     }
     // 先按命令行路径清扫所有从本应用 dsh 安装目录启动的孤儿 Harness 实例：
-    // 标记文件只记录最近一次会话的 PID，应用多次崩溃/强杀会遗留更早的孤儿
-    // （端口一路漂移 3081/3082/…），它们持续占用 dependencies/dsh 目录的文件
-    // 句柄，导致更新切换目录失败（INSTALL_BACKUP_FAILED, os error 32）。
-    // 路径精确匹配不会误杀用户其它 node 程序；标记中的进程若在其中会被一并
-    // 结束，随后的 PID/端口双重确认自然落空，仅清理陈旧标记。
+    // 标记文件只记录最近一次会话的 PID，应用多次崩溃/强杀会遗留更早的孤儿。
+    // Windows 按入口与父进程状态回收，不按共享标记结束另一个仍在运行的 dev 实例。
     terminate_stale_harness_processes(app_handle);
+    if cfg!(windows) {
+        return;
+    }
     let pid_file = harness_pid_path(app_handle);
     let Ok(text) = fs::read_to_string(&pid_file) else {
         return;

@@ -1,9 +1,7 @@
 import type { ReactElement } from 'react'
 import type { LocaleKey, Translate } from '../locales/index.types'
 import type { RunView } from '../types'
-import { Alarm, CircleCheck, CircleDashed, CircleStop, CircleXmark, Icon, TrashBin, useMountStyle } from 'dsh-tauri-ui/client'
-import { RUNS_TAB_STYLE_ID } from '../constants'
-import runsTabStyle from './runs-tab.cssr'
+import { Alarm, CircleCheck, CircleDashed, CircleStop, CircleXmark, Dot, Icon, IconButton, TrashBin } from 'dsh-tauri-ui/client'
 import { formatLocalTime, isRunUnread } from './schedule.utils'
 
 export interface RunsTabProps {
@@ -37,7 +35,6 @@ const STATUS_ICONS = {
 }
 
 export function RunsTab({ t, runs, readAt, readIds, emptyLabel, onOpen, onDelete }: RunsTabProps): ReactElement {
-  useMountStyle(runsTabStyle, RUNS_TAB_STYLE_ID)
   if (runs.length === 0)
     return <p className="dshp-scheduler__empty">{emptyLabel}</p>
   return (
@@ -58,23 +55,21 @@ export function RunsTab({ t, runs, readAt, readIds, emptyLabel, onOpen, onDelete
           <div style={{ flex: 1, minWidth: 0 }}>
             <span className="dshp-scheduler__card-title" title={run.taskName}>
               {run.taskName}
-              {isRunUnread(run, readAt, readIds) ? <span className="dshp-scheduler__unread-dot" /> : null}
+              {isRunUnread(run, readAt, readIds) ? <Dot state="done" /> : null}
             </span>
             <div className="dshp-scheduler__card-meta">
               <span className="dshp-scheduler__card-meta-text">{formatLocalTime(run.startedAt) ?? ''}</span>
             </div>
           </div>
-          <button
-            type="button"
-            className="dshp-scheduler__icon-button"
+          <IconButton
+            variant="action"
+            icon={<Icon as={TrashBin} size={12} />}
             aria-label={t('deleteRun')}
             onClick={(event) => {
               event.stopPropagation()
               onDelete(run.id)
             }}
-          >
-            <Icon as={TrashBin} size={12} />
-          </button>
+          />
         </li>
       ))}
     </ul>

@@ -1,28 +1,32 @@
 import type { InjectFace, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ReactNode } from 'react'
-import type { ConfigFileOpen } from '../service/model-config.ts'
+import type { SettingsNamespaceView } from '../types/remotes.ts'
 import type { en } from './locales.ts'
-
 import type { ModelsOperations } from './operations.ts'
 import type { ProviderEditorProps } from './ProviderEditor.tsx'
+
 import type { SettingsSchemaOperations } from './schema-operations.ts'
 import type {} from './slot-contract.ts'
 import type { ModelsSettingsStore, ProviderRow } from './store.ts'
-import { Button, IconPlusOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-import { useEffect, useState } from 'react'
-import { ConfigEditor } from '../components/config-editor'
-import { withDetail, withPath } from '../service/model-config.utils.ts'
-import { ensurePresets } from '../service/presets.ts'
+import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import {
+  loadEditor,
+  ModelConfigToolbar,
+  modelExtrasTranslate,
+  openConfigFile,
+  Plus,
+  saveEditor,
+  SegmentedControl,
+} from 'dsh-tauri-ui/client'
+import { useEffect, useId, useState } from 'react'
 import { CustomProviderCard } from './CustomProviderCard.tsx'
 import { ProviderEditor } from './ProviderEditor.tsx'
 import { deriveKeyRef, protocolChoices, providerUsable } from './store.ts'
 import { modelStyles as styles } from './styles.ts'
 
 export interface ModelsSectionInjected {
-
   controller: ModelsSettingsStore
   hooks: {
-
     snapshot: ModelsSettingsStore['store']
   }
 
@@ -31,9 +35,9 @@ export interface ModelsSectionInjected {
   schema: SettingsSchemaOperations
 
   t: (key: keyof typeof en) => string
-
-  openConfig: () => Promise<ConfigFileOpen>
 }
+
+type AddMode = 'catalog' | 'custom'
 
 type ModelsChildSlots = 'settings.models.provider-card' | 'settings.models.footer'
 
@@ -44,19 +48,25 @@ export type ModelsSectionProps = Partial<InjectFace<ModelsSectionInjected>> & Pr
 type ModelsSectionFace = InjectFace<ModelsSectionInjected>
 
 export interface ProviderIdentity {
-
   provider: string
-
   displayName: string
 }
 
 interface EditorTarget extends ProviderIdentity {
   settingsNs: string
   settingsPath: readonly string[]
-
   credentialRef?: string
-
   declared?: boolean
+}
+
+interface AddableRow {
+  row: ProviderRow
+  namespace: SettingsNamespaceView
+}
+
+interface CatalogDraft {
+  target: EditorTarget
+  namespace: SettingsNamespaceView
 }
 
 interface ProviderEditorRenderProps extends Pick<
@@ -142,45 +152,45 @@ export function providerCopy(template: string, target: ProviderIdentity): string
 }
 
 export function ModelsSection(props: ModelsSectionProps): ReactNode {
-  const { controller, useSnapshot, operations, schema, t, openConfig, renderSlot } = props
+  const { controller, useSnapshot, operations, schema, t, renderSlot } = props
   if (
     controller === undefined || useSnapshot === undefined || operations === undefined
-    || schema === undefined || t === undefined || openConfig === undefined
+    || schema === undefined || t === undefined
   ) {
     return null
   }
-  return <Loaded injected={{ controller, useSnapshot, operations, schema, t, openConfig }} renderSlot={renderSlot} />
+  return <Loaded injected={{ controller, useSnapshot, operations, schema, t }} renderSlot={renderSlot} />
 }
 
 function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace, renderSlot: ModelsRenderSlot }): ReactNode {
   const { controller, operations, schema, t } = injected
   const state = injected.useSnapshot(snapshot => snapshot)
   const [editing, setEditing] = useState<EditorTarget | undefined>(undefined)
-  const [adding, setAdding] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
+  const [addMode, setAddMode] = useState<AddMode>('catalog')
+
+  const [visited, setVisited] = useState<ReadonlySet<AddMode>>(() => new Set())
+
+  const [catalogBusy, setCatalogBusy] = useState(false)
+  const [customBusy, setCustomBusy] = useState(false)
+
+  const addId = useId()
   const [deleteTarget, setDeleteTarget] = useState<EditorTarget | undefined>(undefined)
   const [deleting, setDeleting] = useState(false)
   const [deleteFailure, setDeleteFailure] = useState<string | undefined>(undefined)
   const [savedTarget, setSavedTarget] = useState<ProviderIdentity | undefined>(undefined)
-  const [declaring, setDeclaring] = useState(false)
   const [dismissedSetup, setDismissedSetup] = useState<ReadonlySet<string>>(() => new Set())
-  const [configOpen, setConfigOpen] = useState<{ text: string, failed: boolean } | undefined>(undefined)
-
-  // 能力表是自动配置填图片与思考的来源，进页面就先取回来，别让第一次点击等下载。
+  const [editor, setEditor] = useState<Awaited<ReturnType<typeof loadEditor>>>()
   useEffect(() => {
-    void ensurePresets()
-  }, [])
-
-  const openConfigFile = (): void => {
-    setConfigOpen(undefined)
-    void injected.openConfig().then((outcome) => {
-      setConfigOpen(outcome.ok
-        ? {
-            text: withPath(outcome.opened === 'file' ? t('openConfigFileLanded') : t('openConfigFileDirectory'), outcome.path),
-            failed: false,
-          }
-        : { text: withDetail(t('openConfigFileFailed'), outcome.error), failed: true })
+    let current = true
+    void loadEditor().then((preference) => {
+      if (current)
+        setEditor(preference)
     })
-  }
+    return () => {
+      current = false
+    }
+  }, [])
 
   const announceSaved = (target: ProviderIdentity): void => {
     void controller.load().then(() => {
@@ -188,10 +198,15 @@ function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace, renderS
     })
   }
 
-  const closeEditor = (changed: boolean, target: ProviderIdentity): void => {
+  const closeAdd = (): void => {
     setEditing(undefined)
-    setAdding(false)
-    setDeclaring(false)
+    setAddOpen(false)
+    setCatalogBusy(false)
+    setCustomBusy(false)
+  }
+
+  const closeEditor = (changed: boolean, target: ProviderIdentity): void => {
+    closeAdd()
     if (changed)
       announceSaved(target)
   }
@@ -249,43 +264,52 @@ function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace, renderS
   const anyUsable = state.rows.some(providerUsable)
   const configured = state.rows.filter(row => row.configured)
   const configurable = state.rows.filter(row => state.namespaces.has(row.entry.settingsNs))
-  const addable = configurable.filter(row => !row.configured)
-  const addTarget = adding ? editing : undefined
-  const addNamespace = addTarget === undefined ? undefined : state.namespaces.get(addTarget.settingsNs)
+  const addable: AddableRow[] = state.rows.flatMap((row) => {
+    const namespace = state.namespaces.get(row.entry.settingsNs)
+    return namespace === undefined || row.configured ? [] : [{ row, namespace }]
+  })
 
-  const addRow = addTarget === undefined
+  const piAi = state.namespaces.get('llm-pi-ai')
+  const protocols = protocolChoices(piAi, schema)
+
+  const catalogOffered = configurable.length > 0
+  const catalogEnabled = addable.length > 0
+  const customOffered = piAi !== undefined
+  const customEnabled = protocols.length > 0
+  const bothOffered = catalogOffered && customOffered
+  const mode: AddMode = bothOffered ? addMode : customOffered ? 'custom' : 'catalog'
+  const mounted = (candidate: AddMode): boolean => mode === candidate || visited.has(candidate)
+  const switchLocked = catalogBusy || customBusy
+
+  const draft = ((): CatalogDraft | undefined => {
+    if (!addOpen || !catalogOffered)
+      return undefined
+    const kept = editing === undefined ? undefined : state.namespaces.get(editing.settingsNs)
+    if (editing !== undefined && kept !== undefined)
+      return { target: editing, namespace: kept }
+    const first = addable[0]
+    return first === undefined ? undefined : { target: targetOf(first.row), namespace: first.namespace }
+  })()
+
+  const addRow = draft === undefined
     ? undefined
-    : state.rows.find(row => row.entry.provider === addTarget.provider)
-
-  const protocols = protocolChoices(state.namespaces.get('llm-pi-ai'), schema)
+    : state.rows.find(row => row.entry.provider === draft.target.provider)
 
   return (
     <div className={styles.section}>
-      <div className={styles.titleRow}>
+      <div className="dshp-models-title-row">
         <h2 className={styles.title}>{t('title')}</h2>
-        <div className={styles.rowActions}>
-          <ConfigEditor t={t} />
-          <button
-            type="button"
-            className={styles.linkButton}
-            title={t('openConfigFileHint')}
-            onClick={openConfigFile}
-          >
-            {t('openConfigFile')}
-          </button>
-        </div>
+        <ModelConfigToolbar
+          t={modelExtrasTranslate}
+          editor={editor}
+          onEditorChange={(next) => {
+            setEditor(next)
+            void saveEditor(next)
+          }}
+          onOpenConfig={() => { void openConfigFile() }}
+        />
       </div>
       <p className={styles.intro}>{t('intro')}</p>
-      {configOpen === undefined
-        ? null
-        : (
-            <p
-              role={configOpen.failed ? 'alert' : 'status'}
-              className={configOpen.failed ? styles.error : styles.savedNotice}
-            >
-              {configOpen.text}
-            </p>
-          )}
       {!state.writable && state.status === 'ready' ? <p className={styles.notice}>{t('readOnly')}</p> : null}
       {savedIdentity === undefined
         ? null
@@ -325,7 +349,7 @@ function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace, renderS
               </li>
             )
           }
-          const open = !adding && editing?.provider === row.entry.provider
+          const open = !addOpen && editing?.provider === row.entry.provider
           const credentialConfigured = row.credential?.configured === true
           const credentialMissing = !credentialConfigured
             && row.apiKeyEnv !== undefined
@@ -367,8 +391,7 @@ function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace, renderS
                     onClick={() => {
                       setSavedTarget(undefined)
 
-                      setDeclaring(false)
-                      setAdding(false)
+                      setAddOpen(false)
                       setEditing(open ? undefined : target)
                     }}
                   >
@@ -415,110 +438,152 @@ function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace, renderS
         })}
       </ul>
       <div className={styles.addBlock}>
-        {addTarget !== undefined && addNamespace !== undefined
+        {addOpen
           ? (
               <div className={styles.addCard}>
-                <div className={styles.field}>
-                  <span className={styles.fieldLabel}>{t('provider')}</span>
-                  <select
-                    className={`${styles.input} ${styles.selectInput}`}
-                    value={addTarget.provider}
-                    aria-label={t('provider')}
-                    onChange={(event) => {
-                      const row = addable.find(candidate => candidate.entry.provider === event.target.value)
+                <div className={styles.addModes}>
+                  {bothOffered
+                    ? (
+                        <SegmentedControl
+                          id={addId}
+                          label={t('addMode')}
+                          value={mode}
+                          disabled={switchLocked}
+                          options={[
+                            {
+                              value: 'catalog',
+                              label: t('addCatalog'),
+                              disabled: !catalogEnabled,
+                              ...catalogEnabled ? {} : { title: t('addCatalogExhausted') },
+                            },
+                            {
+                              value: 'custom',
+                              label: t('addCustom'),
+                              disabled: !customEnabled,
+                              ...customEnabled ? {} : { title: t('addCustomUnavailable') },
+                            },
+                          ]}
+                          onChange={(next) => {
+                            if (next !== 'catalog' && next !== 'custom')
+                              return
+                            setAddMode(next)
+                            setVisited(previous => new Set([...previous, next]))
+                          }}
+                        />
+                      )
+                    : (
 
-                      if (row === undefined)
-                        return
-                      setEditing(targetOf(row))
-                    }}
-                  >
-                    {addable.map(row => (
-                      <option key={row.entry.provider} value={row.entry.provider}>{row.entry.displayName}</option>
-                    ))}
-                  </select>
+                        <div className={styles.editorHeader}>
+                          <span className={styles.editorTitle}>{t(mode === 'catalog' ? 'addCatalog' : 'addCustom')}</span>
+                        </div>
+                      )}
+                  <p className={styles.advancedHint}>
+                    {t(mode === 'catalog' ? 'addCatalogHint' : 'addCustomHint')}
+                  </p>
                 </div>
-                <ProviderEditor
-                  key={addTarget.provider}
-                  provider={addTarget.provider}
-                  displayName={addTarget.displayName}
-                  hideTitle
-                  namespace={addNamespace}
-                  schema={schema}
-                  settingsPath={addTarget.settingsPath}
-                  operations={operations}
-                  t={t}
-                  readOnly={!state.writable}
-                  onClose={(changed) => { closeEditor(changed, addTarget) }}
-                />
-                {addRow === undefined
-                  ? null
-                  : renderSlot(
-                      'settings.models.provider-card',
-                      { provider: addRow.entry, configured: addRow.configured, keyConfigured: keyConfiguredOf(addRow) },
-                      { entryKey: addRow.entry.settingsNs },
-                    )}
+                {mounted('catalog') && draft !== undefined
+                  ? (
+                      <div
+                        id={`${addId}-catalog-panel`}
+                        {...bothOffered ? { 'role': 'tabpanel', 'aria-labelledby': `${addId}-catalog` } : {}}
+                        hidden={mode !== 'catalog'}
+                        className={styles.addPanel}
+                      >
+                        <div className={styles.field}>
+                          <span className={styles.fieldLabel}>{t('provider')}</span>
+                          <select
+                            className={`${styles.input} ${styles.selectInput}`}
+                            value={draft.target.provider}
+                            aria-label={t('provider')}
+                            disabled={catalogBusy}
+                            onChange={(event) => {
+                              const picked = addable.find(candidate => candidate.row.entry.provider === event.target.value)
+
+                              if (picked === undefined)
+                                return
+                              setEditing(targetOf(picked.row))
+                            }}
+                          >
+                            {addable.map(({ row }) => (
+                              <option key={row.entry.provider} value={row.entry.provider}>{row.entry.displayName}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <ProviderEditor
+                          key={draft.target.provider}
+                          provider={draft.target.provider}
+                          displayName={draft.target.displayName}
+                          hideTitle
+                          namespace={draft.namespace}
+                          schema={schema}
+                          settingsPath={draft.target.settingsPath}
+                          operations={operations}
+                          t={t}
+                          readOnly={!state.writable}
+                          onClose={(changed) => { closeEditor(changed, draft.target) }}
+                          onBusyChange={setCatalogBusy}
+                        />
+                        {addRow === undefined
+                          ? null
+                          : renderSlot(
+                              'settings.models.provider-card',
+                              { provider: addRow.entry, configured: addRow.configured, keyConfigured: keyConfiguredOf(addRow) },
+                              { entryKey: addRow.entry.settingsNs },
+                            )}
+                      </div>
+                    )
+                  : null}
+                {mounted('custom') && piAi !== undefined
+                  ? (
+                      <div
+                        id={`${addId}-custom-panel`}
+                        {...bothOffered ? { 'role': 'tabpanel', 'aria-labelledby': `${addId}-custom` } : {}}
+                        hidden={mode !== 'custom'}
+                        className={styles.addPanel}
+                      >
+                        <CustomProviderCard
+                          taken={state.rows.map(row => row.entry.provider)}
+                          protocols={protocols}
+                          revision={piAi.revision}
+                          operations={operations}
+                          t={t}
+                          readOnly={!state.writable}
+                          onClose={(changed) => {
+                            closeAdd()
+                            if (changed)
+                              void controller.load()
+                          }}
+                          onBusyChange={setCustomBusy}
+                        />
+                      </div>
+                    )
+                  : null}
               </div>
             )
-          : declaring
+          : catalogOffered || customOffered
             ? (
-                <div className={styles.addCard}>
-                  <CustomProviderCard
-                    taken={state.rows.map(row => row.entry.provider)}
-                    protocols={protocols}
-
-                    revision={state.namespaces.get('llm-pi-ai')?.revision ?? 0}
-                    operations={operations}
-                    t={t}
-                    readOnly={!state.writable}
-                    onClose={(changed) => {
-                      setDeclaring(false)
-                      if (changed)
-                        void controller.load()
-                    }}
-                  />
-                </div>
-              )
-            : (
 
                 <div className={styles.addActions}>
-                  {configurable.length > 0 && (
-                    <button
-                      type="button"
-                      className={styles.addButton}
-                      disabled={addable.length === 0 || !state.writable}
-                      onClick={() => {
-                        const first = addable[0]
-
-                        if (first === undefined)
-                          return
-                        setSavedTarget(undefined)
-                        setDeclaring(false)
-                        setAdding(true)
-                        setEditing(targetOf(first))
-                      }}
-                    >
-                      <IconPlusOutline16 size={14} />
-                      {t('add')}
-                    </button>
-                  )}
-                  {state.namespaces.has('llm-pi-ai') && (
-                    <button
-                      type="button"
-                      className={styles.addButton}
-                      disabled={protocols.length === 0 || !state.writable}
-                      onClick={() => {
-                        setSavedTarget(undefined)
-                        setAdding(false)
-                        setEditing(undefined)
-                        setDeclaring(true)
-                      }}
-                    >
-                      <IconPlusOutline16 size={14} />
-                      {t('customAdd')}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className={styles.addButton}
+                    disabled={!state.writable || (!catalogEnabled && !customEnabled)}
+                    onClick={() => {
+                      const first = addable[0]
+                      const initial: AddMode = catalogEnabled ? 'catalog' : 'custom'
+                      setSavedTarget(undefined)
+                      setEditing(first === undefined ? undefined : targetOf(first.row))
+                      setAddMode(initial)
+                      setVisited(new Set([initial]))
+                      setAddOpen(true)
+                    }}
+                  >
+                    <Plus width={14} height={14} />
+                    {t('add')}
+                  </button>
                 </div>
-              )}
+              )
+            : null}
       </div>
       {renderSlot('settings.models.footer', {})}
       <Modal

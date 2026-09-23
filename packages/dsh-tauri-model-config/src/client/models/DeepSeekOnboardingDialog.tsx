@@ -1,19 +1,20 @@
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { InjectFace, PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ReactNode } from 'react'
 import type { en } from './locales.ts'
 import type { ModelsOperations } from './operations.ts'
 import type { SettingsSchemaOperations } from './schema-operations.ts'
+import type {} from './slot-contract.ts'
 import type { ModelsSettingsState, ModelsSettingsStore } from './store.ts'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { OnboardingModal } from './OnboardingModal.tsx'
 import { ProviderEditor } from './ProviderEditor.tsx'
 import { onboardingReadiness } from './store.ts'
 import { onboardingDialogStyles as styles } from './styles.ts'
 
 export interface DeepSeekOnboardingInjected {
+  automatic: boolean
   hooks: {
-
     models: SnapshotStore<ModelsSettingsState>
   }
 
@@ -27,38 +28,46 @@ export interface DeepSeekOnboardingInjected {
 }
 
 export type DeepSeekOnboardingDialogProps
-  = PropsRuntime<'settings.onboarding'> & InjectFace<DeepSeekOnboardingInjected>
+  = PropsRuntime<'settings.onboarding'> & PropsRenderSlots<'settings.models.sign-in'> & InjectFace<DeepSeekOnboardingInjected>
 
 function assertNever(_value: never): never {
   throw new Error('unexpected DeepSeek onboarding state')
 }
 
 export function DeepSeekOnboardingDialog(props: DeepSeekOnboardingDialogProps): ReactNode {
-  const { complete, controller, useModels, operations, schema, t } = props
+  const { complete, controller, useModels, operations, schema, t, renderSlot, automatic, explicit = false } = props
+  const [apiKey, setApiKey] = useState(explicit)
   const state = useModels(snapshot => snapshot)
   const readiness = onboardingReadiness(state)
 
   useEffect(() => {
-    if (state.status === 'idle')
+    if ((automatic || explicit) && state.status === 'idle')
       void controller.load()
-  }, [controller, state.status])
+  }, [controller, state.status, automatic, explicit])
 
   useEffect(() => {
     if (
-      readiness.kind === 'adapter-absent'
-      || readiness.kind === 'provider-ready'
+      (!automatic && !explicit)
+      || readiness.kind === 'adapter-absent'
+      || (!explicit && readiness.kind === 'provider-ready')
       || readiness.kind === 'unavailable'
     ) {
       complete()
     }
-  }, [complete, readiness.kind])
+  }, [complete, readiness.kind, explicit, automatic])
+
+  if (!automatic && !explicit)
+    return null
 
   switch (readiness.kind) {
     case 'loading':
     case 'adapter-absent':
-    case 'provider-ready':
     case 'unavailable':
       return null
+    case 'provider-ready':
+      if (!explicit)
+        return null
+      break
     case 'credential-missing':
       break
 
@@ -83,7 +92,7 @@ export function DeepSeekOnboardingDialog(props: DeepSeekOnboardingDialogProps): 
     void controller.load()
   }
 
-  return (
+  const editor = (
     <OnboardingModal title={t('onboardingTitle')}>
       <p className={styles.description}>{t('onboardingDescription')}</p>
       <div className={styles.editor}>
@@ -108,4 +117,14 @@ export function DeepSeekOnboardingDialog(props: DeepSeekOnboardingDialogProps): 
       </div>
     </OnboardingModal>
   )
+  const enableApiKey = (): void => {
+    setApiKey(true)
+  }
+  return apiKey
+    ? editor
+    : renderSlot(
+        'settings.models.sign-in',
+        { complete, useApiKey: enableApiKey },
+        { fallback: editor },
+      )
 }

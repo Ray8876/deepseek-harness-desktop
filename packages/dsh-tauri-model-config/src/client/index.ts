@@ -5,6 +5,12 @@ import { locale } from './locales'
 import { registerModelsPage } from './register/models'
 import { registerStyles } from './register/styles'
 
+export type { ModelsKey } from './models/locales.ts'
+export type { ModelsSectionInjected, ModelsSectionProps } from './models/ModelsSection.tsx'
+export type { ModelDiscoveryOutcome, ModelsOperations, SettingsWriteOutcome } from './models/operations.ts'
+export type { ModelsFooterOwnerProps, ProviderCardExtrasOwnerProps } from './models/slot-contract.ts'
+export type { ModelsSettingsState, ProviderDirectoryEntry, ProviderRow } from './models/store.ts'
+
 export const name = PLUGIN_ID
 
 export const inject = [
@@ -14,12 +20,19 @@ export const inject = [
   'remote.credentials',
   'remote.llm',
   'remote.settings',
-  'settingsScope',
   'settingsSchema',
 ]
 
 export function apply(ctx: ClientContext): void {
   ctx.effect(locale.registerLocale, LOCALE_EFFECT)
   ctx.effect(registerStyles, STYLES_EFFECT)
-  ctx.effect(registerModelsPage, MODELS_PAGE_EFFECT)
+  let started = false
+  const start = (): void => {
+    if (started)
+      return
+    started = true
+    ctx.effect(registerModelsPage, MODELS_PAGE_EFFECT)
+  }
+  ctx.inject(['configForms'], start)
+  ctx.inject(['settingsScope'], start)
 }

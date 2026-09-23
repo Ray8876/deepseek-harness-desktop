@@ -1,7 +1,3 @@
 {
-  "dsh": "0.1.5-rc.2",
-  "offlineWindows": {
-    "tag": "dsh-0.1.5-rc.2-34495473237",
-    "commit": "a9582858297904ee7d7ffe613cfd28faaa5f6462"
-  }
+  "dsh": "0.1.5-rc.3"
 }

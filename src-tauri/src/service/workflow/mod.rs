@@ -3,8 +3,8 @@
 //! 模块划分：
 //! - [`process`]：本应用持有的 Harness 根进程登记（PID + Windows 句柄成对）、
 //!   启动守卫、停止/退出回收、进程树终止与按 dsh 安装路径清扫历史残留
-//! - [`launch`]：start / restart / launch 编排（端口自愈、`--no-open` 版本判定、
-//!   补丁挂点、Windows 隐藏控制台启动）
+//! - [`launch`]：start / restart / launch 编排（端口自愈、补丁挂点、
+//!   Windows 隐藏控制台启动）
 //! - [`sweep`]：孤儿 Harness 清扫（`.harness.pid` + 端口/PID 双重确认）与
 //!   Windows RedirectionGuard(448) 逃逸重拉
 //! - [`install`]：安装环境（Node.js 运行时 + Harness 发行版 + pnpm + MinGit）

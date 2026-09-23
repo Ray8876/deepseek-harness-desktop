@@ -1,7 +1,6 @@
 import type { SessionsRuntimeLike, WorkspacesRuntimeLike, WorkspaceViewLike } from '../types/runtime'
 import {
   ARCHIVE_MENU_ITEM_ATTRIBUTE,
-  ARCHIVE_MENU_ITEM_CLASS,
   DELETE_WORKSPACE_LABELS,
   MENU_ITEM_ICON_SELECTOR,
   MENU_ITEM_LABEL_SELECTOR,
@@ -70,8 +69,7 @@ export function decorateArchiveMenuItem(item: HTMLButtonElement, label: string):
   if (!labelNode)
     return false
   labelNode.textContent = label
-  // danger 外观由 `.dshp-session__archive-menu-item` 的 !important 覆盖（见 styles/workspace-menu.cssr）。
-  item.classList.add(ARCHIVE_MENU_ITEM_CLASS)
+  // danger 外观由 `[data-dsh-tauri-session-archive-item]` 的 !important 覆盖（见 styles/workspace-menu.cssr）。
   item.setAttribute(ARCHIVE_MENU_ITEM_ATTRIBUTE, '1')
   const icon = item.querySelector<HTMLElement>(MENU_ITEM_ICON_SELECTOR)
   if (icon)

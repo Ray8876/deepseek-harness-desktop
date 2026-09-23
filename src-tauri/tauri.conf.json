@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Deepseek Harness Desktop",
-  "version": "0.15.8",
-  "identifier": "io.github.hairyf.deepseek-harness-desktop",
+  "version": "0.16.0",
+  "identifier": "dsh-tauri",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",

@@ -1,7 +1,8 @@
 //! 用户数据目录迁移：旧版 AppData `data/dsh` → 官方 `$DSH_HOME`（`~/.dsh`）。
 //!
 //! 早期桌面版把 `$DSH_HOME` 隔离在应用数据目录
-//! （`%APPDATA%/io.github.hairyf.deepseek-harness-desktop/data/dsh`），与官方
+//! （`{app-data}/data/dsh`，当时的 app-data 目录名还是长标识符
+//! `io.github.hairyf.deepseek-harness-desktop`），与官方
 //! node 安装（`${DSH_HOME:-$HOME/.dsh}`）不一致，两边数据互不相通。本模块在
 //! 启动早期把旧数据迁移到官方 `$DSH_HOME`，之后桌面版与官方安装共用同一份数据。
 //!
@@ -22,7 +23,7 @@
 use crate::config;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 /// 旧版（<0.x 迁移版）$DSH_HOME 位置：AppData 下的 `data/dsh`。
 fn legacy_dsh_home(app_handle: &AppHandle) -> PathBuf {
@@ -74,6 +75,73 @@ pub fn migrate(app_handle: &AppHandle) -> Result<(), String> {
         target.display()
     );
     Ok(())
+}
+
+/// 旧标识符对应的 app-data 目录：与当前目录同父（`dirs::data_dir()`）的兄弟目录。
+///
+/// `app_data_dir()` 恒为 `<data_dir>/<identifier>`，因此改名后旧目录就是同一父目录
+/// 下换成旧标识符的那个兄弟目录；同父即同卷，`rename` 快路径可用。
+fn legacy_app_data_dir(target: &Path) -> Option<PathBuf> {
+    target
+        .parent()
+        .map(|parent| parent.join(config::LEGACY_APP_IDENTIFIER))
+}
+
+/// 启动最早期调用：把旧标识符的 app-data 目录整体搬到新标识符目录。
+///
+/// 标识符从 `io.github.hairyf.deepseek-harness-desktop` 缩短为 `dsh-tauri` 后，
+/// `app_data_dir()` 随之改名；旧用户的 Store（`.store.dat`，含端口、档案、
+/// 首装标记）与已装配的 Node/dsh/pnpm 全在旧目录里，不搬移等于丢失配置并重下。
+///
+/// 必须早于 `config::detect_first_install`：它按 `<app-data>/.store.dat` 是否存在
+/// 判定首装，晚于搬移会把升级用户误判成全新安装（弹引导页 + 回落默认档案）。
+/// 失败只告警不阻断，旧数据原地保留，下次启动重试。
+pub fn migrate_app_data_dir(app_handle: &AppHandle) -> Result<(), String> {
+    // debug 构建与 E2E 运行都不搬移：app-data 根目录同时承载生产的 `.store.dat`
+    //（E2E 的 `.store.test.dat` 也在同一目录），开发/测试运行不得搬动它——与
+    // `migrate()` 同理。E2E 还可能在 release 二进制上跑（门控只看
+    // `TAURI_WEBDRIVER_PORT`，与 debug 无关），因此单独判一次。
+    // 开发版自己的数据在 `<app-data>/dev` 下，由 release 迁移一并带入。
+    if cfg!(debug_assertions) || config::is_e2e_run() {
+        log::debug!("skipping app data dir migration (debug build or e2e run)");
+        return Ok(());
+    }
+
+    let target = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("resolve app data dir failed: {e}"))?;
+    let Some(legacy) = legacy_app_data_dir(&target) else {
+        return Ok(());
+    };
+    if legacy == target || !legacy.exists() {
+        return Ok(());
+    }
+    // 两端都必须是真实目录：符号链接（Windows 上含 junction 等 reparse point）会把
+    //「搬进新目录」变成对链接目标的读写，越出 app-data 边界。只在新迁移上把关——
+    // `$DSH_HOME`（`~/.dsh`）是链接属合法用法（用户把数据挪到别的盘），不在此列。
+    if is_linked_dir(&legacy) || is_linked_dir(&target) {
+        return Err(format!(
+            "app data dir migration skipped: {} or {} is a link",
+            legacy.display(),
+            target.display()
+        ));
+    }
+
+    migrate_impl(&legacy, &target)?;
+    log::info!(
+        "app data dir migrated: {} -> {}",
+        legacy.display(),
+        target.display()
+    );
+    Ok(())
+}
+
+/// 路径是否为符号链接（Windows 上含 junction 等 reparse point）；不存在时为 false。
+fn is_linked_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|meta| meta.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 /// 迁移实现（纯路径函数，便于单测）。成功时旧目录已被删除。
@@ -543,5 +611,90 @@ mod tests {
         heal_stale_pnpm_metadata(&home).unwrap();
         // 无 profiles 目录 → 无异常、不产生任何文件
         assert!(!home.join("profiles").exists());
+    }
+
+    // ------------------------------------------------------------------
+    // 标识符改名：旧 app-data 目录 → 新目录（`dsh-tauri`）
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn legacy_app_data_dir_is_sibling_of_target() {
+        let root = temp_dir("appdata-sibling");
+        let target = root.join(config::APP_IDENTIFIER);
+        assert_eq!(
+            legacy_app_data_dir(&target),
+            Some(root.join(config::LEGACY_APP_IDENTIFIER))
+        );
+        // 无父目录（相对空路径）→ 无可迁移对象
+        assert_eq!(legacy_app_data_dir(Path::new("")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_roots_are_detected() {
+        let root = temp_dir("appdata-link");
+        let real = root.join("real");
+        fs::create_dir_all(&real).unwrap();
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert!(is_linked_dir(&link), "符号链接必须被识别");
+        assert!(!is_linked_dir(&real), "真实目录不是链接");
+        assert!(
+            !is_linked_dir(&root.join("missing")),
+            "不存在的路径不是链接"
+        );
+    }
+
+    #[test]
+    fn app_data_dir_migration_carries_store_and_dependencies_into_existing_target() {
+        let root = temp_dir("appdata-migrate");
+        let legacy = root.join(config::LEGACY_APP_IDENTIFIER);
+        let target = root.join(config::APP_IDENTIFIER);
+
+        // 目标已存在：logger::init() 早于 setup()，新目录下的日志先落了盘
+        write(&target.join("logs/desktop.log"), "new log");
+        set_mtime(&target.join("logs/desktop.log"), 200);
+        write(&legacy.join("logs/desktop.log"), "old log");
+        set_mtime(&legacy.join("logs/desktop.log"), 100);
+
+        write(&legacy.join(".store.dat"), "{\"setting\":{}}");
+        write(&legacy.join("runtime/node.exe"), "node");
+        write(&legacy.join("dependencies/dsh/package.json"), "{}");
+        write(
+            &legacy.join("dependencies/dsh/node_modules/x/index.js"),
+            "// x",
+        );
+        write(
+            &legacy.join("dependencies/dsh/node_modules/.modules.yaml"),
+            "virtualStoreDir: C:\\old\\node_modules\\.pnpm\n",
+        );
+
+        let source = legacy_app_data_dir(&target).unwrap();
+        assert_eq!(source, legacy);
+        migrate_impl(&source, &target).unwrap();
+
+        assert!(!legacy.exists(), "legacy app data dir must be removed");
+        // Store 必须跟着走：detect_first_install 按它判定首装
+        assert!(target.join(".store.dat").is_file());
+        assert!(target.join("runtime/node.exe").is_file());
+        assert!(target.join("dependencies/dsh/package.json").is_file());
+        assert!(
+            target
+                .join("dependencies/dsh/node_modules/x/index.js")
+                .is_file(),
+            "已装配的依赖树必须无损带入（同卷 rename）"
+        );
+        assert!(
+            !target
+                .join("dependencies/dsh/node_modules/.modules.yaml")
+                .exists(),
+            "搬入的 pnpm 元数据记录旧绝对路径，必须清除"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("logs/desktop.log")).unwrap(),
+            "new log",
+            "新目录里更新的日志不被旧日志覆盖"
+        );
     }
 }

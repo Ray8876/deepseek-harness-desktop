@@ -14,11 +14,14 @@ import {
   archiveSessions,
   deleteWorkspace as deleteWorkspaceAction,
   forkSession,
+  isSessionPinned,
   loadUngroupedSessions,
   loadWorkspaceSessions,
   openExternalUrl,
   openInExplorer,
   renameSession,
+  supportsSessionPin,
+  togglePinSession,
 } from '../service/menu'
 import { readClipboard } from '../utils/clipboard'
 import { pasteInto, replaceSelection, selectAll, selectSurface } from '../utils/editable'
@@ -38,6 +41,17 @@ export function buildSessionMenu(
   extensions: ContextMenuExtension[],
 ): void {
   const current = session
+
+  // 置顶会话：官方 0.1.7 起提供置顶能力，旧核心不展示该入口。
+  if (current && supportsSessionPin(composer.workspaces)) {
+    const pinned = isSessionPinned({ workspaces: composer.workspaces, sessionId: current.id })
+    composer.add(pinned ? locale.text('unpinSession') : locale.text('pinSession'), async () => {
+      const outcome = await togglePinSession({ workspaces: composer.workspaces, sessionId: current.id, pinned })
+      if (outcome.ok)
+        composer.toast(locale.text(pinned ? 'sessionUnpinned' : 'sessionPinned'))
+      return outcome
+    })
+  }
 
   composer.add(locale.text('renameSession'), async () => {
     if (officialAction(row))

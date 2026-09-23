@@ -12,17 +12,30 @@ import type {
 export type { SessionId, SessionListState, SessionSummary, WorkspaceId, WorkspaceSnapshot, WorkspaceView }
 
 export type SessionSummaryLike = SessionSummary
-export type SessionListSnapshotLike = Pick<SessionListState, 'ids' | 'byId' | 'current'>
+/**
+ * 会话列表快照的读取面：`current` 在 ≤0.1.6 由核心自带，0.1.7 起改由适配层投影补回，
+ * 因此此处按可选成员声明（缺席即「无法判断当前会话」）。
+ */
+export type SessionListSnapshotLike = Pick<SessionListState, 'ids' | 'byId'> & { current?: SessionId }
 
-/** 官方 sessions 服务加上右键菜单 fork 所需能力。 */
-export type SessionsRuntimeLike = Pick<ISessions, 'list' | 'open' | 'binding' | 'fork'>
+/** 官方 sessions 服务加上右键菜单 fork 所需能力（`open` 在 0.1.7 移除，由适配层兼容桥补回）。 */
+export type SessionsRuntimeLike = Omit<Pick<ISessions, 'list' | 'binding' | 'fork'>, 'list'> & {
+  open?: (sessionId: SessionId) => unknown
+  list: { getSnapshot: () => SessionListSnapshotLike }
+}
 
 export type WorkspaceViewLike = WorkspaceView
-export type WorkspaceListSnapshotLike = Pick<WorkspaceSnapshot, 'items' | 'archivedSessionIds'>
+export type WorkspaceListSnapshotLike = Pick<WorkspaceSnapshot, 'items' | 'archivedSessionIds'> & {
+  /** 0.1.7 起官方快照提供置顶集合；旧核心缺席即「无置顶」。 */
+  pinnedSessionIds?: readonly SessionId[]
+}
 
 /** 官方 workspaces 服务加上 alpha/桌面导航兼容扩展。 */
 export type WorkspacesRuntimeLike = Pick<IWorkspaces, 'list' | 'archiveSession' | 'delete'> & {
   startSession?: (workspaceId: WorkspaceId) => void
+  /** 置顶/取消置顶会话：0.1.7 起官方提供；旧核心缺席时右键菜单不展示该入口。 */
+  pinSession?: (sessionId: SessionId) => Promise<void>
+  unpinSession?: (sessionId: SessionId) => Promise<void>
 }
 
 export interface ActionOutcome {

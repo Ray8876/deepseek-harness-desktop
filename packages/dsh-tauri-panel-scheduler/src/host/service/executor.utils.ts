@@ -40,7 +40,7 @@ function reasonOf(reason: Record<string, unknown>): Record<string, unknown> {
  * turn 收尾原因 → 失败文案。
  *
  * `turn/end` 缺失不算失败：核心在异常收尾（取消 / 中断 / 崩溃修复）时可能不补写，
- * 与 `agent/status → idle` 的兜底语义保持一致（见 pet / turnrewind 的同名处理）。
+ * 与 `agent/status → idle` 的兜底语义保持一致（见 pet / running-changes 的同名处理）。
  */
 export function describeFailure(reason: Record<string, unknown> | undefined): RunFailure {
   if (!reason)

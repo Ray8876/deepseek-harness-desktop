@@ -6,8 +6,6 @@ export const PET_SECTION_ORDER = 230
 
 /** 样式挂载 id 与 effect 标签。 */
 export const PET_STYLES_ID = 'dsh-tauri-pet-styles'
-export const PET_SETTINGS_STYLES_ID = 'dsh-tauri-pet-settings-styles'
-export const PET_CARD_STYLES_ID = 'dsh-tauri-pet-card-styles'
 export const PET_LOCALE_EFFECT = `${PLUGIN_ID}: locale`
 export const PET_STYLES_EFFECT = `${PLUGIN_ID}: styles`
 export const PET_SECTION_EFFECT = `${PLUGIN_ID}: settings section`

@@ -130,8 +130,9 @@ export function resolveSession(
   workspace: WorkspaceViewLike | null,
 ): SessionSummaryLike | null {
   const state = sessions.list.getSnapshot()
-  if (row.getAttribute('aria-selected') === 'true' && state.current)
-    return state.byId[state.current] || null
+  const current = state.current
+  if (row.getAttribute('aria-selected') === 'true' && current)
+    return state.byId[current] || null
   const title = titleFrom(row)
   if (!title)
     return null

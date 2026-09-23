@@ -82,25 +82,45 @@ pub(super) fn normalize_git_spec(spec: &str) -> String {
     url
 }
 
+/// `dsh plugin` 仍把 pnpm 参数拼进 shell 的最后一个核心版本（开区间上界）。
+///
+/// 该版本起 `dsh plugin` 改经 `@deepseek-ai/dsh-plugin-manager`、用 execa 以
+/// **argv 数组**启动 pnpm，并在 Windows 上自行按 cmd 规则转义参数
+/// （`arguments/command-file.js`），spec 因此必须原样透传。
+const SHELL_JOINED_PNPM_CLI_BELOW: &str = "0.1.6-alpha.2";
+
+/// 活动核心的 `dsh plugin` 是否把 pnpm 参数拼成命令行交给 shell。
+///
+/// - `< 0.1.6-alpha.2`（0.1.5-rc.2 / 0.1.6-alpha.1 等）：JS 里
+///   `spawnSync("pnpm", args, { shell: process.platform === "win32" })`，Node 对
+///   `shell:true` 只按空格拼接、不做引号转义（DEP0190），含空格的 spec 不预加引号
+///   就会被切碎成多个 spec。
+/// - `>= 0.1.6-alpha.2`：参数作为单个 argv 直达 pnpm，spec 里的字面 `"` 会被当成
+///   包名的一部分 → `ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER`（issue #647）。
+///
+/// 版本读不到 / 解析失败时按新核心处理：预加引号对新核心是**必然失败**，不预加
+/// 引号只在「老核心 + 含空格安装路径」这一组合下失败。
+pub(super) fn joins_pnpm_args_in_shell(core_version: Option<&str>) -> bool {
+    let Ok(threshold) = semver::Version::parse(SHELL_JOINED_PNPM_CLI_BELOW) else {
+        return false;
+    };
+    core_version
+        .and_then(|version| semver::Version::parse(version).ok())
+        .is_some_and(|actual| actual < threshold)
+}
+
 /// 给含空白字符的依赖 spec 加内嵌双引号，使其在 shell 拼接后仍保持单一 token。
 ///
-/// **仅 Windows 需要引号。** `dsh plugin add` 在 JS 里用
-/// `spawnSync("pnpm", args, { shell: process.platform === "win32" })` 启动 pnpm：
-/// - Windows：`shell:true` 时 Node 只把参数按空格拼接、不做引号转义（官方文档
-///   DEP0190：arguments are not escaped, only concatenated）。内置插件的依赖是
-///   `link:<应用安装目录>`，而 Windows 安装目录常含空格（如
-///   `G:\Deepseek Harness Desktop\resources\node_modules\dsh-tauri`），拼进
-///   shell 后会被切碎成多个 spec，pnpm 报 `ERR_PNPM_SPEC_NOT_SUPPORTED` / 装成
-///   错误依赖，导致启动自愈每轮都重装（死循环）。包一层双引号让 cmd 把整条
-///   spec 视为一个参数；pnpm 解析后自行剥离引号，落盘 `package.json` 的值仍是
-///   不带引号的规范 `link:<路径>`（与 [`bundled_dep_spec`] 的内核对账一致）。
-/// - macOS / Linux：`shell:false`，pnpm 以 argv 数组直接启动、空格天然保留，
-///   **加引号反而把字面 `"` 当成包名的一部分传给 pnpm → 非法 spec → exit 1**。
-///   这是 issue #104 的根因：内置插件指向 `/Applications/Deepseek Harness
-///   Desktop.app/...`（含空格），每次启动自愈重装都失败、服务永远缺该插件。
+/// 只对「把参数拼进 shell 的老核心」且「Windows」成立：老核心在 win32 用
+/// `shell:true` 启动 pnpm，内置插件的 `link:<应用安装目录>` 一旦含空格就会被切碎
+/// （pnpm 报 `ERR_PNPM_SPEC_NOT_SUPPORTED`），包一层双引号让 cmd 把整条 spec 视为
+/// 单一 token；pnpm 解析后自行剥离引号，落盘 `package.json` 的值仍是不带引号的
+/// `link:<路径>`（与 [`bundled_dep_spec`] 的内核对账一致）。
 ///
-/// 因此只在 `cfg!(windows)` 且 spec 含空白时才包引号——普通 npm 包名 /
-/// `git+https://...` 无空格，原样透传，避免无谓改动。
+/// 新核心与 macOS / Linux（老核心在 mac 上也是 `shell:false`）都是 argv 数组直达
+/// pnpm、空格天然保留，加引号反而把字面 `"` 当成包名的一部分传给 pnpm → 非法
+/// spec → exit 1，这是 issue #104 的根因（内置插件指向 `/Applications/Deepseek
+/// Harness Desktop.app/...`）。因此调用方必须经 [`spec_argument`] 按核心版本决定。
 pub(super) fn shell_quote_spec(spec: &str) -> String {
     #[cfg(windows)]
     {
@@ -109,6 +129,16 @@ pub(super) fn shell_quote_spec(spec: &str) -> String {
         }
     }
     spec.to_string()
+}
+
+/// 传给 `dsh plugin add` 的最终参数：只有把参数拼进 shell 的老核心才预加引号
+/// （见 [`joins_pnpm_args_in_shell`] 与 [`shell_quote_spec`]）。
+pub(super) fn spec_argument(spec: &str, core_version: Option<&str>) -> String {
+    if joins_pnpm_args_in_shell(core_version) {
+        shell_quote_spec(spec)
+    } else {
+        spec.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -128,6 +158,9 @@ mod tests {
             recommended: false,
             fix: false,
             default_checked: false,
+            default_unchecked: false,
+            dsh_supported_version: None,
+            version: None,
             win_only: false,
             internal,
         }
@@ -222,7 +255,7 @@ mod tests {
         );
     }
 
-    // ---- spec 引号化（仅 Windows：dsh CLI 只在 win32 用 shell 拼接参数）----
+    // ---- spec 引号化（仅老核心 + Windows：dsh CLI 只在 win32 用 shell 拼接参数）----
 
     #[cfg(windows)]
     #[test]
@@ -281,5 +314,59 @@ mod tests {
         assert!(quoted.starts_with('"'));
         assert!(quoted.ends_with('"'));
         assert!(quoted.contains("Deepseek Harness Desktop"));
+    }
+
+    // ---- 引号化随核心版本（issue #647：0.1.6-alpha.2 起 pnpm 由 argv 数组启动）----
+
+    #[test]
+    fn shell_join_gate_boundary_versions() {
+        // 0.1.6-alpha.1 仍是 spawnSync + shell:true（首个 argv 数组版是 alpha.2）
+        assert!(joins_pnpm_args_in_shell(Some("0.1.5-rc.2")));
+        assert!(joins_pnpm_args_in_shell(Some("0.1.6-alpha.1")));
+        assert!(!joins_pnpm_args_in_shell(Some("0.1.6-alpha.2")));
+        assert!(!joins_pnpm_args_in_shell(Some("0.1.6")));
+        assert!(!joins_pnpm_args_in_shell(Some("0.1.7")));
+        assert!(!joins_pnpm_args_in_shell(Some("1.0.0")));
+        // 版本未知 / 非法：按新核心处理（预加引号对新核心必然失败）
+        assert!(!joins_pnpm_args_in_shell(None));
+        assert!(!joins_pnpm_args_in_shell(Some("")));
+        assert!(!joins_pnpm_args_in_shell(Some("not-a-version")));
+    }
+
+    #[test]
+    fn spec_argument_keeps_space_spec_bare_for_argv_cores() {
+        // issue #647：0.1.6-alpha.2 起 spec 作为单个 argv 直达 pnpm，Windows 上的
+        // cmd 转义由 CLI 自己完成，预加引号会让 pnpm 收到带字面引号的 spec
+        let spec = "link:D:/Deepseek Harness Desktop/resources/node_modules/dsh-tauri";
+        assert_eq!(spec_argument(spec, Some("0.1.6-alpha.2")), spec);
+        assert_eq!(spec_argument(spec, None), spec);
+        assert_eq!(spec_argument(spec, Some("not-a-version")), spec);
+        // 无空格 spec 与版本无关，始终原样透传
+        assert_eq!(spec_argument("dshmarket", Some("0.1.5-rc.2")), "dshmarket");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn spec_argument_quotes_space_spec_for_shell_joining_cores() {
+        // 回归：老核心把参数拼进 cmd，含空格的安装路径必须预加引号才不被切碎
+        let spec = "link:G:/Deepseek Harness Desktop/resources/internal-plugins/dsh-tauri";
+        assert_eq!(
+            spec_argument(spec, Some("0.1.5-rc.2")),
+            format!("\"{spec}\"")
+        );
+        assert_eq!(
+            spec_argument(spec, Some("0.1.6-alpha.1")),
+            format!("\"{spec}\"")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn spec_argument_never_quotes_on_non_windows() {
+        // issue #104：macOS/Linux 上 dsh 直接 spawnSync（shell:false），spec 作为
+        // 单个 argv 传递、空格天然保留，老核心也不得加引号
+        let spec = "link:/Users/me/my plugins/dsh-tauri";
+        assert_eq!(spec_argument(spec, Some("0.1.5-rc.2")), spec);
+        assert_eq!(spec_argument(spec, Some("0.1.6-alpha.2")), spec);
     }
 }

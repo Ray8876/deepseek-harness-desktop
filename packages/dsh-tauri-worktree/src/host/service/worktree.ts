@@ -14,6 +14,7 @@ import { join, resolve } from 'pathe'
 import { TRASH_DIR, WORKTREES_DIR } from '../config/constants'
 import { getCurrentHostInstance } from '../config/runtime'
 import {
+  copyMissingChildren,
   isDependencyInstallCommand,
   linkWorktreeDependencies,
   normalizeLinkDirectories,
@@ -44,6 +45,10 @@ import { workspace } from './workspace'
 
 const WORKTREE_BRANCH_NAME_PATTERN = /^[\w./-]+$/
 
+// 技能目录不进 git 索引（.agents/skills 被 gitignore），`git worktree add` 永远搬不过来；
+// 不链接它，继承会话就读不到初始会话的项目级技能，因此这条链接与依赖开关无关。
+const AGENT_SKILLS_DIRECTORY = '.agents'
+
 const LINK_DEPENDENCIES = true
 
 const SWEEP_MIN_AGE_MS = 60_000
@@ -72,8 +77,16 @@ export const worktree = defineService({
       const registration = await isRegisteredWorktree(root, path, options.signal)
       if (!registration.ok)
         return { ok: false, error: `检查工作树残留状态失败：${registration.error}` }
-      if (registration.registered)
-        return { ok: true, binding: existing, existed: true, log: [] }
+      if (registration.registered) {
+        // 旧版本创建的工作树没有这份拷贝，重复创建时补齐，让继承会话能读到项目级技能
+        const repairedLog: string[] = []
+        await inheritAgentSkills(root, path, repairedLog)
+        if (repairedLog.length === 0)
+          return { ok: true, binding: existing, existed: true, log: [] }
+        const repaired: Binding = { ...existing, log: [...existing.log, ...repairedLog] }
+        await ledger.save(sessionId, repaired)
+        return { ok: true, binding: repaired, existed: true, log: repairedLog }
+      }
     }
 
     const mainSource = 'refs/heads/main'
@@ -141,6 +154,8 @@ export const worktree = defineService({
       : `Preparing worktree (detached HEAD ${await shortHead(path)})`)
     log.push(`HEAD is now at ${await shortHead(path)} ${await headSubject(path)}`)
     log.push(`Worktree created at ${path}`)
+
+    await inheritAgentSkills(root, path, log)
 
     const linkedDependencies: string[] = []
     if (linkDependencies) {
@@ -464,6 +479,28 @@ async function pruneWorktreeAdmin(root: string, signal?: AbortSignal): Promise<O
     return { ok: true }
   const pruned = await git(['worktree', 'prune', '--expire', 'now'], root, { signal })
   return pruned.ok ? { ok: true } : { ok: false, error: pruned.error }
+}
+
+/**
+ * 把源仓库的 `.agents` 复制进工作树。技能目录被 gitignore，`git worktree add` 不会带过来，
+ * 不补这一步，继承会话就读不到初始会话的项目级技能。
+ *
+ * 用复制而不是符号链接：POSIX 上符号链接对 git 是「文件」，`.agents/skills/` 这类带尾斜杠的
+ * 忽略规则匹配不到它，工作树会多出未跟踪记录 `?? .agents`，既污染状态又会在检出时被判为
+ * 「存在未跟踪改动」。源仓库没有 `.agents` 时静默返回。
+ */
+async function inheritAgentSkills(root: string, path: string, log: string[]): Promise<void> {
+  const source = join(root, AGENT_SKILLS_DIRECTORY)
+  if (!existsSync(source))
+    return
+  try {
+    const copied = await copyMissingChildren(source, join(path, AGENT_SKILLS_DIRECTORY))
+    if (copied.length > 0)
+      log.push(`Copied the agent skills directory from the source repository (${copied.join(', ')})`)
+  }
+  catch (error) {
+    log.push(`Agent skills directory copy skipped: ${get(error, 'message', String(error))}`)
+  }
 }
 
 function samePath(a: string, b: string): boolean {

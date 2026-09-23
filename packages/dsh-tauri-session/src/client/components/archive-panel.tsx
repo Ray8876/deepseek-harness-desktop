@@ -1,9 +1,8 @@
-import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MenuEntry } from 'dsh-tauri-ui/client'
 import type { ReactElement } from 'react'
 import type { ArchiveSort } from '../store/modules/archive.types'
 import type { ArchivePanelProps, DeleteConfirm } from './archive-panel.types'
-import { Button, Input, Menu, Modal, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
-import { Ellipsis, FolderOpen, Icon, Magnifier, MenuSelect, TrashBin, useMountStyle } from 'dsh-tauri-ui/client'
+import { Button, ChevronDown, Chip, Ellipsis, FolderOpen, Icon, IconButton, Input, Magnifier, Menu, Modal, Toast, TrashBin, useMountStyle } from 'dsh-tauri-ui/client'
 import { isEmpty, useWatchImmediate } from 'dsh-tauri/client'
 import { useCallback, useState } from 'react'
 import { SESSION_STYLE_ID } from '../constants'
@@ -18,7 +17,7 @@ import {
   unarchiveSession,
 } from '../service/archive'
 import { store } from '../store'
-import archivePanelStyle from './archive-panel.cssr'
+import archivePanelStyle from './archive-panel.layout'
 import { formatTime, projectOptions } from './archive-panel.utils'
 
 /** 设置页「归档」分区：已归档的聊天列表（搜索 / 排序 / 项目筛选 / 取消归档 / 彻底删除）。 */
@@ -29,6 +28,8 @@ export function ArchivePanel(props: ArchivePanelProps): ReactElement | null {
   const [confirm, setConfirm] = useState<DeleteConfirm>(null)
   const [openGroupMenu, setOpenGroupMenu] = useState<string | null>(null)
   const [openPathError, setOpenPathError] = useState<string | null>(null)
+  const [openSort, setOpenSort] = useState(false)
+  const [openProjectFilter, setOpenProjectFilter] = useState(false)
 
   // 进入分区或宿主归档集合规模变化时刷新归档载荷（meta：createdAt/cwd）。
   useWatchImmediate((props.workspacesRuntime.list.getSnapshot().archivedSessionIds ?? []).length, () => {
@@ -57,12 +58,22 @@ export function ArchivePanel(props: ArchivePanelProps): ReactElement | null {
     setOpenPathError(result.ok ? null : result.error ?? '')
   }
 
+  const sortOptions = [
+    { id: 'updatedAt', label: locale.text('sortUpdatedAt') },
+    { id: 'createdAt', label: locale.text('sortCreatedAt') },
+    { id: 'title', label: locale.text('sortTitle') },
+  ]
+  const projectFilterOptions = [
+    { id: 'all', label: locale.text('allProjects') },
+    ...projectOptions(rows),
+    ...(rows.some(row => !row.workspaceId) ? [{ id: 'ungrouped', label: locale.text('ungrouped') }] : []),
+  ]
+
   const footer = (
     <>
       <Button variant="ghost" onClick={() => setConfirm(null)}>{locale.text('cancel')}</Button>
       <Button
-        variant="outline"
-        className="dshp-session__delete-btn"
+        variant="danger"
         disabled={ui.pending}
         onClick={handleConfirmDelete}
       >
@@ -77,14 +88,12 @@ export function ArchivePanel(props: ArchivePanelProps): ReactElement | null {
         <h1 className="dshp-session__title">{locale.text('archiveTitle')}</h1>
         <Button
           type="button"
-          variant="ghost"
+          variant="danger"
           icon={<Icon as={TrashBin} />}
-          className="dshp-session__delete-all"
-          style={{ color: 'var(--dsw-alias-state-error-primary)' }}
           disabled={busy}
           onClick={() => setConfirm({ kind: 'all' })}
         >
-          <span className="dshp-session__delete-btn-text">{locale.text('deleteAll')}</span>
+          {locale.text('deleteAll')}
         </Button>
       </div>
 
@@ -97,33 +106,61 @@ export function ArchivePanel(props: ArchivePanelProps): ReactElement | null {
           icon={<Icon as={Magnifier} />}
           onChange={event => store.archive.setQuery(event.target.value)}
         />
-        <MenuSelect
-          variant="default"
-          triggerClassName="dshp-session__menu-select"
-          labelClassName="dshp-session__menu-select-label"
-          chevronClassName="dshp-session__menu-select-chevron"
-          label={locale.text('sortLabel')}
-          value={ui.sort}
-          onSelect={id => store.archive.setSort(id as ArchiveSort)}
-          options={[
-            { id: 'updatedAt', label: locale.text('sortUpdatedAt') },
-            { id: 'createdAt', label: locale.text('sortCreatedAt') },
-            { id: 'title', label: locale.text('sortTitle') },
-          ]}
+        <Menu
+          open={openSort}
+          onClose={() => setOpenSort(false)}
+          onSelect={(id) => {
+            setOpenSort(false)
+            store.archive.setSort(id as ArchiveSort)
+          }}
+          items={sortOptions}
+          selectedId={ui.sort}
+          portal
+          align="end"
+          anchor={(
+            <Chip
+              variant="selector"
+              className="dshp-session__menu-select"
+              aria-label={locale.text('sortLabel')}
+              aria-haspopup="menu"
+              open={openSort}
+              aria-expanded={openSort}
+              onClick={() => setOpenSort(openState => !openState)}
+              chevron={<Icon as={ChevronDown} />}
+            >
+              <span className="dshp-session__menu-select-label">
+                {sortOptions.find(option => option.id === ui.sort)?.label ?? ui.sort}
+              </span>
+            </Chip>
+          )}
         />
-        <MenuSelect
-          variant="default"
-          triggerClassName="dshp-session__menu-select"
-          labelClassName="dshp-session__menu-select-label"
-          chevronClassName="dshp-session__menu-select-chevron"
-          label={locale.text('allProjects')}
-          value={ui.workspaceId}
-          onSelect={workspaceId => store.archive.setWorkspaceFilter(workspaceId)}
-          options={[
-            { id: 'all', label: locale.text('allProjects') },
-            ...projectOptions(rows),
-            ...(rows.some(row => !row.workspaceId) ? [{ id: 'ungrouped', label: locale.text('ungrouped') }] : []),
-          ]}
+        <Menu
+          open={openProjectFilter}
+          onClose={() => setOpenProjectFilter(false)}
+          onSelect={(id) => {
+            setOpenProjectFilter(false)
+            store.archive.setWorkspaceFilter(id)
+          }}
+          items={projectFilterOptions}
+          selectedId={ui.workspaceId}
+          portal
+          align="end"
+          anchor={(
+            <Chip
+              variant="selector"
+              className="dshp-session__menu-select"
+              aria-label={locale.text('allProjects')}
+              aria-haspopup="menu"
+              open={openProjectFilter}
+              aria-expanded={openProjectFilter}
+              onClick={() => setOpenProjectFilter(openState => !openState)}
+              chevron={<Icon as={ChevronDown} />}
+            >
+              <span className="dshp-session__menu-select-label">
+                {projectFilterOptions.find(option => option.id === ui.workspaceId)?.label ?? ui.workspaceId}
+              </span>
+            </Chip>
+          )}
         />
       </div>
 
@@ -166,16 +203,14 @@ export function ArchivePanel(props: ArchivePanelProps): ReactElement | null {
                 portal
                 align="end"
                 anchor={(
-                  <button
-                    type="button"
-                    className="dshp-session__group-menu-trigger"
+                  <IconButton
+                    variant="action"
+                    icon={<Icon size={12} as={Ellipsis} />}
                     aria-label={locale.text('groupMenuAria')}
                     aria-haspopup="menu"
                     aria-expanded={openGroupMenu === group.id}
                     onClick={() => setOpenGroupMenu(openGroupMenu === group.id ? null : group.id)}
-                  >
-                    <Icon size={12} as={Ellipsis} />
-                  </button>
+                  />
                 )}
               />
             </div>
@@ -183,32 +218,31 @@ export function ArchivePanel(props: ArchivePanelProps): ReactElement | null {
               {group.rows.map(row => (
                 <li key={row.sessionId} className="dshp-session__row">
                   <div className="dshp-session__row-main">
-                    <button
-                      type="button"
-                      className="dshp-session__row-title"
-                      title={locale.text('openDirectory')}
-                      aria-label={`${locale.text('openDirectory')}: ${row.title}`}
-                      onClick={() => void handleOpenSessionDirectory(row.sessionId)}
-                    >
-                      {row.title}
-                    </button>
+                    <div>
+                      <button
+                        type="button"
+                        className="dshp-session__row-title"
+                        title={locale.text('openDirectory')}
+                        aria-label={`${locale.text('openDirectory')}: ${row.title}`}
+                        onClick={() => void handleOpenSessionDirectory(row.sessionId)}
+                      >
+                        {row.title}
+                      </button>
+                    </div>
                     <span className="dshp-session__row-time">{formatTime(row)}</span>
                   </div>
                   <div className="dshp-session__row-actions">
-                    <button
-                      type="button"
-                      className="dshp-session__row-delete"
+                    <IconButton
+                      variant="action"
+                      icon={<Icon as={TrashBin} />}
                       aria-label={locale.text('deleteRowAria')}
                       disabled={busy}
                       onClick={() => setConfirm({ kind: 'single', sessionId: row.sessionId })}
-                    >
-                      <Icon as={TrashBin} />
-                    </button>
+                    />
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="dshp-session__unarchive"
                       disabled={busy}
                       onClick={() => void unarchiveSession({ sessionId: row.sessionId, resync })}
                     >

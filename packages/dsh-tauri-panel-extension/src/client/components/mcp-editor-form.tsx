@@ -1,10 +1,8 @@
 import type { ReactElement } from 'react'
 import type { Translate } from '../locales/index.types'
 import type { McpEditorMode, McpEditorState } from './mcp-tab.types'
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
-import { useMountStyle } from 'dsh-tauri-ui/client'
-import { MCP_EDITOR_FORM_STYLE_ID } from '../constants'
-import mcpEditorFormStyle from './mcp-editor-form.cssr'
+import { Button, ChevronDown, Chip, Icon, Input, Menu, SegmentedControl } from 'dsh-tauri-ui/client'
+import { useId, useState } from 'react'
 
 export interface McpEditorFormProps {
   t: Translate
@@ -23,28 +21,28 @@ export interface McpEditorFormProps {
 }
 
 export function McpEditorForm(props: McpEditorFormProps): ReactElement {
-  useMountStyle(mcpEditorFormStyle, MCP_EDITOR_FORM_STYLE_ID)
   const { t, editor, mode, busy, pasteJson, pasteError, formError, onModeChange, onEditorChange, onPasteJsonChange, onPasteFill, onCancel, onSave } = props
+  const tabsId = useId()
+  const [transportOpen, setTransportOpen] = useState(false)
+  const transportOptions = [
+    { id: 'stdio', label: t('transportStdio') },
+    { id: 'streamable-http', label: t('transportHttp') },
+  ]
   return (
     <div className="dshp-extension__form">
-      <div className="dshp-extension__editor-tabs" role="tablist" aria-label={t('addServer')}>
-        {(['json', 'form'] as const).map(modeKey => (
-          <button
-            key={modeKey}
-            type="button"
-            role="tab"
-            className="dshp-extension__editor-tab"
-            aria-selected={mode === modeKey}
-            data-active={mode === modeKey ? 'true' : undefined}
-            onClick={() => onModeChange(modeKey)}
-          >
-            {t(modeKey === 'json' ? 'editorJsonTab' : 'editorFormTab')}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl
+        id={tabsId}
+        label={t('addServer')}
+        value={mode}
+        options={[
+          { value: 'json', label: t('editorJsonTab') },
+          { value: 'form', label: t('editorFormTab') },
+        ]}
+        onChange={next => onModeChange(next as McpEditorMode)}
+      />
       {mode === 'json'
         ? (
-            <div className="dshp-extension__form" role="tabpanel">
+            <div id={`${tabsId}-json-panel`} className="dshp-extension__form" role="tabpanel" aria-labelledby={`${tabsId}-json`}>
               <label className="dshp-extension__label">
                 <span>{t('formatPaste')}</span>
                 <textarea
@@ -61,34 +59,49 @@ export function McpEditorForm(props: McpEditorFormProps): ReactElement {
             </div>
           )
         : (
-            <div className="dshp-extension__form" role="tabpanel">
+            <div id={`${tabsId}-form-panel`} className="dshp-extension__form" role="tabpanel" aria-labelledby={`${tabsId}-form`}>
               <label className="dshp-extension__label">
                 <span>{t('serverName')}</span>
-                <input
-                  className="dshp-extension__input"
+                <Input
                   value={editor.serverName}
                   disabled={editor.id !== ''}
                   onChange={event => onEditorChange({ serverName: event.target.value })}
                 />
               </label>
-              <label className="dshp-extension__label">
+              <div className="dshp-extension__label">
                 <span>{t('transport')}</span>
-                <select
-                  className="dshp-extension__select"
-                  value={editor.transport}
-                  disabled={editor.id !== ''}
-                  onChange={event => onEditorChange({ transport: event.target.value as McpEditorState['transport'] })}
-                >
-                  <option value="stdio">{t('transportStdio')}</option>
-                  <option value="streamable-http">{t('transportHttp')}</option>
-                </select>
-              </label>
+                <Menu
+                  open={transportOpen}
+                  onClose={() => setTransportOpen(false)}
+                  onSelect={(id) => {
+                    onEditorChange({ transport: id as McpEditorState['transport'] })
+                    setTransportOpen(false)
+                  }}
+                  items={transportOptions}
+                  selectedId={editor.transport}
+                  portal
+                  anchor={(
+                    <Chip
+                      variant="selector"
+                      disabled={editor.id !== ''}
+                      aria-label={t('transport')}
+                      aria-haspopup="menu"
+                      open={transportOpen}
+                      aria-expanded={transportOpen}
+                      chevron={<Icon as={ChevronDown} />}
+                      onClick={() => setTransportOpen(value => !value)}
+                    >
+                      {transportOptions.find(option => option.id === editor.transport)?.label}
+                    </Chip>
+                  )}
+                />
+              </div>
               {editor.transport === 'stdio'
                 ? (
                     <>
                       <label className="dshp-extension__label">
                         <span>{t('command')}</span>
-                        <input className="dshp-extension__input" value={editor.command} onChange={event => onEditorChange({ command: event.target.value })} />
+                        <Input value={editor.command} onChange={event => onEditorChange({ command: event.target.value })} />
                       </label>
                       <label className="dshp-extension__label">
                         <span>{t('args')}</span>
@@ -104,7 +117,7 @@ export function McpEditorForm(props: McpEditorFormProps): ReactElement {
                     <>
                       <label className="dshp-extension__label">
                         <span>{t('url')}</span>
-                        <input className="dshp-extension__input" value={editor.url} onChange={event => onEditorChange({ url: event.target.value })} />
+                        <Input value={editor.url} onChange={event => onEditorChange({ url: event.target.value })} />
                       </label>
                       <label className="dshp-extension__label">
                         <span>{t('headersPairs')}</span>

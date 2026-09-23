@@ -1,7 +1,7 @@
 import { ArrowLeft, Delete } from '@gravity-ui/icons'
 import { Button, Checkbox, Chip, Description, Label, Spinner } from '@heroui/react'
 import { useOverlay } from '@overlastic/react'
-import { promiseTimeout, useToggle } from '@reause/core'
+import { useToggle } from '@reause/core'
 import { invoke } from '@tauri-apps/api/core'
 import { useTranslation } from 'react-i18next'
 import { If } from 'react-if-lite'
@@ -10,6 +10,7 @@ import { Modal } from '@/components/modal'
 import { Panel } from '@/components/panel'
 import { useBackups } from '@/hooks/use-backup'
 import { store } from '@/store'
+import { waitForHarnessStopped } from '@/store/modules/harness'
 import { silence } from '@/utils/silence'
 import { toast } from '@/utils/toast'
 
@@ -20,34 +21,6 @@ export interface ConfigBackupProps {
 /** 把字节转为 MB 展示（保留 1 位小数）。 */
 function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)}`
-}
-
-/**
- * 轮询 health check 确认 DSH 服务已真正停止，避免文件锁冲突。
- *  - 使用剩余 timeout 约束 in-flight 的 probe（reause `promiseTimeout`），防止无限挂起
- *  - 仅当 health check 明确失败（非 transient 错误）时才视为已停止
- *  - 超时后继续执行（shutdown 可能仍在进行中）
- */
-async function waitForHarnessStopped(timeoutMs = 10_000, intervalMs = 500): Promise<void> {
-  const start = Date.now()
-  while (Date.now() - start < timeoutMs) {
-    const remaining = timeoutMs - (Date.now() - start)
-    if (remaining <= 0)
-      break
-    try {
-      await Promise.race([invoke('proxy_health_check'), promiseTimeout(remaining, true, 'probe timeout')])
-      // 服务仍在运行，继续等待
-    }
-    catch (e) {
-      // probe 超时视为已停止
-      if (e instanceof Error && e.message === 'probe timeout')
-        return
-      // 非 transient 错误视为已停止；transient 错误（502 等）继续重试
-      if (!(e instanceof Error) || !/502|ECONNREFUSED|ETIMEDOUT/i.test(e.message))
-        return
-    }
-    await promiseTimeout(intervalMs)
-  }
 }
 
 export function ConfigBackup({ onBack }: ConfigBackupProps) {

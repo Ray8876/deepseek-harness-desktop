@@ -2,10 +2,8 @@ import type { IconComponent } from 'dsh-tauri-ui/client'
 import type { ReactElement } from 'react'
 import type { LocaleKey, Translate } from '../locales/index.types'
 import type { ScheduleForm, TaskFormState, TaskView } from '../types'
-import { Calendar, Icon, useMountStyle } from 'dsh-tauri-ui/client'
-import { RECOMMENDATIONS_STYLE_ID } from '../constants'
+import { Calendar, Icon, styles as sharedStyles } from 'dsh-tauri-ui/client'
 import { createTask } from '../service/scheduler'
-import recommendationsStyle from './recommendations.cssr'
 import { recommendationMatchesTask } from './recommendations.utils'
 import { describeSchedule } from './schedule.utils'
 
@@ -27,7 +25,7 @@ export const RECOMMENDATIONS: Recommendation[] = [
     nameKey: 'recReviewName',
     promptKey: 'recReviewPrompt',
     schedule: { kind: 'weekly', weekdays: ['FR'], time: '16:00' },
-    accent: '#8B6FF0',
+    accent: sharedStyles.business,
     icon: Calendar,
     form: t => ({ name: t('recReviewName'), schedule: { kind: 'weekly', weekdays: ['FR'], time: '16:00' }, prompt: t('recReviewPrompt'), workspaceId: '', permission: 'read-only', provider: '', model: '', reasoningEffort: '' }),
   },
@@ -36,7 +34,7 @@ export const RECOMMENDATIONS: Recommendation[] = [
     nameKey: 'recWeekdayBriefingName',
     promptKey: 'recWeekdayBriefingPrompt',
     schedule: { kind: 'workdays', time: '08:00' },
-    accent: '#3D9A80',
+    accent: sharedStyles.success,
     icon: Calendar,
     form: t => ({ name: t('recWeekdayBriefingName'), schedule: { kind: 'workdays', time: '08:00' }, prompt: t('recWeekdayBriefingPrompt'), workspaceId: '', permission: 'read-only', provider: '', model: '', reasoningEffort: '' }),
   },
@@ -44,13 +42,11 @@ export const RECOMMENDATIONS: Recommendation[] = [
 
 export interface RecommendationsProps {
   t: Translate
-  /** 只读：直接消费 store snapshot。 */
   tasks: readonly TaskView[]
 }
 
 /** 推荐（预置）定时任务列表：点击直接创建，成功后该项从任务列表中消失。 */
 export function Recommendations({ t, tasks }: RecommendationsProps): ReactElement {
-  useMountStyle(recommendationsStyle, RECOMMENDATIONS_STYLE_ID)
   async function add(rec: Recommendation): Promise<void> {
     const form = rec.form(t)
     await createTask({

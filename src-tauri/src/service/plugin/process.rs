@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{Emitter, WebviewWindow};
 
+use crate::utils::decode_process_line;
+
 #[cfg(windows)]
 use crate::service::workflow;
 #[cfg(not(windows))]
@@ -326,12 +328,13 @@ fn spawn_line_emitter<R: Read + Send + 'static>(
             match buf.read_until(b'\n', &mut acc_buf) {
                 Ok(0) => break,
                 Ok(_) => {
-                    // lossy 兜底：zh-CN Windows 下 python MCP 插件输出 GBK 日志时，
-                    // 严格 UTF-8 读取会中断本线程并关闭子进程管道（EPIPE）——
-                    // 安装进程可能因此以非 0 退出码失败，被误判为安装失败。
+                    // 非法 UTF-8 不能中断本线程：管道读端一关，子进程写 stderr
+                    // 就收到 EPIPE，安装进程可能因此以非 0 退出码失败而被误判为
+                    // 安装失败。解码先走 ANSI 代码页（`decode_process_line`），
+                    // zh-CN Windows 下 python MCP 插件的 GBK 日志才不会变乱码。
                     // 行尾剥离与上游 utils.rs 的 #197 修复一致：只剥 \r\n/\n，
                     // 保留行内尾随空白以对齐 BufRead::lines() 语义。
-                    let line = String::from_utf8_lossy(&acc_buf);
+                    let line = decode_process_line(&acc_buf);
                     let trimmed = line
                         .strip_suffix("\r\n")
                         .or_else(|| line.strip_suffix('\n'))

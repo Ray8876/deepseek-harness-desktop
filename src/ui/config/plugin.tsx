@@ -1,8 +1,8 @@
 import type { DshPlugin } from '@/types'
-import { CircleExclamation } from '@gravity-ui/icons'
+import { ChevronRight, CircleExclamation } from '@gravity-ui/icons'
 import { Button, Chip, Label, Spinner, Tooltip } from '@heroui/react'
 import { useOverlay } from '@overlastic/react'
-import { useMount } from '@reause/core'
+import { useMount, useToggle } from '@reause/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { invoke } from '@tauri-apps/api/core'
 import { useState } from 'react'
@@ -72,9 +72,17 @@ export function ConfigPlugin() {
   useMount(refreshUpdates)
   useListen<DshPlugin[]>('dsh-plugins-updated', refreshUpdates)
 
-  const plugins = pluginList ?? []
   const loading = isLoading
   const error = pluginError ? String(pluginError) : ''
+
+  /** 「内置插件」分组是否展开：默认折叠，内置插件由启动自愈维护，不作为常规可管理项 */
+  const [showInternal, toggleShowInternal] = useToggle()
+  // 内置插件（internal）随包分发、由启动自愈安装与维护，排到列表末尾并收进默认折叠的
+  // 分组：与可升级/可卸载的插件并列只会让用户把它们当作普通插件。它们仍可升级
+  // （切换核心版本后内置包可能落后），但不提供卸载/禁用/快照入口。
+  const plugins = pluginList ?? []
+  const internalPlugins = plugins.filter(plugin => plugin.internal)
+  const managedPlugins = plugins.filter(plugin => !plugin.internal)
 
   const [dialogHolder, openDialog] = useOverlay(Modal, { type: 'holder' })
 
@@ -391,10 +399,188 @@ export function ConfigPlugin() {
     }
   }
 
+  /** 插件行：可管理插件列表与「内置插件」折叠分组共用同一行结构 */
+  function renderPluginRow(plugin: DshPlugin) {
+    return (
+      <Item
+        key={plugin.id}
+        left={(
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-1">
+              <If cond={plugin.error != null}>
+                <Tooltip delay={0}>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="ghost"
+                    className="size-6 shrink-0 rounded-md text-danger"
+                    aria-label={t('plugins.abnormal_tooltip')}
+                  >
+                    <CircleExclamation />
+                  </Button>
+                  <Tooltip.Content className="max-w-[320px]">
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium">
+                        {t('plugins.abnormal_desc', { name: plugin.name })}
+                      </p>
+                      <p className="whitespace-pre-wrap break-all font-mono text-[11px] opacity-80">
+                        {plugin.error?.message}
+                      </p>
+                    </div>
+                  </Tooltip.Content>
+                </Tooltip>
+              </If>
+              <Label className="min-w-0 truncate text-sm font-medium text-ink">
+                {plugin.name}
+              </Label>
+              <If cond={plugin.version !== ''}>
+                <code className="shrink-0 rounded bg-default px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                  {plugin.version}
+                </code>
+              </If>
+              <If cond={!plugin.internal && plugin.recommended}>
+                <Chip size="sm" variant="soft" color="success" className="shrink-0 font-medium">
+                  {t('plugins.preset')}
+                </Chip>
+              </If>
+              <If cond={plugin.disabled}>
+                <Chip size="sm" variant="soft" color="default">
+                  {t('plugins.disabled_badge')}
+                </Chip>
+              </If>
+              {/* 配置覆盖禁用：展示在 cordis.patch.yml 中被显式禁用的真实状态
+                  （内置插件同样标注，issue #399：Scheduler/Pet 行此前只有「内置」） */}
+              <If cond={plugin.patchDisabled}>
+                <Chip size="sm" variant="soft" color="warning">
+                  {t('plugins.patch_disabled_badge')}
+                </Chip>
+              </If>
+              <If cond={plugin.internal}>
+                <code className="shrink-0 rounded bg-default px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                  {t('plugins.builtin')}
+                </code>
+              </If>
+            </div>
+            <If cond={plugin.description !== ''}>
+              <TextEllipsis lineClamp={2} className="text-xs text-muted">
+                {plugin.description}
+              </TextEllipsis>
+            </If>
+          </div>
+        )}
+        right={(
+          <>
+            {/* 升级入口仅在确有更新（updateAvailable）或插件异常（error，修复入口）时显示；
+                与文档 P1「对 dshmarket 点击升级」一致，且不会常驻——up-to-date 插件不显示升级按钮 */}
+            <If cond={plugin.updateAvailable || plugin.error != null}>
+              <Chip
+                className={actionChip({ busy: !!busy })}
+                variant="primary"
+                color="accent"
+                size="sm"
+                onClick={() => onUpgrade(plugin.id)}
+              >
+                <span className="flex items-center gap-1">
+                  <If cond={busy?.id === plugin.id && busy.action === 'update'} then={<Spinner size="sm" color="current" />} />
+                  {t('plugins.upgrade')}
+                  <If cond={plugin.latestVersion != null && plugin.error == null}>
+                    <span className="font-mono text-[10px] opacity-80 max-w-[80px] truncate">
+                      {plugin.latestVersion && plugin.latestVersion.length >= 40 ? `${plugin.latestVersion.slice(0, 8)}…` : plugin.latestVersion}
+                    </span>
+                  </If>
+                </span>
+              </Chip>
+            </If>
+            {/* 启用入口：配置覆盖禁用（含内置插件）或桌面禁用清单 → 可启用。
+                配置覆盖禁用时点击会先弹确认框，确认后后端才移除该覆盖 */}
+            <If cond={plugin.patchDisabled || (!plugin.internal && plugin.disabled)}>
+              <Chip
+                className={actionChip({ busy: !!busy })}
+                variant="primary"
+                color="accent"
+                size="sm"
+                onClick={() => onEnable(plugin.id, plugin.patchDisabled)}
+              >
+                <span className="flex items-center gap-1">
+                  <If cond={busy?.id === plugin.id && busy.action === 'enable'} then={<Spinner size="sm" color="current" />} />
+                  {t('plugins.enable')}
+                </span>
+              </Chip>
+            </If>
+            <If cond={!plugin.internal && !plugin.patchDisabled && !plugin.disabled}>
+              <Chip
+                className={actionChip({ busy: !!busy })}
+                size="sm"
+                onClick={() => onDisable(plugin.id)}
+              >
+                <span className="flex items-center gap-1">
+                  <If cond={busy?.id === plugin.id && busy.action === 'disable'} then={<Spinner size="sm" color="current" />} />
+                  {t('plugins.disable')}
+                </span>
+              </Chip>
+            </If>
+            <If cond={!plugin.internal}>
+              {/* 单插件快照：快照始终可用（已存在时覆盖确认）；还原/删除快照仅在
+                  存在快照时显示。还原会停服务，还原后 toast 提示重启（issue #303） */}
+              <Chip
+                className={actionChip({ busy: !!busy })}
+                variant="primary"
+                color="accent"
+                size="sm"
+                onClick={() => onSnapshot(plugin.id, plugin.name, plugin.hasSnapshot)}
+              >
+                <span className="flex items-center gap-1">
+                  <If cond={busy?.id === plugin.id && busy.action === 'snapshot'} then={<Spinner size="sm" color="current" />} />
+                  {t('plugins.snapshot')}
+                </span>
+              </Chip>
+              <If cond={plugin.hasSnapshot}>
+                <Chip
+                  className={actionChip({ busy: !!busy })}
+                  variant="primary"
+                  color="accent"
+                  size="sm"
+                  onClick={() => onRestore(plugin.id, plugin.name)}
+                >
+                  <span className="flex items-center gap-1">
+                    <If cond={busy?.id === plugin.id && busy.action === 'restore'} then={<Spinner size="sm" color="current" />} />
+                    {t('plugins.restore')}
+                  </span>
+                </Chip>
+                <Chip
+                  className={actionChip({ busy: !!busy })}
+                  size="sm"
+                  onClick={() => onDeleteSnapshot(plugin.id, plugin.name)}
+                >
+                  <span className="flex items-center gap-1">
+                    <If cond={busy?.id === plugin.id && busy.action === 'delete-snapshot'} then={<Spinner size="sm" color="current" />} />
+                    {t('plugins.delete_snapshot')}
+                  </span>
+                </Chip>
+              </If>
+              <Chip
+                className={actionChip({ busy: !!busy })}
+                variant="primary"
+                color="danger"
+                size="sm"
+                onClick={() => onRemove(plugin.id, plugin.name)}
+              >
+                <span className="flex items-center gap-1">
+                  <If cond={busy?.id === plugin.id && busy.action === 'remove'} then={<Spinner size="sm" color="current" />} />
+                  {t('plugins.uninstall')}
+                </span>
+              </Chip>
+            </If>
+          </>
+        )}
+      />
+    )
+  }
+
   return (
     <div>
       <Panel.Header
-        className="sticky top-0 bg-canvas z-10 pb-3"
+        className="pb-3"
         title={t('plugins.title')}
         testId="dsh-config-panel-title"
         action={(
@@ -418,189 +604,27 @@ export function ConfigPlugin() {
 
       {/* 加载 / 失败 / 空态 */}
       <Panel.Loadable loading={loading} error={error}>
-        <If
-          cond={plugins.length > 0}
-          else={(
-            <Empty>{t('plugins.empty')}</Empty>
-          )}
-        >
-          <div className="flex flex-col gap-4">
-            {plugins.sort(a => a.internal ? -1 : 1).map(plugin => (
-              <Item
-                key={plugin.id}
-                left={(
-                  <div className="min-w-0">
-                    <div className="flex min-w-0 items-center gap-1">
-                      <If cond={plugin.error != null}>
-                        <Tooltip delay={0}>
-                          <Button
-                            isIconOnly
-                            size="sm"
-                            variant="ghost"
-                            className="size-6 shrink-0 rounded-md text-danger"
-                            aria-label={t('plugins.abnormal_tooltip')}
-                          >
-                            <CircleExclamation />
-                          </Button>
-                          <Tooltip.Content className="max-w-[320px]">
-                            <div className="space-y-1">
-                              <p className="text-xs font-medium">
-                                {t('plugins.abnormal_desc', { name: plugin.name })}
-                              </p>
-                              <p className="whitespace-pre-wrap break-all font-mono text-[11px] opacity-80">
-                                {plugin.error?.message}
-                              </p>
-                            </div>
-                          </Tooltip.Content>
-                        </Tooltip>
-                      </If>
-                      <Label className="min-w-0 truncate text-sm font-medium text-ink">
-                        {plugin.name}
-                      </Label>
-                      <If cond={plugin.version !== ''}>
-                        <code className="shrink-0 rounded bg-default px-1.5 py-0.5 font-mono text-[10px] text-muted">
-                          {plugin.version}
-                        </code>
-                      </If>
-                      <If cond={!plugin.internal && plugin.recommended}>
-                        <Chip size="sm" variant="soft" color="success" className="shrink-0 font-medium">
-                          {t('plugins.preset')}
-                        </Chip>
-                      </If>
-                      <If cond={plugin.internal}>
-                        <code className="shrink-0 rounded bg-default px-1.5 py-0.5 font-mono text-[10px] text-muted">
-                          {t('plugins.builtin')}
-                        </code>
-                      </If>
-                      <If cond={plugin.disabled}>
-                        <Chip size="sm" variant="soft" color="default">
-                          {t('plugins.disabled_badge')}
-                        </Chip>
-                      </If>
-                      {/* 配置覆盖禁用：展示在 cordis.patch.yml 中被显式禁用的真实状态
-                          （内置插件同样标注，issue #399：Scheduler/Pet 行此前只有「内置」） */}
-                      <If cond={plugin.patchDisabled}>
-                        <Chip size="sm" variant="soft" color="warning">
-                          {t('plugins.patch_disabled_badge')}
-                        </Chip>
-                      </If>
-                    </div>
-                    <If cond={plugin.description !== ''}>
-                      <TextEllipsis lineClamp={2} className="text-xs text-muted">
-                        {plugin.description}
-                      </TextEllipsis>
-                    </If>
-                  </div>
-                )}
-                right={(
-                  <>
-                    {/* 升级入口仅在确有更新（updateAvailable）或插件异常（error，修复入口）时显示；
-                        与文档 P1「对 dshmarket 点击升级」一致，且不会常驻——up-to-date 插件不显示升级按钮 */}
-                    <If cond={plugin.updateAvailable || plugin.error != null}>
-                      <Chip
-                        className={actionChip({ busy: !!busy })}
-                        variant="primary"
-                        color="accent"
-                        size="sm"
-                        onClick={() => onUpgrade(plugin.id)}
-                      >
-                        <span className="flex items-center gap-1">
-                          <If cond={busy?.id === plugin.id && busy.action === 'update'} then={<Spinner size="sm" color="current" />} />
-                          {t('plugins.upgrade')}
-                          <If cond={plugin.latestVersion != null && plugin.error == null}>
-                            <span className="font-mono text-[10px] opacity-80 max-w-[80px] truncate">
-                              {plugin.latestVersion && plugin.latestVersion.length >= 40 ? `${plugin.latestVersion.slice(0, 8)}…` : plugin.latestVersion}
-                            </span>
-                          </If>
-                        </span>
-                      </Chip>
-                    </If>
-                    {/* 启用入口：配置覆盖禁用（含内置插件）或桌面禁用清单 → 可启用。
-                        配置覆盖禁用时点击会先弹确认框，确认后后端才移除该覆盖 */}
-                    <If cond={plugin.patchDisabled || (!plugin.internal && plugin.disabled)}>
-                      <Chip
-                        className={actionChip({ busy: !!busy })}
-                        variant="primary"
-                        color="accent"
-                        size="sm"
-                        onClick={() => onEnable(plugin.id, plugin.patchDisabled)}
-                      >
-                        <span className="flex items-center gap-1">
-                          <If cond={busy?.id === plugin.id && busy.action === 'enable'} then={<Spinner size="sm" color="current" />} />
-                          {t('plugins.enable')}
-                        </span>
-                      </Chip>
-                    </If>
-                    <If cond={!plugin.internal && !plugin.patchDisabled && !plugin.disabled}>
-                      <Chip
-                        className={actionChip({ busy: !!busy })}
-                        size="sm"
-                        onClick={() => onDisable(plugin.id)}
-                      >
-                        <span className="flex items-center gap-1">
-                          <If cond={busy?.id === plugin.id && busy.action === 'disable'} then={<Spinner size="sm" color="current" />} />
-                          {t('plugins.disable')}
-                        </span>
-                      </Chip>
-                    </If>
-                    <If cond={!plugin.internal}>
-                      {/* 单插件快照：快照始终可用（已存在时覆盖确认）；还原/删除快照仅在
-                          存在快照时显示。还原会停服务，还原后 toast 提示重启（issue #303） */}
-                      <Chip
-                        className={actionChip({ busy: !!busy })}
-                        variant="primary"
-                        color="accent"
-                        size="sm"
-                        onClick={() => onSnapshot(plugin.id, plugin.name, plugin.hasSnapshot)}
-                      >
-                        <span className="flex items-center gap-1">
-                          <If cond={busy?.id === plugin.id && busy.action === 'snapshot'} then={<Spinner size="sm" color="current" />} />
-                          {t('plugins.snapshot')}
-                        </span>
-                      </Chip>
-                      <If cond={plugin.hasSnapshot}>
-                        <Chip
-                          className={actionChip({ busy: !!busy })}
-                          variant="primary"
-                          color="accent"
-                          size="sm"
-                          onClick={() => onRestore(plugin.id, plugin.name)}
-                        >
-                          <span className="flex items-center gap-1">
-                            <If cond={busy?.id === plugin.id && busy.action === 'restore'} then={<Spinner size="sm" color="current" />} />
-                            {t('plugins.restore')}
-                          </span>
-                        </Chip>
-                        <Chip
-                          className={actionChip({ busy: !!busy })}
-                          size="sm"
-                          onClick={() => onDeleteSnapshot(plugin.id, plugin.name)}
-                        >
-                          <span className="flex items-center gap-1">
-                            <If cond={busy?.id === plugin.id && busy.action === 'delete-snapshot'} then={<Spinner size="sm" color="current" />} />
-                            {t('plugins.delete_snapshot')}
-                          </span>
-                        </Chip>
-                      </If>
-                      <Chip
-                        className={actionChip({ busy: !!busy })}
-                        variant="primary"
-                        color="danger"
-                        size="sm"
-                        onClick={() => onRemove(plugin.id, plugin.name)}
-                      >
-                        <span className="flex items-center gap-1">
-                          <If cond={busy?.id === plugin.id && busy.action === 'remove'} then={<Spinner size="sm" color="current" />} />
-                          {t('plugins.uninstall')}
-                        </span>
-                      </Chip>
-                    </If>
-                  </>
-                )}
-              />
-            ))}
-          </div>
-        </If>
+        <div className="flex flex-col gap-4">
+          <If cond={managedPlugins.length > 0} else={<Empty>{t('plugins.empty')}</Empty>}>
+            {managedPlugins.map(plugin => renderPluginRow(plugin))}
+          </If>
+          <If cond={internalPlugins.length > 0}>
+            {/* 「内置插件」分组头：默认折叠，点标题展开/收起。内置插件由启动自愈维护，
+                与可升级/可卸载的插件并列只会让用户误当作普通插件 */}
+            <button
+              type="button"
+              className="flex items-center gap-1 px-1 pt-2 text-left text-xs font-medium text-muted"
+              aria-expanded={showInternal}
+              onClick={() => toggleShowInternal()}
+            >
+              <ChevronRight className={showInternal ? 'size-3.5 rotate-90' : 'size-3.5'} />
+              {t('plugins.builtin_title', { count: internalPlugins.length })}
+            </button>
+            <If cond={showInternal}>
+              {internalPlugins.map(plugin => renderPluginRow(plugin))}
+            </If>
+          </If>
+        </div>
       </Panel.Loadable>
 
       {dialogHolder}

@@ -59,11 +59,9 @@ mod test_util {
 
     pub(super) fn sample_app_dir() -> PathBuf {
         if cfg!(windows) {
-            PathBuf::from(
-                r"C:\Users\test\AppData\Roaming\io.github.hairyf.deepseek-harness-desktop",
-            )
+            PathBuf::from(r"C:\Users\test\AppData\Roaming\dsh-tauri")
         } else {
-            PathBuf::from("/home/test/.local/share/io.github.hairyf.deepseek-harness-desktop")
+            PathBuf::from("/home/test/.local/share/dsh-tauri")
         }
     }
 

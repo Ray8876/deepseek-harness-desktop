@@ -25,6 +25,8 @@ test/e2e/.artifacts
 
 .serena
 
+.worktrees/
+
 source/
 .gitmodules
 .tmp-alpha-inspect

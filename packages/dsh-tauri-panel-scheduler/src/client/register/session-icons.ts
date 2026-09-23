@@ -1,9 +1,20 @@
 import type { ClientContext } from 'dsh-tauri/client'
-import { clockSvg, mountStyle } from 'dsh-tauri-ui/client'
+import type { Root } from 'react-dom/client'
+import { Clock, Icon, mountStyle } from 'dsh-tauri-ui/client'
 import { compact, defineRegister, map } from 'dsh-tauri/client'
+import { createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import { SESSION_ICON_ATTRIBUTE, SESSION_ICON_STYLE_ID, SIDEBAR_SELECTOR } from '../constants'
 import { store } from '../store'
 import sessionIconStyle from '../styles/index.cssr'
+
+const ICON_ROOTS = new WeakMap<Element, Root>()
+
+function removeIcon(icon: Element): void {
+  ICON_ROOTS.get(icon)?.unmount()
+  ICON_ROOTS.delete(icon)
+  icon.remove()
+}
 
 interface FiberLike {
   key?: unknown
@@ -44,7 +55,9 @@ function applyIcon(row: Element): void {
 
   const icon = document.createElement('span')
   icon.setAttribute(SESSION_ICON_ATTRIBUTE, '1')
-  icon.innerHTML = clockSvg(12)
+  const root = createRoot(icon)
+  root.render(createElement(Icon, { as: Clock, size: 12 }))
+  ICON_ROOTS.set(icon, root)
   row.insertBefore(icon, time)
 }
 
@@ -56,8 +69,8 @@ function scan(): void {
       if (!icon)
         applyIcon(row)
     }
-    else {
-      icon?.remove()
+    else if (icon) {
+      removeIcon(icon)
     }
   }
 }

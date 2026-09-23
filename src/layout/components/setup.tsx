@@ -1,6 +1,6 @@
 import type { IconComponent } from './loadable'
 import type { SetupStatus } from '@/store/modules/harness'
-import { ArrowDownToLine, CircleCheck, CircleExclamation, CircleInfo, Copy, Magnifier, Rocket, ShieldCheck } from '@gravity-ui/icons'
+import { ArrowRightFromSquare, CircleCheck, CircleExclamation, CircleInfo, Copy, Magnifier, Rocket, ShieldCheck } from '@gravity-ui/icons'
 import { invoke } from '@tauri-apps/api/core'
 import { useTranslation } from 'react-i18next'
 import { If, Then } from 'react-if-lite'
@@ -15,7 +15,7 @@ import { Loadable } from './loadable'
 // 各阶段对应不同图标，保持与 logo 一致的黑白中性色调
 const STATUS_ICONS: Record<SetupStatus, IconComponent> = {
   checking: Magnifier,
-  installing: ArrowDownToLine,
+  installing: ArrowRightFromSquare,
   starting: Rocket,
   preinstall: CircleInfo,
   ready: CircleCheck,
@@ -54,34 +54,20 @@ export function Setup() {
     pluginConflictHint,
     inotifyLimitHint,
     patchLayerHint,
-    downloadDisabled,
   } = useStore(store.harness)
   const error = status === 'error'
-  // 环境禁用了依赖下载（E2E 的 `DSH_E2E_DISABLE_DOWNLOAD=1`）：装配必然停在
-  // 「找不到 dsh CLI」，但那是被刻意截断的结果而非故障。按「禁用页」渲染，
-  // 版式与错误页完全一致（同一个 Loadable 的失败版式：图标 + 静态说明 + 动作行），
-  // 只是文案与动作不同。
-  const disabled = error && downloadDisabled
   const installing = status === 'installing'
-  const heading = disabled
-    ? t('status.download_disabled')
-    : (error ? t('status.error') : installer.title || t('status.installing'))
-  // Loadable 的失败版式由 `errorMsg != null` 触发：禁用页必须把说明当失败信息传进去，
-  // 否则会落进加载版式（没有图标、标题下面挂一个 spinner）。
-  const failureMsg = disabled ? t('status.download_disabled_detail') : errorMsg
-  const StatusIcon = disabled ? ArrowDownToLine : STATUS_ICONS[status]
+  const heading = error ? t('status.error') : (installer.title || t('status.installing'))
+  const StatusIcon = STATUS_ICONS[status]
   // 安装中展示安装日志；错误态展示启动失败时从 dsh 服务日志读取的真实错误行。
-  // 禁用页不给日志面板：装配根本没跑，日志只会误导。
-  const logs = disabled
-    ? undefined
-    : (installing ? installer.logs : (error && errorLogs.length > 0 ? errorLogs : undefined))
+  const logs = installing ? installer.logs : (error && errorLogs.length > 0 ? errorLogs : undefined)
   // 错误态的针对性提示：插件路由冲突 / Linux inotify 文件监视上限 / 补丁层问题，
   // 三者互斥（由各自的失败特征识别），优先展示最具体的一条。
-  const hint = error && !disabled ? (patchLayerHint || pluginConflictHint || inotifyLimitHint) : undefined
+  const hint = error ? (patchLayerHint || pluginConflictHint || inotifyLimitHint) : undefined
   // 补丁层问题分两种，恢复动作不同：语法错误整层隔离（改名备份），悬空 insert 只
   // 剥离解析不到的条目。两者的提示共用 patchLayerHint，入口按错误特征二选一。
-  const patchEntriesUnresolved = !disabled && error && containsPatchEntryUnresolved(errorMsg)
-  const patchLayerBroken = !disabled && error && patchLayerHint !== '' && !patchEntriesUnresolved
+  const patchEntriesUnresolved = error && containsPatchEntryUnresolved(errorMsg)
+  const patchLayerBroken = error && patchLayerHint !== '' && !patchEntriesUnresolved
 
   return (
     <Loadable
@@ -90,28 +76,13 @@ export function Setup() {
       subtitle={error ? undefined : installer.detail || t('status.installing')}
       percentage={installing ? installer.percentage : undefined}
       logs={logs}
-      errorMsg={error ? failureMsg : undefined}
-      testId={disabled ? 'dsh-setup-disabled' : error ? 'dsh-setup-error' : undefined}
+      errorMsg={error ? errorMsg : undefined}
+      testId={error ? 'dsh-setup-error' : undefined}
     >
       {hint && (
         <p className="m-0 text-xs leading-[18px] break-all text-load-muted">{hint}</p>
       )}
-      <If cond={disabled}>
-        <Then>
-          {/* 禁用态操作区：与错误页同一行布局，但只保留「复制日志」——重试与安全模式
-              在下载被环境禁用的前提下都没有意义。 */}
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <button
-              className={button({ tone: 'ghost', size: 'sm' })}
-              onClick={() => copyLogsHandler(t)}
-            >
-              <Copy className="size-4" />
-              {t('buttons.copy_logs')}
-            </button>
-          </div>
-        </Then>
-      </If>
-      <If cond={error && !disabled}>
+      <If cond={error}>
         <Then>
           {/* 错误态操作区：重试 / 复制日志 / 安全模式 三按钮放同一行，避免叠罗汉 */}
           <div className="flex flex-wrap items-center justify-center gap-2">

@@ -1,6 +1,5 @@
 //! Harness 服务启动编排：`start` / `restart` / `launch`，含端口自愈
-//! （避让递增 + 回落、等待释放）、`--no-open` 版本判定、补丁挂点与
-//! Windows 隐藏控制台启动。
+//! （避让递增 + 回落、等待释放）、补丁挂点与 Windows 隐藏控制台启动。
 
 use crate::config;
 use std::collections::HashMap;
@@ -101,59 +100,6 @@ fn resolve_heal_port(configured: u16, heal_target: u16, heal_target_free: bool) 
     } else {
         configured
     }
-}
-
-/// dsh 版本是否支持 `--no-open` 标志。
-///
-/// 0.1.0-rc.8 起 `dsh web` 默认在系统浏览器打开 UI（桌面端内嵌 WebView，
-/// 不希望每次启动都弹浏览器），并新增 `--no-open` 关闭该行为。更早的 rc
-/// 版本没有这个标志，commander 会把未知选项当作错误、导致 web profile
-/// 启动失败，因此追加标志前必须按已装版本判定：0.1.0-rc.8 及以上传标志；
-/// 更早不传（保持旧行为）。
-///
-/// 比较用 `semver` 库按完整语义化版本进行：只比 rc 序号会把基础版本更大的
-/// 新版本误判为旧版——`0.1.1-rc.1` 的 rc 号（1）虽小于 8，但晚于
-/// 0.1.0-rc.8，同样支持 `--no-open`（该误判是浏览器复弹的回归根因）。
-/// 版本号非法（无法解析）时保守处理：不追加标志。
-fn version_supports_no_open(version: &str) -> bool {
-    // 首个支持 `--no-open` 的 dsh 版本（0.1.0-rc.8）
-    const NO_OPEN_MIN_VERSION: &str = "0.1.0-rc.8";
-    let Ok(min) = semver::Version::parse(NO_OPEN_MIN_VERSION) else {
-        return false;
-    };
-    semver::Version::parse(version)
-        .map(|v| v >= min)
-        .unwrap_or(false)
-}
-
-/// 按当前活动核心的 dsh 版本决定是否追加 `--no-open`（见 [`version_supports_no_open`]）。
-///
-/// 版本以活动核心为准：本地核心（用户 CLI 安装）与预打包核心各自读自己的
-/// 包清单；读不到时保守处理：不追加标志。
-fn dsh_binary_version(binary: &std::path::Path) -> Option<String> {
-    let package_dir = binary.parent()?.parent()?;
-    let manifest = package_dir.join("package.json");
-    let content = fs::read_to_string(manifest).ok()?;
-    serde_json::from_str::<serde_json::Value>(&content)
-        .ok()?
-        .get("version")
-        .and_then(|value| value.as_str())
-        .map(str::to_owned)
-}
-
-/// 按实际将要执行的 dsh `bin.js` 判定 `--no-open` 能力。
-///
-/// 核心切换槽位的外层 package.json 可能没有 `dependencies` 清单（源码构建
-/// alpha 尤其如此），因此不能只读取活动核心登记版本；必须读取入口所属的
-/// `@deepseek-ai/dsh/package.json`，避免 alpha 因版本读空而漏传参数。
-fn web_supports_no_open_flag(
-    app_handle: &tauri::AppHandle,
-    dsh_binary_path: &std::path::Path,
-) -> bool {
-    dsh_binary_version(dsh_binary_path)
-        .or_else(|| crate::service::core::active_version(app_handle))
-        .map(|version| version_supports_no_open(&version))
-        .unwrap_or(false)
 }
 
 /// 检测并启动 Harness 服务
@@ -261,7 +207,7 @@ fn is_duplicate_loader_exit(exit_code: u32, stderr: &str) -> bool {
 pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     let mut setting = config::get_store_dat_setting(&app_handle);
     let node_binary_path = config::get_node_binary_path(&app_handle);
-    // 活动核心的 dsh 入口（本地核心优先，未检测到走预打包）
+    let _transition_guard = super::process::acquire_core_transition().await?;
     let dsh_binary_path = crate::service::core::active_dsh_binary(&app_handle);
 
     log::debug!("Checking Node.js path: {:?}", node_binary_path);
@@ -277,7 +223,6 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
 
     // 从这里开始持有与核心切换共用的互斥锁：最终状态检查、启动守卫、残留清扫
     // 及新进程登记必须处于同一临界区，避免切换在检查后插入。
-    let _transition_guard = super::process::acquire_core_transition().await?;
 
     // 避免重复启动（配合启动守卫，确保并发调用只拉起一个进程）
     if has_owned_process() {
@@ -389,10 +334,8 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     // 首次引导安装都作用于「当时的活动档案」，于是安全档案里会累积用户插件——它们
     // 往往正是启动失败的元凶，不清干净的话每次进入安全模式都带着同一批插件重启，
     // 隔离形同虚设。必须在 spawn dsh 之前做（服务未运行时改清单、删 node_modules
-    // 目录才安全），且要早于下面的 win_inspector::apply：apply 依据「插件是否装入
-    // profile」决定挂载还是清理 patch 行，先清插件才能让遗留挂载行被正确剥离。
-    // 内置插件与核心包由被调方保留；非安全档案直接跳过。最佳努力：失败只告警，
-    // 不阻断启动（清理不彻底只是隔离效果打折，启动阻塞则让应用彻底不可用）。
+    // 目录才安全）。内置插件与核心包由被调方保留；非安全档案直接跳过。最佳努力：
+    // 失败只告警，不阻断启动（清理不彻底只是隔离效果打折，启动阻塞则让应用彻底不可用）。
     if let Err(e) = crate::service::plugin::purge_user_plugins_in_safe_profile(&app_handle) {
         log::warn!("safe mode user plugin purge failed: {e}");
     }
@@ -404,10 +347,10 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     #[cfg(unix)]
     warn_if_inotify_watch_limit_low();
 
-    // Windows 极简模式修复的自愈：插件已装入 profile 时确保 patch 挂载行与
-    // minimal-win 用户 preset 落盘（幂等）。最佳努力：失败只告警，不阻断启动。
+    // Windows：剥离历史遗留的 `dsh-win-terminal-inspector` 注入行（幂等，官方核心
+    // 自 0.1.0-rc.8 起内置 inspector）。最佳努力：失败只告警，不阻断启动。
     if let Err(e) = win_inspector::apply(&app_handle) {
-        log::warn!("win32 terminal support apply failed: {e}");
+        log::warn!("win32 legacy patch cleanup failed: {e}");
     }
     // renderer 的 SlotOutlet 一行导出补丁（dsh-tauri-ui 设置侧边栏依赖）：只补
     // 活动核心的 dsh-client-ui-renderer lib/client.js，已含导出即跳过（幂等；核心
@@ -415,6 +358,14 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     // 启动——未打补丁时插件侧降级，官方设置 dialog 照常工作，绝不白屏。
     if let Err(e) = crate::service::patch::renderer::apply(&app_handle) {
         log::warn!("renderer SlotOutlet patch failed: {e}");
+    }
+    // composer 可用性：官方 ConversationRoot 对「不属于任何工作区的空白会话」把
+    // composer 换成「选择工作区」触发器（`inert` 只看 chipTitle，而 chipTitle 只来自
+    // 工作区），于是 dsh-tauri-ui 的「未分组」新会话无法输入。补丁放宽该判定（会话已有
+    // cwd 即不算 inert）并写入 `data-dsh-composer-cwd` 能力标记；标记缺失时插件侧按
+    // 退级策略禁用「未分组」入口并告警。最佳努力且幂等：锚点缺失安全跳过。
+    if let Err(e) = crate::service::patch::composer::apply(&app_handle) {
+        log::warn!("composer workspace-less patch failed: {e}");
     }
     // Expose an id-based SessionStore.remove facade so plugins can perform a
     // real in-memory teardown instead of leaving deleted sessions ungrouped.
@@ -447,11 +398,6 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     // 补丁把该 action 的三处取值放宽为 `?? {}`；锚点缺失（新核心已删字段）安全跳过。
     if let Err(e) = crate::service::patch::workspace_view::apply(&app_handle) {
         log::warn!("workspace view state patch failed: {e}");
-    }
-    // 当前 DSH client-HMR 会卸载第三方插件却不重新挂载。debug 直接联接本地
-    // 插件源码，故将 rebuilt 降级为自动刷新页面；release 保持上游行为。
-    if let Err(e) = crate::service::patch::client_hmr::apply(&app_handle) {
-        log::warn!("debug client plugin reload fallback patch failed: {e}");
     }
     // 预防性处理：pnpm 在无 TTY 环境（dsh-market 等子进程）下重装/更新插件时，
     // 清理/重建 node_modules 会触发交互确认并因无 TTY 直接中止
@@ -587,7 +533,7 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     }
 
     // 内嵌 WebView 是 `tauri.localhost` 下的跨源沙箱 iframe，`SameSite=Strict` 的
-    // browser-session Cookie 不会被携带。载体标记交给 dsh-tauri-connection 插件：
+    // browser-session Cookie 不会被携带。载体标记交给 dsh-tauri 插件（载体鉴权适配）：
     // 只有该标记在场时它才覆写 connection 的鉴权闸门，因此同一 profile 下独立运行
     // 的 `dsh web` 不受影响（取代原先对核心 JS 打的 `--skip-auth` 磁盘补丁）。
     envs.insert("DSH_TAURI_EMBEDDED".to_string(), "1".to_string());
@@ -600,9 +546,9 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("LOG_DIR_MKDIR_FAILED: create log dir failed: {e}"))?;
     rotate_service_log(&log_path, 3);
 
-    // rc.8 起 `dsh web` 默认在系统浏览器打开 UI；桌面端内嵌 WebView，不需要
-    // 浏览器，追加 `--no-open` 关闭（老版本无此标志时按版本判定不传）。
-    let no_open = web_supports_no_open_flag(&app_handle, &dsh_binary_path);
+    // `dsh web` 默认在系统浏览器打开 UI；桌面端内嵌 WebView，不需要浏览器，
+    // 追加 `--no-open` 关闭。该标志自 0.1.0-rc.8 起提供，全部受支持核心（≥
+    // 0.1.5-rc.1）均已具备，无需按版本判定。
 
     // 补丁层悬空 insert 预检：手写的 `insert` 条目在包被卸载（市场会拒绝卸载
     // 「仍被用户补丁引用」的插件，用户于是改走手工删依赖 / pnpm remove）或本地
@@ -632,6 +578,16 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     // node 会让 dsh 派生的子进程各自新建可见控制台窗口（频繁闪烁 cmd 黑窗），
     // 因此 Windows 上改用“隐藏控制台”方式启动，见 win_spawn 模块。
     let active_profile = crate::service::profile::active_profile(&app_handle);
+    let app_core_dir = config::get_dsh_install_path(&app_handle);
+    let core_dir = if dsh_binary_path == config::get_dsh_binary_path(&app_handle) {
+        app_core_dir
+    } else {
+        dsh_binary_path
+            .parent()
+            .and_then(std::path::Path::parent)
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or(app_core_dir)
+    };
     let spawn_result: SpawnResult = {
         #[cfg(windows)]
         {
@@ -648,9 +604,7 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
                 OsString::from("--port"),
                 OsString::from(setting.port.to_string()),
             ];
-            if no_open {
-                args.push(OsString::from("--no-open"));
-            }
+            args.push(OsString::from("--no-open"));
 
             // 只负责 spawn 并返回管道/PID/句柄：探测与重试期间不登记、不挂
             // 监视线程——只有最终采用的那个进程才登记，否则旧监视线程会通过
@@ -660,7 +614,7 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
                     super::win_spawn::spawn_with_hidden_console_owned(
                         &node_binary_path,
                         &args,
-                        Some(&config::get_dsh_install_path(&app_handle)),
+                        Some(&core_dir),
                         &envs,
                     )
                 };
@@ -758,11 +712,9 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
                 .arg(active_profile.as_str())
                 .arg("--port")
                 .arg(&setting.port.to_string());
-            if no_open {
-                cmd.arg("--no-open");
-            }
+            cmd.arg("--no-open");
             cmd.envs(&envs)
-                .current_dir(config::get_dsh_install_path(&app_handle))
+                .current_dir(&core_dir)
                 // 核心修正：提供一个空的 stdin 防止 setRawMode 报错
                 .stdin(Stdio::null())
                 // 使用管道捕获输出，以便在子线程中读取
@@ -801,11 +753,9 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
                                             .arg(active_profile.as_str())
                                             .arg("--port")
                                             .arg(setting.port.to_string());
-                                        if no_open {
-                                            cmd.arg("--no-open");
-                                        }
+                                        cmd.arg("--no-open");
                                         cmd.envs(&envs)
-                                            .current_dir(config::get_dsh_install_path(&app_handle))
+                                            .current_dir(&core_dir)
                                             .stdin(Stdio::null())
                                             .stdout(Stdio::piped())
                                             .stderr(Stdio::piped())
@@ -908,40 +858,6 @@ mod tests {
             "wait_for_port_release should return shortly after the port is released, not wait the full window"
         );
         releaser.join().expect("port releaser thread");
-    }
-
-    #[test]
-    fn no_open_supported_on_rc8_and_later() {
-        assert!(version_supports_no_open("0.1.0-rc.8"));
-        assert!(version_supports_no_open("0.1.0-rc.9"));
-        // 基础版本更大的新版本：0.1.1-rc.1 的 rc 号（1）虽小于 8，但晚于
-        // 0.1.0-rc.8，同样支持 --no-open（只比 rc 号会把这里误判为旧版）
-        assert!(version_supports_no_open("0.1.1-rc.1"));
-        assert!(version_supports_no_open("0.1.2-rc.1"));
-        // 稳定版必然晚于 rc.8
-        assert!(version_supports_no_open("0.1.0"));
-        assert!(version_supports_no_open("0.2.0"));
-        assert!(version_supports_no_open("1.0.0"));
-    }
-
-    #[test]
-    fn no_open_absent_before_rc8() {
-        assert!(!version_supports_no_open("0.1.0-rc.7"));
-        assert!(!version_supports_no_open("0.1.0-rc.0"));
-        // 基础版本更早的 rc 系列一律不支持
-        assert!(!version_supports_no_open("0.0.1-rc.5"));
-        assert!(!version_supports_no_open("0.0.9-rc.99"));
-    }
-
-    #[test]
-    fn no_open_unknown_version_is_conservative() {
-        assert!(!version_supports_no_open(""));
-        // rc 号缺失：`0.1.0-rc` 的预发布 [rc] 短于 [rc, 8]，判为早于 rc.8
-        assert!(!version_supports_no_open("0.1.0-rc"));
-        // 不完整/非法版本号（缺 patch、带 v 前缀、无 semver 结构）：无法解析
-        assert!(!version_supports_no_open("0.1"));
-        assert!(!version_supports_no_open("v0.1.0"));
-        assert!(!version_supports_no_open("not-a-version"));
     }
 
     /// 「duplicate loader entry」竞态签名的判定：只认 exit code 1 + stderr 含

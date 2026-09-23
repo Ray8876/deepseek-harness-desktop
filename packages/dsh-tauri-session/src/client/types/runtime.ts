@@ -21,8 +21,10 @@ export type SessionListSnapshot = Omit<SessionListState, 'ids' | 'byId' | 'curre
 /** 工作区快照投影（`workspaces.list.getSnapshot()`）。 */
 export type WorkspaceListSnapshot = Pick<WorkspaceSnapshot, 'items' | 'archivedSessionIds'>
 
-/** 官方 sessions 服务面：列表订阅 + 刷新 + 打开 + 绑定 + fork。 */
-export type SessionsRuntimeLike = Pick<ISessions, 'list' | 'refresh' | 'open' | 'binding' | 'fork'>
+/** 官方 sessions 服务面：列表订阅 + 刷新 + 打开 + 绑定 + fork（`open` 0.1.7 移除，由适配层补回）。 */
+export type SessionsRuntimeLike = Pick<ISessions, 'list' | 'refresh' | 'binding' | 'fork'> & {
+  open?: (sessionId: string) => unknown
+}
 
 /** 官方 workspaces 服务面 + 桌面导航扩展（`manager` / `startSession` 为跨核心版本兼容扩展）。 */
 export type WorkspacesRuntimeLike = Pick<IWorkspaces, 'list' | 'archiveSession' | 'delete'> & {

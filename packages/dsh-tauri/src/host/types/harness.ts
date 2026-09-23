@@ -16,7 +16,7 @@ import type { ConnectionGate, HostRoute, RouteHandler, WebServerLike } from '../
 export type { Context } from '@deepseek-ai/cordis'
 export type { Agent, AgentHandle, AgentRegistry, ModelSelection } from '@deepseek-ai/dsh-agent'
 export type { AgentDefaultModelConfig } from '@deepseek-ai/dsh-agent-default-model'
-export type { AgentPresets } from '@deepseek-ai/dsh-agent-presets'
+export type { AgentPresetRegistry } from '@deepseek-ai/dsh-agent-preset-registry'
 export type {
   ConnectionRequestRejection,
   ConnectionTrustRequest,

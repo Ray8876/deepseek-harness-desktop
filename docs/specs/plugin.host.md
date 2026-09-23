@@ -29,7 +29,7 @@ $$\text{apply.ts (装配)} \longrightarrow \begin{bmatrix} \text{routes/} \\ \te
 | **`apply.ts`** | 装配入口 | 仅做声明式组装（工具/事件/提示词/路由），控制在 30~50 行以内，不含业务逻辑。 |
 | **`config/`** | 配置与单例 | `runtime.ts`: 导出内存单例及 `setCurrentHostInstance`/`getCurrentHostInstance` 宿主绑定。<br>
 
-<br>`constants.ts`: 静态常量与配置，严禁硬编码 Magic Number/String；只登记**两个及以上模块**消费的常量（单一消费方的常量归属见 [agents.plugins.md](./agents.plugins.md) 的《通用协议：常量归属》），`config/` 下不允许出现 `*.types.ts`。 |
+<br>`constants.ts`: 静态常量与配置，严禁硬编码 Magic Number/String；只登记**两个及以上模块**消费的常量（单一消费方的常量归属见 [plugin.baisc.md](./plugin.baisc.md) 的《通用协议：常量归属》），`config/` 下不允许出现 `*.types.ts`。 |
 | **`types/`** | 类型定义 | 导出领域模型、DTO、输入输出接口（纯类型定义）。单一模块专属的类型与所属模块**同目录同名**，命名为 `<module>.types.ts`（如 `service/worktree.types.ts`）；此目录仅保留被多个模块共享的类型（如 `index.ts`）——跨模块共享的**宿主面类型**（`SessionHost` / `PanelExtensionHost` 等）统一放 `types/index.ts`。 |
 | **`storage/`** | 持久化实例 | `index.ts` 纯粹导出持久化驱动实例，不包含任何业务读写逻辑。 |
 | **`routes/`** | HTTP 路由层 *(可选)* | 遵循“文件路径 = URL 路径”，且**目录层级 = URL 层级**（`routes/session/open/path/post.ts` → `<前缀>/session/open/path`）。仅做协议解析、DTO 校验与 Service 调用，不含业务实现。`disposer.*({ kind, path })` 的 `path` **一律直接写字面量**（统一前缀 `/api/desktop/<plugin-id>`），禁止为路由路径定义 `*_ROUTE` 常量，也不再使用 `API_PREFIX` 之类的拼接常量。 |

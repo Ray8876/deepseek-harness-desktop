@@ -33,6 +33,8 @@ interface InvokeBridgeRequest {
  * 防止 iframe 内其他插件借道桥执行任意 Tauri command（越权）。
  */
 const ALLOWED_INVOKE_CMDS = new Set([
+  // 只读布尔量，供 dsh-tauri-ui 决定是否挂载仅 dev 可见的调试面板。
+  'is_dev_build',
   'get_pet_status',
   'set_pet_enabled',
   'set_active_pet',

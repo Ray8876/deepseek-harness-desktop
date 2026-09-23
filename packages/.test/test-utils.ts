@@ -25,7 +25,7 @@ export const testDshHome = mkdtempSync(join(tmpdir(), 'dsh-test-home-'))
 
 /** 清空临时数据根下的插件自有目录，让每个用例从干净状态开始。 */
 export function resetTestDshHome(): void {
-  for (const dir of ['ledger', 'checkout-context', 'worktrees', '.trash']) {
+  for (const dir of ['ledger', 'checkout-context', 'worktrees', '.trash', 'sessions']) {
     rmSync(join(testDshHome, dir), { recursive: true, force: true })
   }
 }

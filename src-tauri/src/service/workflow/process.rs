@@ -1,9 +1,11 @@
 //! Harness 进程生命周期：本应用持有的根进程登记（PID + Windows 句柄成对存储）、
 //! 启动守卫、进程树终止与退出状态回落，以及按 dsh 安装路径清扫历史残留的
-//! 孤儿服务实例（release 构建；debug 由各自 AppData 下的 `.harness.pid` 标记精确回收）。
+//! 孤儿服务实例（Windows 仅清扫父进程已退出且入口路径匹配的服务）。
 
 use crate::config;
 use std::fs;
+#[cfg(windows)]
+use std::path::Path;
 use std::process::Command;
 #[cfg(windows)]
 use std::process::Stdio;
@@ -196,31 +198,40 @@ pub(super) fn on_owned_process_exit(
 ///
 /// 返回是否真的结束了一个进程：调用方据此决定要不要等端口释放。没有持有进程时
 /// 是纯 no-op，不该白等——退出与安装器路径都在用户可见的关键路径上。
-fn terminate_owned_process() -> bool {
+fn terminate_owned_process() -> Result<bool, ()> {
     // 一次性取出 PID+句柄（成对），杜绝「PID 已清空/句柄未清」的漏杀窗口
     let Some(owned) = take_owned_process() else {
-        return false;
+        return Ok(false);
     };
 
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
         use windows_sys::Win32::System::Threading::WaitForSingleObject;
         const WAIT_TIMEOUT_CODE: u32 = 0x0000_0102;
         let handle = owned.handle as windows_sys::Win32::Foundation::HANDLE;
         if handle.is_null() {
-            return true;
+            return Ok(true);
         }
         // 真实句柄已结束说明 PID 可能已复用，此时绝不调用 taskkill。
         if unsafe { WaitForSingleObject(handle, 0) } != WAIT_TIMEOUT_CODE {
             unsafe { CloseHandle(handle) };
-            return true;
+            return Ok(true);
         }
         kill_pid_tree(owned.pid);
-        unsafe {
-            WaitForSingleObject(handle, 5_000);
-            CloseHandle(handle);
+        if unsafe { WaitForSingleObject(handle, 5_000) } != WAIT_OBJECT_0 {
+            let mut guard = owned_process_lock()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if guard.is_none() {
+                *guard = Some(owned);
+            } else {
+                unsafe { CloseHandle(handle) };
+            }
+            log::error!("Harness process {} is still running after stop", owned.pid);
+            return Err(());
         }
+        unsafe { CloseHandle(handle) };
     }
 
     #[cfg(unix)]
@@ -228,7 +239,7 @@ fn terminate_owned_process() -> bool {
         kill_pid_tree(owned.pid);
     }
 
-    true
+    Ok(true)
 }
 
 /// 结束进程树（Windows `taskkill /PID <pid> /T /F`；Unix 负 PID 进程组，与
@@ -242,8 +253,13 @@ pub(super) fn kill_pid_tree(pid: u32) {
         cmd.creation_flags(0x08000000);
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::null());
-        if let Err(e) = cmd.output() {
-            log::error!("Failed to stop Harness process tree {pid}: {e}");
+        match cmd.output() {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => log::error!(
+                "Failed to stop Harness process tree {pid}: taskkill exited with {}",
+                output.status
+            ),
+            Err(e) => log::error!("Failed to stop Harness process tree {pid}: {e}"),
         }
     }
 
@@ -331,6 +347,123 @@ fn command_line_has_argument_after(cmdline: &str, preceding: &str, argument: &st
     })
 }
 
+#[cfg(windows)]
+fn is_windows_harness_command_line(cmdline: &str, dsh_bin: &str) -> bool {
+    let normalized = cmdline.replace('/', "\\");
+    let path = dsh_bin.replace('/', "\\");
+    let boundary = format!(
+        r#"(?i)^\s*(?:"[^"]*\\node(?:\.exe)?"|[^\s"]*node(?:\.exe)?)\s+"?{}(?:"|\s|$)"#,
+        regex::escape(&path)
+    );
+    regex::Regex::new(&boundary).is_ok_and(|pattern| pattern.is_match(&normalized))
+        && is_harness_command_line(
+            &normalized.replace('"', "").to_lowercase(),
+            &path.to_lowercase(),
+        )
+        && command_line_has_argument(&normalized, "--no-open")
+}
+
+#[cfg(windows)]
+fn terminate_stale_harness_processes_at(dsh_bin: &Path) {
+    use std::os::windows::process::CommandExt;
+
+    let Some(dsh_bin) = dsh_bin.to_str() else {
+        return;
+    };
+    let script = "$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; try { $all = Get-CimInstance Win32_Process; $byPid = @{}; foreach ($process in $all) { $byPid[$process.ProcessId] = $process }; foreach ($child in $all) { if ($child.Name -ne 'node.exe') { continue }; $parent = $byPid[$child.ParentProcessId]; if ($child.CreationDate -and (!$parent -or ($parent.CreationDate -and $parent.CreationDate.ToUniversalTime() -gt $child.CreationDate.ToUniversalTime()))) { [pscustomobject]@{ pid = $child.ProcessId; commandLine = $child.CommandLine; created = $child.CreationDate.ToFileTimeUtc() } | ConvertTo-Json -Compress } } } catch { Write-Error $_; exit 1 }";
+    let output = match Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .creation_flags(0x08000000)
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            log::warn!(
+                "Failed to enumerate orphan Harness processes: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        Err(error) => {
+            log::warn!("Failed to enumerate orphan Harness processes: {error}");
+            return;
+        }
+    };
+    let owned_pid = owned_process_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .map(|process| process.pid);
+    let mut found = 0;
+    for (pid, created) in orphan_harness_pids(&output.stdout, dsh_bin, owned_pid) {
+        if matches_process_creation(pid, created, || {
+            log::warn!("Terminating orphan Harness service process {pid} (from dsh install dir)");
+            kill_pid_tree(pid);
+        }) {
+            found += 1;
+        }
+    }
+    if found > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(800));
+    }
+}
+
+#[cfg(windows)]
+fn matches_process_creation(pid: u32, created: u64, terminate: impl FnOnce()) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_SYNCHRONIZE,
+    };
+
+    let handle = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            pid,
+        )
+    };
+    if handle.is_null() {
+        return false;
+    }
+    let mut creation = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let mut exit = creation;
+    let mut kernel = creation;
+    let mut user = creation;
+    let matches = unsafe {
+        GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) != 0
+            && WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+            && (u64::from(creation.dwHighDateTime) << 32 | u64::from(creation.dwLowDateTime)) / 10
+                == created / 10
+    };
+    if matches {
+        terminate();
+    }
+    if !matches {
+        log::warn!("Skipping orphan Harness process {pid}: creation time or process state changed (expected {created}, observed {})", u64::from(creation.dwHighDateTime) << 32 | u64::from(creation.dwLowDateTime));
+    }
+    unsafe { CloseHandle(handle) };
+    matches
+}
+
+#[cfg(windows)]
+fn orphan_harness_pids(output: &[u8], dsh_bin: &str, owned_pid: Option<u32>) -> Vec<(u32, u64)> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .filter_map(|line| {
+            let process = serde_json::from_str::<serde_json::Value>(line).ok()?;
+            let pid = u32::try_from(process.get("pid")?.as_u64()?).ok()?;
+            let command = process.get("commandLine")?.as_str()?;
+            let created = process.get("created")?.as_u64()?;
+            (Some(pid) != owned_pid && is_windows_harness_command_line(command, dsh_bin))
+                .then_some((pid, created))
+        })
+        .collect()
+}
+
 /// 判断命令行是否为「从本应用 dsh 安装目录启动的 Harness 服务」。
 ///
 /// 除入口路径外同时核对桌面端服务启动参数，避免清扫时误伤用户并行执行的
@@ -351,59 +484,16 @@ fn is_harness_command_line(cmdline: &str, dsh_bin: &str) -> bool {
 /// 会持续占用 `dependencies/dsh` 目录的文件句柄（node 以该目录为 cwd 且模块
 /// DLL 加载在内存），更新切换目录时触发 os error 32（INSTALL_BACKUP_FAILED）。
 ///
-/// 命令行为本应用 dsh 入口路径（`...\dependencies\dsh\node_modules\...\bin.js`）
-/// 的 node 进程可判定为本应用的服务实例——路径精确匹配不会误杀用户其它 node
-/// 程序，因此可安全地全部结束（taskkill /T /F）。
+/// Windows 只结束入口路径精确匹配且父进程已退出的 node 服务；仍由另一个桌面实例
+/// 持有的服务不做清扫。Unix 保持原有 release 路径匹配行为。
 pub fn terminate_stale_harness_processes(app_handle: &tauri::AppHandle) {
-    // 开发（debug）构建不做按路径清扫：生产与开发共用同一个 `dependencies/dsh`
-    // 安装目录（核心共用），按命令行路径匹配会把同时运行的 release 服务进程
-    // 一并结束——`pnpm tauri dev` 每次后端重编译都会重启应用并触发清扫，导致
-    // "release 版 DSH 被 dev 版热更新杀掉"。开发构建自身的崩溃残留仍由
-    // `.harness.pid` 标记（位于独立数据目录 `.dsh.dev`，PID+端口双重确认）
-    // 精确回收。
-    if cfg!(debug_assertions) {
-        return;
-    }
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let dsh_bin_path = config::get_dsh_binary_path(app_handle);
-        let Some(dsh_bin) = dsh_bin_path.to_str() else {
-            return;
-        };
-        // 进程名过滤保证 PowerShell 自身（其命令行同样包含该路径）不被误杀；
-        // 路径中的单引号按 PS 字符串字面量规则转义，避免用户目录含 `'` 时语法错误。
-        // 与 is_harness_command_line 一致，额外要求服务参数（--profile 与
-        // --port），兼容已移除的 --host 参数，同时避免误伤 `dsh plugin` 等短命令。
-        let escaped = dsh_bin.replace('\'', "''");
-        let script = format!(
-            "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object {{ $_.CommandLine -like '*{escaped}*' -and $_.CommandLine -notlike '*{escaped} plugin *' -and $_.CommandLine -like '*--profile*' -and $_.CommandLine -like '*--port*' }} | Select-Object -ExpandProperty ProcessId"
-        );
-        let Ok(output) = Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .creation_flags(0x08000000)
-            .output()
-        else {
-            log::error!("Failed to enumerate stale Harness service processes");
-            return;
-        };
-        let mut found = 0;
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let Ok(pid) = line.trim().parse::<u32>() else {
-                continue;
-            };
-            found += 1;
-            log::warn!("Terminating stale Harness service process {pid} (from dsh install dir)");
-            kill_pid_tree(pid);
-        }
-        if found > 0 {
-            // 与 stop() 同理：taskkill 返回后 DLL 句柄的释放还有短暂滞后，
-            // 让出一点时间避免紧随其后的目录切换撞上残留锁。
-            std::thread::sleep(std::time::Duration::from_millis(800));
-        }
-    }
+    terminate_stale_harness_processes_at(&config::get_dsh_binary_path(app_handle));
     #[cfg(not(windows))]
     {
+        if cfg!(debug_assertions) {
+            return;
+        }
         // Unix 同样需要按路径清扫：打开中的文件允许重命名确实不阻塞更新切换，
         // 但崩溃/强杀残留的孤儿 dsh 实例会持续监听端口，下一次启动只能一路
         // 漂移端口（3080→3081→…）并被持久化，表现为「更新后端口递增」
@@ -463,11 +553,10 @@ pub async fn stop(app_handle: tauri::AppHandle) -> Result<(), String> {
     // 进程终止涉及 WaitForSingleObject（至多 5s）与 taskkill/kill 等同步阻塞
     // 调用，移出 Tokio 执行线程避免卡住其他并发任务（WARN-7/P2-#20）。
     LAUNCH_GUARD.store(false, Ordering::SeqCst);
-    tauri::async_runtime::spawn_blocking(|| {
-        terminate_owned_process();
-    })
-    .await
-    .map_err(|e| format!("STOP_FAILED: {e}"))?;
+    tauri::async_runtime::spawn_blocking(terminate_owned_process)
+        .await
+        .map_err(|e| format!("STOP_FAILED: {e}"))?
+        .map_err(|()| "STOP_FAILED: Harness process did not stop".to_string())?;
     // 清理孤儿清扫标记：正常停止的实例不应被下次启动当作残留
     let _ = fs::remove_file(harness_pid_path(&app_handle));
 
@@ -491,7 +580,7 @@ pub async fn stop(app_handle: tauri::AppHandle) -> Result<(), String> {
 /// 但内核回收监听套接字仍有短暂滞后，故结束过进程后补一次有界等待，让紧随其后的
 /// 安装器/新实例看到端口已释放。没持有进程时不等待，避免在用户可见路径上白耗。
 pub fn stop_for_installer(app_handle: &tauri::AppHandle) {
-    if !terminate_owned_process() {
+    if !matches!(terminate_owned_process(), Ok(true)) {
         return;
     }
     // 正常停止路径同样清理清扫标记（崩溃路径才需要下次启动清扫）
@@ -675,9 +764,229 @@ mod tests {
         ));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn live_peer_service_is_not_reaped_from_temporary_core_directory() {
+        use std::os::windows::process::CommandExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "dsh-sweep-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let core = root.join("dependencies").join("dsh");
+        let bin = core
+            .join("node_modules")
+            .join("@deepseek-ai")
+            .join("dsh")
+            .join("lib")
+            .join("bin.js");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        let ready = root.join("ready");
+        std::fs::write(&bin, format!("require('fs').writeFileSync({:?}, 'ready'); setTimeout(() => process.exit(0), 60000)", ready.to_string_lossy())).unwrap();
+        let mut child = Command::new("node.exe")
+            .arg(&bin)
+            .args(["--profile", "web", "--port", "3081", "--no-open"])
+            .current_dir(&core)
+            .creation_flags(0x08000000)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn temporary service");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let started = std::time::Instant::now();
+            while !ready.exists() && started.elapsed() < std::time::Duration::from_secs(5) {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            assert!(ready.exists(), "temporary service must become ready");
+            assert!(
+                std::fs::rename(&core, root.join("renamed")).is_err(),
+                "a live service working directory must block Windows rename"
+            );
+            terminate_stale_harness_processes_at(&bin);
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "live peer desktop child must not be killed"
+            );
+            assert!(
+                std::fs::rename(&core, root.join("renamed")).is_err(),
+                "live peer must still pin its core directory"
+            );
+        }));
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&root);
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn orphan_service_releases_temporary_core_directory_for_rename() {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+        };
+
+        let root = std::env::temp_dir().join(format!(
+            "dsh-孤儿-sweep-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let core = root.join("dependencies").join("dsh");
+        let bin = core
+            .join("node_modules")
+            .join("@deepseek-ai")
+            .join("dsh")
+            .join("lib")
+            .join("bin.js");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        let ready = root.join("ready");
+        std::fs::write(&bin, format!("require('fs').writeFileSync({:?}, 'ready'); setTimeout(() => process.exit(0), 60000)", ready.to_string_lossy())).unwrap();
+        let pid_file = root.join("orphan.pid");
+        let parent = "const {spawn}=require('child_process'); const c=spawn(process.execPath,[process.argv[1],'--profile','web','--port','3081','--no-open'],{cwd:process.argv[2],detached:true,stdio:'ignore'}); try { require('fs').writeFileSync(process.argv[3],String(c.pid)) } catch (error) { c.kill(); throw error } c.unref()";
+        let result = std::panic::catch_unwind(|| {
+            let output = Command::new("node.exe")
+                .args(["-e", parent])
+                .arg(&bin)
+                .arg(&core)
+                .arg(&pid_file)
+                .creation_flags(0x08000000)
+                .output()
+                .expect("spawn temporary parent");
+            assert!(
+                output.status.success(),
+                "temporary parent should spawn orphan"
+            );
+            let pid = std::fs::read_to_string(&pid_file)
+                .expect("orphan pid file")
+                .parse::<u32>()
+                .expect("orphan pid");
+            let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+            assert!(
+                !handle.is_null(),
+                "retain the temporary orphan process handle"
+            );
+            let check = std::panic::catch_unwind(|| {
+                let started = std::time::Instant::now();
+                while !ready.exists() && started.elapsed() < std::time::Duration::from_secs(5) {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                assert!(ready.exists(), "temporary orphan must become ready");
+                assert!(
+                    std::fs::rename(&core, root.join("renamed")).is_err(),
+                    "orphan working directory must block Windows rename"
+                );
+                terminate_stale_harness_processes_at(&bin);
+                assert_eq!(
+                    unsafe { WaitForSingleObject(handle, 5000) },
+                    WAIT_OBJECT_0,
+                    "the matching orphan should be terminated"
+                );
+                std::fs::rename(&core, root.join("renamed"))
+                    .expect("rename should succeed after orphan cleanup");
+            });
+            if unsafe { WaitForSingleObject(handle, 0) } != WAIT_OBJECT_0 {
+                kill_pid_tree(pid);
+            }
+            unsafe { CloseHandle(handle) };
+            if let Err(error) = check {
+                std::panic::resume_unwind(error);
+            }
+        });
+        if result.is_err() {
+            if let Ok(pid) = std::fs::read_to_string(&pid_file).and_then(|text| {
+                text.parse::<u32>()
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+            }) {
+                let script = format!(
+                    "(Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}').CommandLine"
+                );
+                if let Ok(output) = Command::new("powershell")
+                    .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                    .creation_flags(0x08000000)
+                    .output()
+                {
+                    if is_windows_harness_command_line(
+                        &String::from_utf8_lossy(&output.stdout),
+                        &bin.to_string_lossy(),
+                    ) {
+                        kill_pid_tree(pid);
+                    }
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn orphan_selection_excludes_owned_foreign_and_plugin_processes() {
+        let bin = r"C:\sandbox\dev\dependencies\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js";
+        let lines = [
+            serde_json::json!({ "pid": 101, "created": 1001, "commandLine": format!("node.exe {bin} --profile web --port 3081 --no-open") }),
+            serde_json::json!({ "pid": 102, "created": 1002, "commandLine": format!("node.exe {bin} --profile web --port 3082 --no-open") }),
+            serde_json::json!({ "pid": 103, "created": 1003, "commandLine": format!("node.exe {bin} plugin --profile web --port 3083") }),
+            serde_json::json!({ "pid": 104, "created": 1004, "commandLine": format!("node.exe {bin}.backup --profile web --port 3084") }),
+        ];
+        let output = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            orphan_harness_pids(output.as_bytes(), bin, Some(102)),
+            vec![(101, 1001)]
+        );
+        assert_eq!(
+            orphan_harness_pids(b"invalid json", bin, None),
+            Vec::<(u32, u64)>::new()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_harness_command_line_matches_only_the_active_core_service() {
+        let bin = r"C:\Users\Example User\AppData\Roaming\dsh-tauri\dev\dependencies\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js";
+        let command = format!(r#""C:\node.exe" "{bin}" --profile web --port 3081 --no-open"#);
+        assert!(is_windows_harness_command_line(&command, bin));
+        assert!(!is_windows_harness_command_line(
+            &command.replace(bin, &format!("{bin}.backup")),
+            bin
+        ));
+        assert!(!is_windows_harness_command_line(
+            &command.replace(bin, &format!("{bin}-foreign")),
+            bin
+        ));
+        assert!(!is_windows_harness_command_line(
+            &command.replace(" --profile", " plugin --profile"),
+            bin
+        ));
+        assert!(!is_windows_harness_command_line(
+            "node.exe other.js --profile web --port 3081",
+            bin
+        ));
+        assert!(!is_windows_harness_command_line(
+            &format!(r#"node.exe unrelated.js "{bin}" --profile web --port 3081"#),
+            bin
+        ));
+    }
+
     #[test]
     fn harness_cmdline_matches_macos_app_data_path_with_spaces() {
-        let bin = "/Users/simon/Library/Application Support/io.github.hairyf.deepseek-harness-desktop/dependencies/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js";
+        let bin = "/Users/simon/Library/Application Support/dsh-tauri/dependencies/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js";
         let cmdline = format!("/opt/homebrew/bin/node {bin} --profile web --port 3084");
         assert!(is_harness_command_line(&cmdline, bin));
     }

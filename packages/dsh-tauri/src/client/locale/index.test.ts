@@ -175,8 +175,20 @@ describe('defineLocale', () => {
   it('支持 ctx.effect(registerLocale, LABEL) 的 this 取 ctx 形式', async () => {
     const { locale, fake, ctx } = await setup()
     const dispose = locale.registerLocale.call(ctx)
-    expect(fake.dicts.get('probe')?.get('en')).toBeDefined()
+
+    expect(fake.dicts.get('probe')?.get('en')).toEqual({ greeting: 'Hello', welcomed: 'Welcome, {name}' })
+    expect(fake.dicts.get('probe')?.get('zh')).toEqual({ greeting: '你好', welcomed: '欢迎，{name}' })
+    expect(fake.listeners.size).toBe(1)
+
+    // live 绑定：注册后 text 走运行时词典（可覆盖编译期词典），不是就地读本地 en
+    fake.register('probe', { en: { greeting: 'Runtime hello' } })
+    expect(locale.text('greeting')).toBe('Runtime hello')
+
     dispose()
+    expect(fake.listeners.size).toBe(0)
+    expect(fake.dicts.get('probe')?.has('zh')).toBe(false)
+    // disposer 解绑 live 后 text 回落编译期词典
+    expect(locale.text('greeting')).toBe('Hello')
   })
 
   it('this 是 cordis Fiber 时取 fiber.ctx（effect 回调的真实形态）', async () => {

@@ -13,6 +13,17 @@ pub async fn get_app_config(app_handle: AppHandle) -> Result<config::Setting, St
     Ok(config::get_store_dat_setting(&app_handle))
 }
 
+/// 当前桌面端是否为 dev 构建（`tauri dev` / `pnpm dev:desktop`）。
+///
+/// 插件用它决定是否挂载只面向开发的调试入口（例如 dsh-tauri-ui 的「UI 组件」页）；
+/// release 必须返回 `false`，否则调试入口会随正式包发布。插件侧没有可用的构建期
+/// 开关：`dsh-tauri-tsdown` 无条件把 `process.env.NODE_ENV` 定成 `'production'`，
+/// 也不替换 `import.meta.env`，因此只能由宿主在运行时告知。
+#[tauri::command]
+pub fn is_dev_build() -> bool {
+    cfg!(debug_assertions)
+}
+
 /// 更新桌面端配置
 ///
 /// `close_action` 对应前端的 camelCase `closeAction`，命中关闭按钮时的行为

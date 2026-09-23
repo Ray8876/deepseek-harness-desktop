@@ -2,6 +2,7 @@ import type { WorktreeBindings } from '../apis/index.type'
 import { createLifecycleController } from 'dsh-tauri/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DISCARD_POLL_DELAY_MS, HYDRATION_RETRY_BUDGET_PER_SECOND, HYDRATION_RETRY_WINDOW_MS, SESSION_RECONCILE_MIN_INTERVAL_MS } from '../constants'
+import { store } from '../store'
 import { registerWorktreeHydration } from './hydration'
 
 const BASE_URL = '/api/desktop/dsh-tauri-worktree'
@@ -302,6 +303,7 @@ describe('registerWorktreeHydration 请求量', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     mocks.fetch.mockReset()
+    store.worktree.$state.bySession = {}
   })
 
   afterEach(() => {

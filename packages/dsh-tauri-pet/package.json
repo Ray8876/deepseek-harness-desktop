@@ -60,8 +60,7 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-skill-filesystem": "catalog:dsh",
-    "dsh-tauri": "workspace:*",
-    "dsh-tauri-ui": "workspace:*"
+    "dsh-tauri": "workspace:*"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "catalog:dsh",
@@ -70,6 +69,7 @@
     "@deepseek-ai/dsh-client-ui-renderer": "catalog:dsh",
     "@deepseek-ai/dsh-client-ui-slots": "catalog:dsh",
     "dsh-tauri-tsdown": "workspace:*",
+    "dsh-tauri-ui": "workspace:*",
     "react": "catalog:runtime",
     "tsdown": "catalog:cli"
   }

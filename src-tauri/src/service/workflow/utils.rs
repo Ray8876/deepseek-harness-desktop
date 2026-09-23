@@ -5,6 +5,8 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+use crate::utils::decode_process_line;
+
 const DSH_MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 const DSH_MAX_BACKUPS: usize = 3;
 static DSH_LOG_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -29,10 +31,15 @@ pub(super) fn loopback_http_client(timeout: Duration) -> Result<reqwest::Client,
 /// SPA `/` 在 webServer 绑定后立刻 200，此时连接桥与 Loader 图往往还没就绪；
 /// WebView 若在这个窗口加载，会永久停在官方 boot 页 “Loading plugins…”。
 /// 旧版没有可读取的启动图时，保留这两个稳定入口作为兼容兜底。
+///
+/// 兜底地址只在**解析不出启动图**时生效，因此必须挑在全部受支持核心上都存在的
+/// 模块：`dsh-client-runtime` 是 0.1.2 时代的旧包名，0.1.6 起上游已不再发布，
+/// 用它会让新核心必然 N/N 不齐；`dsh-client-modules` 从 0.1.5 起一直存在，且每个
+/// boot 页面都会预加载它，是更可靠的第二个探针。
 pub(super) fn health_probe_plugin_urls(port: u16) -> Vec<String> {
     vec![
         format!("http://127.0.0.1:{port}/plugins/@deepseek-ai/dsh-client-ui-layout/client.js"),
-        format!("http://127.0.0.1:{port}/plugins/@deepseek-ai/dsh-client-runtime/client.js"),
+        format!("http://127.0.0.1:{port}/plugins/@deepseek-ai/dsh-client-modules/client.js"),
     ]
 }
 
@@ -82,7 +89,7 @@ pub(super) fn client_urls_from_boot_html(port: u16, html: &str) -> Option<Vec<St
     Some(
         paths
             .into_iter()
-            .map(|path| format!("http://127.0.0.1:{port}{path}"))
+            .map(|path| format!("http://127.0.0.1:{port}/{}", path.trim_start_matches('/')))
             .collect(),
     )
 }
@@ -104,7 +111,13 @@ fn is_client_bundle_path(path: &str) -> bool {
     // alpha combo 路由合法地使用 `/plugins/??<package>/client.js&rev=...`：
     // 第一个 `?` 是路由约定，第二个是 combo payload 的起始标记，不能把它拼成
     // `/plugins/??` 再交给 URL 解析器时丢掉一个问号。
-    path.starts_with("/plugins/") && path.contains("client.js") && !path.starts_with("//")
+    //
+    // 0.1.7 起 boot 首页改为 `<base href="./">`，同一批地址在 HTML 里是**相对**
+    // 形式（`plugins/...`，无前导 `/`），JSON 里也照抄。只认绝对形式会让解析直接
+    // 落空、退回硬编码兜底，而兜底地址在新核心上必然 404（核心不再提供该模块），
+    // 于是健康检查永远卡在 0/N。这里两种形式都接受，拼接时统一补前导 `/`。
+    let path = path.trim_start_matches("./");
+    (path.starts_with("plugins/") || path.starts_with("/plugins/")) && path.contains("client.js")
 }
 
 /// 判断健康检查响应是不是可用的插件 bundle。
@@ -186,12 +199,13 @@ where
 
 /// 逐行读取子进程输出并写入日志。
 ///
-/// 任何一行是非法 UTF-8 时**必须**用 lossy 替换继续读下去，不能中断：管道
-/// 读端一旦被关闭，dsh 主进程下一次写 stderr 就会收到 EPIPE，Node 以退出码 1
-/// 静默崩溃（插件子进程——python MCP 服务器等——在中文本地化 Windows 下按
-/// ANSI 代码页输出 GBK 日志是常态），桌面端表现为 Harness 反复崩溃、WebView
-/// 永久卡在 "Loading plugins"。同样的非法字节在日志里以 U+FFFD 呈现，不影响
-/// 其余行的可读性。真正需要停手的只有 EOF 与管道自身的 I/O 错误。
+/// 任何一行是非法 UTF-8 时**必须**继续读下去，不能中断：管道读端一旦被关闭，
+/// dsh 主进程下一次写 stderr 就会收到 EPIPE，Node 以退出码 1 静默崩溃（插件
+/// 子进程——python MCP 服务器等——在中文本地化 Windows 下按 ANSI 代码页输出
+/// GBK 日志是常态），桌面端表现为 Harness 反复崩溃、WebView 永久卡在
+/// "Loading plugins"。解码交给 [`decode_process_line`]：先严格 UTF-8，失败按
+/// ANSI 代码页解，仍失败才以 U+FFFD 呈现。真正需要停手的只有 EOF 与管道自身的
+/// I/O 错误。
 fn drain_subprocess_output<R: Read + Send + 'static>(
     mut reader: BufReader<R>,
     log_path: PathBuf,
@@ -205,7 +219,7 @@ fn drain_subprocess_output<R: Read + Send + 'static>(
                 // 去除行尾 \n / \r\n（与旧 lines() 行为一致）
                 let bytes = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
                 let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
-                let line = String::from_utf8_lossy(bytes);
+                let line = decode_process_line(bytes);
                 match level {
                     log::Level::Warn => log::warn!(target: "dsh", "{}", line),
                     _ => log::info!(target: "dsh", "{}", line),
@@ -343,7 +357,15 @@ mod tests {
             content.contains("second line"),
             "reader must NOT stop at invalid UTF-8 (old code broke and closed the pipe); got: {content:?}"
         );
-        // 非法字节以 U+FFFD 呈现，行内容不丢失
+        // 非法 UTF-8 不再直接 lossy：Windows 先按 ANSI 代码页解码（zh-CN 的 936 还原
+        // 中文，en-US 的 1252 也是可读字符），只有连 ANSI 都解不出时才回落 U+FFFD。
+        // 逐字断言会绑死 runner 的代码页，故这里只断言「没走 lossy 快路」。
+        #[cfg(windows)]
+        assert!(
+            !content.contains('\u{FFFD}'),
+            "Windows 上非法 UTF-8 必须走 ANSI 代码页解码，got: {content:?}"
+        );
+        #[cfg(not(windows))]
         assert!(content.contains('\u{FFFD}'));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -439,6 +461,23 @@ mod tests {
         assert_eq!(urls, vec!["http://127.0.0.1:3081/plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=cddf5581d5d5"]);
     }
 
+    /// 回归（0.1.7）：boot 首页改用 `<base href="./">`，同一批插件地址在 HTML 与
+    /// `__DSH_BOOT__` 里都是相对形式（`plugins/...`，无前导 `/`）。若只认绝对形式，
+    /// 解析会整体落空并退回硬编码兜底，而兜底地址在新核心上 404，健康检查就永久
+    /// 停在 0/N（表现为「一直没能心跳检测成功」）。
+    #[test]
+    fn boot_html_accepts_relative_bundle_paths() {
+        let html = r#"<script src="plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=f584d378985b"></script><script>globalThis["__DSH_BOOT__"] = {"rev":"g","entries":[{"id":"@deepseek-ai/dsh-client-ui-layout","url":"plugins/??@deepseek-ai/dsh-client-ui-layout/client.js&rev=f26b875a92b6","rev":"f26b875a92b6"}]}</script>"#;
+        let urls = client_urls_from_boot_html(3081, html).expect("boot graph");
+        assert_eq!(urls.len(), 2);
+        assert!(urls.iter().all(|url| url
+            .starts_with("http://127.0.0.1:3081/plugins/")));
+        assert!(urls.iter().any(|url| url
+            .contains("dsh-client-modules/client.js&rev=f584d378985b")));
+        assert!(urls.iter().any(|url| url
+            .contains("dsh-client-ui-layout/client.js&rev=f26b875a92b6")));
+    }
+
     #[test]
     fn health_probe_plugin_urls_target_client_bundles_not_spa_root() {
         let urls = health_probe_plugin_urls(3080);
@@ -449,6 +488,11 @@ mod tests {
         assert!(urls
             .iter()
             .any(|u| u.contains("dsh-client-ui-layout/client.js")));
+        // `dsh-client-runtime` 在 0.1.6 起已不存在，兜底不能继续引用它。
+        assert!(urls.iter().all(|u| !u.contains("dsh-client-runtime")));
+        assert!(urls
+            .iter()
+            .any(|u| u.contains("dsh-client-modules/client.js")));
     }
 
     #[test]

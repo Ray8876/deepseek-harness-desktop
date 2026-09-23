@@ -68,6 +68,11 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
+      # test/plugin-resource-closure.test.ts 断言部署产物 src-tauri/resources/node_modules，
+      # 该目录由 build:plugins 生成；不构建则整组用例 skipIf 跳过、在 CI 里从不执行。
+      - name: Build Plugins
+        run: pnpm build:plugins
+
       - name: Unit test
         run: pnpm run test:unit -- --run
 
@@ -88,6 +93,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Chromium 二进制不带在 npm 包里：runner 缺它时 chromium.launch() 会直接失败，
+      # 浏览器类用例必须真跑，不能因缺二进制而静默跳过。
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
       # L2 只针对构建产物运行（官方「真实入口路径」要求），未构建会直接失败。
       - name: Build Plugins
         run: pnpm build:plugins
@@ -101,6 +111,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/dsh-cli"
           cd "$RUNNER_TEMP/dsh-cli"
           npm init -y >/dev/null
+          # 0.1.5-rc.3 起该发布代的依赖区间引用了一个从未发布的版本
+          # （dsh-client-ui-sidebar-documentpreview@^0.1.5-rc.3），整条 0.1.5-rc.x
+          # 直接安装都会 ETARGET；用 overrides 夹回已发布的 rc.2（同一发布代）。
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.overrides={'@deepseek-ai/dsh-client-ui-sidebar-documentpreview':'0.1.5-rc.2'};fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+          # 插件 L2 用例的文案/分区断言按 0.1.5-rc 基线写就（也是 README 声明的最低兼容基线）；
+          # 0.1.6 起上游改了设置侧栏分区名与未分组 chip 等文案，另需一轮 e2e 适配。
           npm install --no-audit --no-fund @deepseek-ai/dsh@0.1.5-rc.2
 
       - name: Plugin L2 test

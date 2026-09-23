@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/github/stars/dsh-tauri/deepseek-harness-desktop?style=flat-square&label=stars&color=4D6BFE" alt="Stars" />
   <img src="https://img.shields.io/github/license/dsh-tauri/deepseek-harness-desktop?style=flat-square&label=license&color=4D6BFE" alt="MIT License" />
   <img src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-black?style=flat-square" alt="Windows | macOS | Linux" />
-  <img src="https://img.shields.io/badge/dsh-0.1.5--rc.2-4D6BFE?style=flat-square" alt="dsh 0.1.5-rc.2" />
+  <img src="https://img.shields.io/badge/dsh-0.1.7--alpha.1-4D6BFE?style=flat-square" alt="dsh 0.1.7-alpha.1" />
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@
 
 ## Windows 离线安装修改版
 
-本 fork 在上游桌面端 `v0.15.8` 基础上增加独立的 Windows x64 离线安装流程。Release 将主程序安装器与官方 WebView2 Standalone x64 安装器并列提供；主程序安装器内置 Node.js、Harness、pnpm 和 MinGit，不会在安装过程中联网下载 WebView2。
+本 fork 在上游桌面端基础上增加独立的 Windows x64 离线安装流程。Release 将主程序安装器与官方 WebView2 Standalone x64 安装器并列提供；主程序安装器内置 Node.js、Harness、pnpm 和 MinGit，不会在安装过程中联网下载 WebView2。
 
 > [!IMPORTANT]
 > 这是个人维护的修改版，不是上游官方发行包。当前生成的是**未签名 NSIS 安装器**，Windows 可能显示未知发布者提示。离线使用时请先运行 Release 中的 `MicrosoftEdgeWebView2RuntimeInstallerX64.exe`，再运行主程序安装器；社区插件安装、在线更新及其他网络功能仍然需要联网。
@@ -88,17 +88,16 @@ Artifact 本身就是 GitHub 下载的压缩包，内部包含主程序安装器
 
 随安装包资源内置的第一方插件：
 
-- [DSH Tauri](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri) — 提供与 Tauri 2 外壳的通信通道
-- [DSH Tauri Connection](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-connection) — 让跨源沙箱内嵌 WebView 用上回环宿主：在 `connection` 服务上覆写桌面载体的两道鉴权闸门
-- [DSH Model Config](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-model-config) — 接管模型设置页，补齐上下文与输出上限、图片输入、思考模式和本地端点兼容选项
+- [DSH Tauri](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri) — 提供与 Tauri 2 外壳的通信通道，并让跨源沙箱内嵌 WebView 用上回环宿主（在 `connection` 服务上覆写桌面载体的两道鉴权闸门）
 - [DSH Tauri UI](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-ui) — 为 Tauri 2 外壳提供自定义设置侧边栏
 - [DSH Tauri Worktree](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-worktree) — 为每个会话创建隔离的 Git Worktree，并支持检出到本地分支或归档放弃
 - [DSH Tauri Panel Extension](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-panel-extension) — Skills/MCP 管理与导入技能仓库，内嵌插件市场面板
 - [DSH Tauri Panel Scheduler](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-panel-scheduler) — 创建每天、间隔、工作日或每周的定时任务；在独立 Agent 会话中执行，并保留执行记录
-- [DSH Tauri Turn Rewind](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-turnrewind) — 按 Agent 回合记录私有 Git 快照并显示文件变更卡片；恢复文件交由推荐的 dsh-rewind 插件
+- [DSH Running Changes](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-running-changes) — 按 Agent 回合记录私有 Git 快照，并在 turn 运行期间用输入框上方的提示条显示改动；恢复文件交由推荐的 dsh-rewind 插件
 - [DSH Tauri Session](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-session) — 将删除工作区改为归档，并提供支持搜索、排序、分组、项目筛选和取消归档的「已归档聊天」设置页
 - [DSH Tauri Pet](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-pet) — 管理 Chat / Codex 桌宠、预设宠物下载、资源包导入和会话活动状态
 - [DSH Tauri Rightclick](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-rightclick) — 为会话、工作区、正文、链接和输入框补充常用操作
+- [DSH Tauri Model Config](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-model-config) — 提供模型选择与参数配置
 - 更多即将引入的插件...
 
 ## 快速开始
@@ -113,7 +112,7 @@ brew install dsh-tauri/desktop/deepseek-harness
 
 本 fork 的 Windows 离线安装包已包含 Node 运行时与 Harness 内核，安装前单独安装 WebView2 Runtime 后，首次运行无需下载；上游常规安装包仍会在首次运行时下载依赖。启动后进入 `http://127.0.0.1:3080` 的 Harness 界面。
 
-**系统要求：** Windows 10+ · macOS 10.15+ · Linux（AppImage / .deb）· 离线修改版仅提供 Windows x64 · Harness 内核 **0.1.5-rc.2**
+**系统要求：** Windows 10+ · macOS 10.15+ · Linux（AppImage / .deb）· 离线修改版仅提供 Windows x64 · 内核版本见 Release 清单
 
 > **Linux Wayland 注意（PikaOS / GNOME Wayland / Ubuntu 22.04+）：** AppImage 在 Wayland 下可能因 WebKitGTK 黑屏/崩溃，应用已自动处理常见情形。 <details><summary>若仍黑屏/崩溃：</summary><br>**改用 `.deb`**（已验证 PikaOS 4 Wayland），或手动 `WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 GDK_BACKEND=x11 ./AppImage`。图标不显示时，将应用内 `hicolor` 图标复制到 `~/.local/share/icons` 并运行 `update-desktop-database`。<br></details>
 >

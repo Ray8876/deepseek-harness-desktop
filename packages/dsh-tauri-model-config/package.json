@@ -80,6 +80,7 @@
     "@deepseek-ai/dsh-client-ui-renderer": "catalog:dsh",
     "@deepseek-ai/dsh-client-ui-settings": "catalog:dsh",
     "@deepseek-ai/dsh-client-ui-slots": "catalog:dsh",
+    "@deepseek-ai/dsh-util-values": "catalog:dsh",
     "@types/node": "catalog:types",
     "dsh-tauri-tsdown": "workspace:*",
     "react-if-lite": "catalog:runtime",

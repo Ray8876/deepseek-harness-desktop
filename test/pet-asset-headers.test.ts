@@ -1,5 +1,7 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 /**
@@ -91,8 +93,11 @@ describe('pet asset headers contract', () => {
     const patch = readFileSync(new URL('../patches/@tauri-apps__plugin-http@2.6.0.patch', import.meta.url), 'utf8')
     expect(patch).toContain('ISO_8859_1_ONLY')
 
+    // pnpm 把包链到 .pnpm 虚拟仓库；node_modules 本身是 junction（worktree/CI 共享安装）时
+    // 字面路径穿不过重解析点，先取真实路径再读产物。
+    const packageDir = realpathSync(fileURLToPath(new URL('../node_modules/@tauri-apps/plugin-http', import.meta.url)))
     for (const file of ['index.js', 'index.cjs']) {
-      const bundle = readFileSync(new URL(`../node_modules/@tauri-apps/plugin-http/dist-js/${file}`, import.meta.url), 'utf8')
+      const bundle = readFileSync(join(packageDir, 'dist-js', file), 'utf8')
       expect(bundle).toContain('toResponseHeaders(responseHeaders)')
       expect(bundle).not.toContain('new Headers(responseHeaders)')
       expect(bundle.match(/\.catch\(\(\) => \{\}\)/g)?.length).toBeGreaterThanOrEqual(2)

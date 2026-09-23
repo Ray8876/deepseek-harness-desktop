@@ -1,30 +1,47 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'pathe'
+import process from 'node:process'
+import { basename, join } from 'pathe'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetTestDshHome, testDshHome } from '../../../../.test/test-utils'
-import { clearHostRuntime, setCurrentHostInstance } from '../config/runtime'
-import { projectDirname } from '../utils/git'
-import { computeHash, worktreePath } from '../utils/paths'
-import { cleaner } from './cleaner'
-import { worktree } from './worktree'
+
+const dshHome = vi.hoisted(() => ({ value: '' }))
 
 vi.mock('dsh-tauri', async (importOriginal) => {
   const actual = await importOriginal<typeof import('dsh-tauri')>()
-  const { testDshHome: home } = await import('../../../../.test/test-utils')
-  return { ...actual, DSH_HOME: home }
+  return { ...actual, DSH_HOME: dshHome.value }
 })
+
+dshHome.value = testDshHome
+
+type Cleaner = typeof import('./cleaner')['cleaner']
+type Worktree = typeof import('./worktree')['worktree']
+type Runtime = typeof import('../config/runtime')
+
+let cleaner: Cleaner
+let worktree: Worktree
+let runtime: Runtime
 
 const repositories: string[] = []
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules()
   resetTestDshHome()
-  clearHostRuntime()
+  const [cleanerModule, worktreeModule, runtimeModule] = await Promise.all([
+    import('./cleaner'),
+    import('./worktree'),
+    import('../config/runtime'),
+  ])
+  cleaner = cleanerModule.cleaner
+  worktree = worktreeModule.worktree
+  runtime = runtimeModule
+  runtime.clearHostRuntime()
 })
 
 afterEach(() => {
-  clearHostRuntime()
+  runtime?.clearHostRuntime()
   for (const repository of repositories.splice(0))
     rmSync(repository, { recursive: true, force: true })
 })
@@ -47,8 +64,12 @@ function createRepository(commit = true): string {
   return repository
 }
 
+function expectedHash(repository: string, sessionId: string): string {
+  return createHash('sha256').update(`${repository}:${sessionId}`).digest('hex').slice(0, 12)
+}
+
 function expectedPath(repository: string, sessionId: string): string {
-  return worktreePath(computeHash(repository, sessionId), projectDirname(repository))
+  return join(testDshHome, 'worktrees', expectedHash(repository, sessionId), basename(repository))
 }
 
 function hostWithProcessController(controller: unknown): unknown {
@@ -151,6 +172,36 @@ describe('worktree.create', () => {
       return
     expect(second.existed).toBe(true)
     expect(second.binding.worktreePath).toBe(expectedPath(repository, sessionId))
+  })
+
+  it('重复创建时把旧实现遗留的 .agents 符号链接迁移成真实拷贝', async () => {
+    const repository = createRepository()
+    mkdirSync(join(repository, '.agents', 'skills', 'handle'), { recursive: true })
+    writeFileSync(join(repository, '.agents', 'skills', 'handle', 'SKILL.md'), '# handle\n')
+    writeFileSync(join(repository, '.gitignore'), '.agents/skills/\n')
+    git(repository, 'add', '.gitignore')
+    git(repository, 'commit', '-m', 'ignore skills')
+    const sessionId = 'legacy-link-session'
+
+    const first = await worktree.create(repository, sessionId)
+    expect(first.ok).toBe(true)
+    if (!first.ok)
+      return
+
+    // 模拟旧实现留下的符号链接
+    const agents = join(first.binding.worktreePath, '.agents')
+    rmSync(agents, { recursive: true, force: true })
+    symlinkSync(join(repository, '.agents'), agents, process.platform === 'win32' ? 'junction' : 'dir')
+    expect(lstatSync(agents).isSymbolicLink()).toBe(true)
+
+    const second = await worktree.create(repository, sessionId)
+    expect(second.ok).toBe(true)
+    if (!second.ok)
+      return
+    expect(second.log.join('\n')).toContain('Copied the agent skills directory')
+    expect(lstatSync(agents).isSymbolicLink()).toBe(false)
+    expect(readFileSync(join(agents, 'skills', 'handle', 'SKILL.md'), 'utf8')).toBe('# handle\n')
+    expect(git(first.binding.worktreePath, 'status', '--porcelain=v1')).toBe('')
   })
 })
 
@@ -257,7 +308,7 @@ describe('worktree.remove', () => {
       return
 
     const stopSessionProcesses = vi.fn(async () => {})
-    setCurrentHostInstance(hostWithProcessController({ stopSessionProcesses }) as never)
+    runtime.setCurrentHostInstance(hostWithProcessController({ stopSessionProcesses }) as never)
 
     const removed = await worktree.remove(sessionId)
     expect(removed.ok).toBe(true)
@@ -320,7 +371,7 @@ describe('worktree.discard', () => {
 
   it('未绑定的 key 段数不合法（多余段 / 结尾斜杠）时被拒绝', async () => {
     const hash = 'ffffffffffff'
-    const path = worktreePath(hash, 'repo')
+    const path = join(testDshHome, 'worktrees', hash, 'repo')
     mkdirSync(path, { recursive: true })
     writeFileSync(join(path, 'keep.txt'), 'keep\n')
 
@@ -335,7 +386,7 @@ describe('worktree.discard', () => {
   it('无绑定且路径已消失时幂等成功且不产生任务', async () => {
     const repository = createRepository()
     const sessionId = 'no-binding-session'
-    const key = `${computeHash(repository, sessionId)}/${projectDirname(repository)}`
+    const key = `${expectedHash(repository, sessionId)}/${basename(repository)}`
 
     const discarded = await worktree.discard(sessionId, key)
     expect(discarded).toEqual({ ok: true })
@@ -377,5 +428,85 @@ describe('依赖链接', () => {
 
     expect(existsSync(join(created.binding.worktreePath, 'node_modules'))).toBe(false)
     expect(created.binding.linkedDependencies).toBeUndefined()
+  })
+
+  it('无条件继承 .agents（复制而非链接），即使关闭依赖链接', async () => {
+    const repository = createRepository()
+    mkdirSync(join(repository, '.agents', 'skills', 'handle'), { recursive: true })
+    writeFileSync(join(repository, '.agents', 'skills', 'handle', 'SKILL.md'), '# handle\n')
+    const sessionId = 'skills-session'
+
+    const created = await worktree.create(repository, sessionId, { linkDependencies: false })
+    expect(created.ok).toBe(true)
+    if (!created.ok)
+      return
+
+    const agents = join(created.binding.worktreePath, '.agents')
+    expect(lstatSync(agents).isSymbolicLink()).toBe(false)
+    expect(readFileSync(join(agents, 'skills', 'handle', 'SKILL.md'), 'utf8')).toBe('# handle\n')
+    expect(existsSync(join(created.binding.worktreePath, 'node_modules'))).toBe(false)
+
+    const removed = await worktree.remove(sessionId)
+    expect(removed.ok).toBe(true)
+    expect(existsSync(agents)).toBe(false)
+    expect(readFileSync(join(repository, '.agents', 'skills', 'handle', 'SKILL.md'), 'utf8')).toBe('# handle\n')
+  })
+
+  it('源仓库没有 .agents 时创建工作树照常成功', async () => {
+    const repository = createRepository()
+    const sessionId = 'no-skills-session'
+
+    const created = await worktree.create(repository, sessionId)
+    expect(created.ok).toBe(true)
+    if (!created.ok)
+      return
+
+    expect(existsSync(join(created.binding.worktreePath, '.agents'))).toBe(false)
+  })
+
+  it('源仓库忽略 .agents 时，继承不弄脏工作树状态（POSIX 不可用符号链接）', async () => {
+    const repository = createRepository()
+    mkdirSync(join(repository, '.agents', 'skills', 'handle'), { recursive: true })
+    writeFileSync(join(repository, '.agents', 'skills', 'handle', 'SKILL.md'), '# handle\n')
+    writeFileSync(join(repository, '.gitignore'), '.agents/skills/\n')
+    git(repository, 'add', '.gitignore')
+    git(repository, 'commit', '-m', 'ignore skills')
+    const sessionId = 'ignored-skills-session'
+
+    const created = await worktree.create(repository, sessionId)
+    expect(created.ok).toBe(true)
+    if (!created.ok)
+      return
+
+    // POSIX 上符号链接对 git 是「文件」，`.agents/skills/` 忽略规则匹配不到它，
+    // 会留下 `?? .agents`；复制成真实目录后状态干净。
+    expect(git(created.binding.worktreePath, 'status', '--porcelain=v1')).toBe('')
+    expect(lstatSync(join(created.binding.worktreePath, '.agents')).isSymbolicLink()).toBe(false)
+  })
+
+  it('部分内容已跟踪时，补齐被忽略的 .agents/skills 子目录', async () => {
+    const repository = createRepository()
+    mkdirSync(join(repository, '.agents', 'skills', 'handle'), { recursive: true })
+    writeFileSync(join(repository, '.agents', 'config.json'), '{}\n')
+    writeFileSync(join(repository, '.agents', 'skills', 'handle', 'SKILL.md'), '# handle\n')
+    writeFileSync(join(repository, '.gitignore'), '.agents/skills/\n')
+    git(repository, 'add', '.gitignore', '.agents/config.json')
+    git(repository, 'commit', '-m', 'track agents config')
+    const sessionId = 'partial-skills-session'
+
+    const created = await worktree.create(repository, sessionId)
+    expect(created.ok).toBe(true)
+    if (!created.ok)
+      return
+
+    const skills = join(created.binding.worktreePath, '.agents', 'skills')
+    expect(readFileSync(join(skills, 'handle', 'SKILL.md'), 'utf8')).toBe('# handle\n')
+    expect(lstatSync(join(created.binding.worktreePath, '.agents')).isSymbolicLink()).toBe(false)
+    expect(readFileSync(join(created.binding.worktreePath, '.agents', 'config.json'), 'utf8').trim()).toBe('{}')
+    expect(git(created.binding.worktreePath, 'status', '--porcelain=v1')).toBe('')
+
+    const removed = await worktree.remove(sessionId)
+    expect(removed.ok).toBe(true)
+    expect(readFileSync(join(repository, '.agents', 'skills', 'handle', 'SKILL.md'), 'utf8')).toBe('# handle\n')
   })
 })

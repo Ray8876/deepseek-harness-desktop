@@ -38,6 +38,13 @@ pub(crate) fn build_plugin_envs(
         ),
         ("DSH_TELEMETRY_DISABLED".to_string(), "1".to_string()),
         ("NO_COLOR".to_string(), "1".to_string()),
+        // pnpm 在非 TTY 子进程里拒绝「清空 node_modules 重建」，直接
+        // `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` 退出 1；pnpm 11 起也不再读
+        // profile `.npmrc` 的 `confirmModulesPurge`，于是 `dsh plugin install` 每次
+        // 都失败 → `dsh.profile.bundles` 永远登记不上 → 内置插件不挂载（宿主插件
+        // 的 apply 不运行，索引恒 401、健康检查永远 boot page 401）。
+        // pnpm 自己给出的开关就是 `CI=true`。
+        ("CI".to_string(), "true".to_string()),
         // 把预检解析出的 node 路径显式交给 pnpm/dsh shim（DSH_NODE 优先）：
         // shim 自身经 PATH 解析 node 可能与应用预检不一致（PATH 上的相对条目、
         // junction/符号链接、或子进程 PATH 布局差异），导致 pnpm shim 报

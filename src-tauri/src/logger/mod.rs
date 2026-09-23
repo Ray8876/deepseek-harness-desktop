@@ -17,7 +17,9 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::fmt::time::OffsetTime;
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::{fmt, util::SubscriberInitExt, EnvFilter};
-const APP_IDENTIFIER: &str = "io.github.hairyf.deepseek-harness-desktop";
+
+use crate::config::{APP_DATA_DEV_DIR_NAME, APP_IDENTIFIER};
+
 const LOG_FILE_NAME: &str = "desktop.log";
 const FRONTDESK_LOG_FILE_NAME: &str = "desktop.frontdesk.log";
 const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
@@ -26,7 +28,8 @@ const MAX_BACKUPS: usize = 3;
 static FILE_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 static FRONTDESK_WRITER: OnceLock<Arc<Mutex<SizeRotatingWriter>>> = OnceLock::new();
 
-fn app_data_dir() -> Option<PathBuf> {
+/// 平台应用数据根目录下的本应用目录（`identifier` 一层；dev 与 release 相同）。
+fn identifier_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         let appdata = std::env::var("APPDATA").ok()?;
@@ -57,6 +60,25 @@ fn app_data_dir() -> Option<PathBuf> {
     }
     #[allow(unreachable_code)]
     None
+}
+
+/// debug 构建在 `identifier` 目录下多一层 `dev/`，与 `config::get_base_dir` 同口径。
+fn apply_dev_segment(base: PathBuf) -> PathBuf {
+    if cfg!(debug_assertions) {
+        base.join(APP_DATA_DEV_DIR_NAME)
+    } else {
+        base
+    }
+}
+
+/// 本进程写日志用的应用数据目录。
+///
+/// dev 与 release 共用同一个 `identifier`（`dsh-tauri`），不隔离就会让两个本可同时
+/// 运行的进程打开同一个 `desktop.log`：日志互相交错，5 MiB 轮转的归档 rename 还会
+/// 彼此抢（一方 rename 完，另一方仍按旧长度 append）。核心安装目录、运行时与 Store
+/// 都已按 `dev/` 隔离，日志必须同口径。
+fn app_data_dir() -> Option<PathBuf> {
+    identifier_dir().map(apply_dev_segment)
 }
 
 fn log_file_path() -> Option<PathBuf> {
@@ -404,6 +426,16 @@ pub fn log_frontend(level: FrontendLevel, target: &str, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn debug_logs_are_separated_from_release() {
+        // dev 与 release 共用 identifier；不隔离会让两个进程写同一个 desktop.log。
+        assert!(cfg!(debug_assertions), "cargo test 构建为 debug");
+        let base = PathBuf::from("/tmp/dsh-tauri");
+        assert_eq!(
+            apply_dev_segment(base.clone()),
+            base.join(APP_DATA_DEV_DIR_NAME)
+        );
+    }
     #[test]
     fn backup_path_naming() {
         let base = PathBuf::from("/tmp/desktop.log");

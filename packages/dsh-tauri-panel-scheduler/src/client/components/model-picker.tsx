@@ -1,17 +1,30 @@
-/**
- * components/model-picker.tsx — 模型选择器（对齐 dsh-automation create-modal 的 ModelPicker：
- * root / model / effort 三 pane + provider 分组）。
- */
-
+import type { MenuEntry } from 'dsh-tauri-ui/client'
+import type { ReactElement } from 'react'
 import type { Translate } from '../locales/index.types'
 import type { ModelCatalogFailure, ModelOption } from '../types'
-import { IconCheckOutline16 as Check, IconChevronDownOutline14 as ChevronDown } from '@deepseek-ai/dsh-client-ui-primitives'
-import { Icon, useMountStyle } from 'dsh-tauri-ui/client'
+import { ChevronDown, Chip, Icon, Menu } from 'dsh-tauri-ui/client'
 import { groupBy } from 'dsh-tauri/client'
 import { useEffect, useState } from 'react'
-import { MODEL_PICKER_STYLE_ID } from '../constants'
-import { MenuPopup, MenuRow, useMenuState } from './menu'
-import modelPickerStyle from './model-picker.cssr'
+
+type Pane = 'root' | 'model' | 'effort'
+
+function optionCopy(label: string, description?: string): ReactElement {
+  return (
+    <span className="dshp-scheduler__model-option-copy">
+      <span className="dshp-scheduler__model-name">{label}</span>
+      {description !== undefined && <span className="dshp-scheduler__model-description">{description}</span>}
+    </span>
+  )
+}
+
+function paneRow(label: string, hint: string): ReactElement {
+  return (
+    <span className="dshp-scheduler__model-row">
+      <span className="dshp-scheduler__model-row-label">{label}</span>
+      <span className="dshp-scheduler__model-row-hint">{hint}</span>
+    </span>
+  )
+}
 
 export function ModelPicker({
   t,
@@ -28,9 +41,8 @@ export function ModelPicker({
   readonly reasoningEffort: string
   readonly onSelection: (modelKey: string, reasoningEffort: string) => void
 }) {
-  useMountStyle(modelPickerStyle, MODEL_PICKER_STYLE_ID)
-  const menu = useMenuState()
-  const [pane, setPane] = useState<'root' | 'model' | 'effort'>('root')
+  const [open, setOpen] = useState(false)
+  const [pane, setPane] = useState<Pane>('root')
   const selected = models.find(item => `${item.provider}::${item.model}` === modelKey)
   const reasoning = selected?.reasoning
   const effectiveEffort = reasoningEffort === 'none'
@@ -48,8 +60,9 @@ export function ModelPicker({
     models: group,
   }))
 
+  // Escape 必须拦在 capture 阶段，否则会同时触达外层 Modal 并连带关掉对话框
   useEffect(() => {
-    if (!menu.open)
+    if (!open)
       return
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape')
@@ -57,145 +70,126 @@ export function ModelPicker({
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
-      if (pane !== 'root')
+      if (pane !== 'root') {
         setPane('root')
-      else menu.setOpen(false)
+        return
+      }
+      setOpen(false)
     }
     window.addEventListener('keydown', onKey, true)
     return () => {
       window.removeEventListener('keydown', onKey, true)
     }
-  }, [menu.open, menu.setOpen, pane])
+  }, [open, pane])
 
-  const selectModel = (item: ModelOption): void => {
-    onSelection(
-      `${item.provider}::${item.model}`,
-      item.reasoning?.defaultEffort ?? 'none',
-    )
-    menu.setOpen(false)
+  const selectModel = (value: string): void => {
+    const item = models.find(model => `${model.provider}::${model.model}` === value)
+    onSelection(value, item?.reasoning?.defaultEffort ?? 'none')
+    setOpen(false)
     setPane('root')
   }
 
   const selectEffort = (effort: string): void => {
     onSelection(modelKey, effort)
-    menu.setOpen(false)
+    setOpen(false)
     setPane('root')
   }
 
+  const rootItems: MenuEntry[] = [
+    { id: 'pane:model', label: paneRow(t('menu.model'), selected?.label ?? t('trigger.fallback')) },
+  ]
+  if (reasoning !== undefined)
+    rootItems.push({ id: 'pane:effort', label: paneRow(t('menu.effort'), effortLabel ?? t('effort.providerDefault')) })
+
+  const modelItems: MenuEntry[] = failures.map(failure => ({
+    type: 'label',
+    id: `warning:${failure.provider}`,
+    text: t('warning.groupLoad', { name: failure.providerLabel, message: failure.message }),
+  }))
+  for (const group of modelGroups) {
+    modelItems.push({ type: 'label', id: `group:${group.provider}`, text: group.label })
+    for (const item of group.models)
+      modelItems.push({ id: `model:${item.provider}::${item.model}`, label: optionCopy(item.label, item.description) })
+  }
+  if (modelItems.length === 0)
+    modelItems.push({ type: 'label', id: 'empty:models', text: t('empty.models') })
+
+  const effortItems: MenuEntry[] = []
+  if (reasoning !== undefined) {
+    if (reasoning.defaultEffort === undefined)
+      effortItems.push({ id: 'effort:none', label: optionCopy(t('effort.providerDefault')) })
+    for (const item of reasoning.efforts)
+      effortItems.push({ id: `effort:${item.id}`, label: optionCopy(item.name, item.description) })
+    if (effortItems.length === 0)
+      effortItems.push({ type: 'label', id: 'empty:efforts', text: t('empty.efforts') })
+  }
+
+  const items = pane === 'root' ? rootItems : pane === 'model' ? modelItems : effortItems
+  const selectedId = pane === 'model'
+    ? `model:${modelKey}`
+    : pane === 'effort'
+      ? `effort:${effectiveEffort ?? 'none'}`
+      : undefined
+
+  const onSelect = (id: string): void => {
+    if (id === 'pane:model') {
+      setPane('model')
+      return
+    }
+    if (id === 'pane:effort') {
+      setPane('effort')
+      return
+    }
+    if (id.startsWith('model:')) {
+      selectModel(id.slice('model:'.length))
+      return
+    }
+    if (id.startsWith('effort:'))
+      selectEffort(id.slice('effort:'.length))
+  }
+
   return (
-    <div className={`${'dshp-scheduler__model-select'}${menu.open ? ` ${'dshp-scheduler__model-select--open'}` : ''}`} ref={menu.root}>
-      <button
-        type="button"
-        className="dshp-scheduler__model-trigger"
-        aria-label={selected === undefined
-          ? t('trigger.selectAria')
-          : effortLabel === undefined
-            ? t('trigger.aria', { model: selected.label })
-            : t('trigger.ariaEffort', { model: selected.label, effort: effortLabel })}
-        onMouseDown={event => event.stopPropagation()}
-        onClick={() => {
-          if (menu.open) {
-            menu.setOpen(false)
-            return
-          }
-          setPane('root')
-          menu.setOpen(true)
-        }}
-      >
-        <span>{trigger}</span>
-        {effortLabel !== undefined && <span className="dshp-scheduler__model-trigger-effort">{effortLabel}</span>}
-        <Icon as={ChevronDown} className={`${'dshp-scheduler__model-trigger-chevron'}${menu.open ? ` ${'dshp-scheduler__model-trigger-chevron--open'}` : ''}`} />
-      </button>
-      <MenuPopup open={menu.open} anchor={menu.root} menuRef={menu.menu} up end className={`${'dshp-scheduler__model-select-menu'} is-up is-end`} ariaLabel={t('menu.aria')}>
-        {pane === 'root' && (
-          <>
-            <MenuRow
-              kv
-              label={t('menu.model')}
-              hint={selected?.label ?? t('trigger.fallback')}
-              chevron
-              onClick={() => setPane('model')}
-            />
-            {reasoning !== undefined && (
-              <MenuRow
-                kv
-                label={t('menu.effort')}
-                hint={effortLabel ?? t('effort.providerDefault')}
-                chevron
-                onClick={() => setPane('effort')}
-              />
-            )}
-          </>
-        )}
-        {pane === 'model' && (
-          <>
-            {failures.map(failure => (
-              <div key={failure.provider} className="dshp-scheduler__model-warning">
-                {t('warning.groupLoad', { name: failure.providerLabel, message: failure.message })}
-              </div>
-            ))}
-            {modelGroups.map(group => (
-              <section key={group.provider} role="group" aria-label={group.label} className="dshp-scheduler__model-group">
-                <div className="dshp-scheduler__model-group-title">{group.label}</div>
-                {group.models.map((item) => {
-                  const value = `${item.provider}::${item.model}`
-                  return (
-                    <button
-                      key={value}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={value === modelKey}
-                      className="dshp-scheduler__model-option"
-                      title={item.label}
-                      onClick={() => selectModel(item)}
-                    >
-                      <span className="dshp-scheduler__model-option-copy">
-                        <span className="dshp-scheduler__model-name">{item.label}</span>
-                        {item.description !== undefined && <span className="dshp-scheduler__model-description">{item.description}</span>}
-                      </span>
-                      <span className="dshp-scheduler__model-check">{value === modelKey && <Icon as={Check} />}</span>
-                    </button>
-                  )
-                })}
-              </section>
-            ))}
-            {modelGroups.length === 0 && failures.length === 0 && <div className="dshp-scheduler__model-empty">{t('empty.models')}</div>}
-          </>
-        )}
-        {pane === 'effort' && reasoning !== undefined && (
-          <>
-            {reasoning.defaultEffort === undefined && (
-              <button
-                type="button"
-                role="menuitemradio"
-                aria-checked={reasoningEffort === 'none'}
-                className="dshp-scheduler__model-option"
-                onClick={() => selectEffort('none')}
-              >
-                <span className="dshp-scheduler__model-option-copy"><span className="dshp-scheduler__model-name">{t('effort.providerDefault')}</span></span>
-                <span className="dshp-scheduler__model-check">{reasoningEffort === 'none' && <Icon as={Check} />}</span>
-              </button>
-            )}
-            {reasoning.efforts.map(item => (
-              <button
-                key={item.id}
-                type="button"
-                role="menuitemradio"
-                aria-checked={effectiveEffort === item.id}
-                className="dshp-scheduler__model-option"
-                onClick={() => selectEffort(item.id)}
-              >
-                <span className="dshp-scheduler__model-option-copy">
-                  <span className="dshp-scheduler__model-name">{item.name}</span>
-                  {item.description !== undefined && <span className="dshp-scheduler__model-description">{item.description}</span>}
-                </span>
-                <span className="dshp-scheduler__model-check">{effectiveEffort === item.id && <Icon as={Check} />}</span>
-              </button>
-            ))}
-            {reasoning.efforts.length === 0 && reasoning.defaultEffort !== undefined && <div className="dshp-scheduler__model-empty">{t('empty.efforts')}</div>}
-          </>
-        )}
-      </MenuPopup>
-    </div>
+    <Menu
+      open={open}
+      autoFocus
+      portal
+      side="top"
+      align="end"
+      items={items}
+      selectedId={selectedId}
+      onSelect={onSelect}
+      onClose={() => {
+        setOpen(false)
+        setPane('root')
+      }}
+      anchor={(
+        <Chip
+          variant="composerTrigger"
+          open={open}
+          aria-label={selected === undefined
+            ? t('trigger.selectAria')
+            : effortLabel === undefined
+              ? t('trigger.aria', { model: selected.label })
+              : t('trigger.ariaEffort', { model: selected.label, effort: effortLabel })}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onMouseDown={event => event.stopPropagation()}
+          onClick={() => {
+            if (open) {
+              setOpen(false)
+              return
+            }
+            setPane('root')
+            setOpen(true)
+          }}
+          badge={effortLabel === undefined
+            ? undefined
+            : <span className="dshp-scheduler__model-trigger-effort">{effortLabel}</span>}
+          chevron={<Icon as={ChevronDown} />}
+        >
+          <span className="dshp-scheduler__model-trigger-label">{trigger}</span>
+        </Chip>
+      )}
+    />
   )
 }

@@ -140,7 +140,7 @@ async fn user_pnpm_major_version_bounded(
         return Ok(None);
     };
     let node = config::get_node_binary_path(app_handle);
-    let mut command = pnpm_probe_command(&pnpm, Some(&node));
+    let mut command = pnpm_probe_command(&pnpm, Some(&node), Some(&cli::get_bin_dir(app_handle)));
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -564,7 +564,7 @@ pub(crate) fn pnpm_major_version_at(pnpm: &Path) -> Option<u32> {
 /// Node/pnpm 安装，而 corepack 的 `pnpm.cmd` 需要通过 PATH 调用 `node`；探测时
 /// 必须注入桌面端已经选定的 Node 目录，否则会把健康 pnpm 误判为不可用（issue #182）。
 fn pnpm_major_version_at_with_node(pnpm: &Path, node: Option<&Path>) -> Option<u32> {
-    let output = match pnpm_probe_command(pnpm, node).output() {
+    let output = match pnpm_probe_command(pnpm, node, None).output() {
         Ok(output) => output,
         Err(error) => {
             log::warn!(
@@ -587,11 +587,25 @@ fn pnpm_major_version_at_with_node(pnpm: &Path, node: Option<&Path>) -> Option<u
 /// 让这类读取立刻拿到 EOF，探测必定有界结束。有界探测（子进程 + 超时强杀）与
 /// 无界探测（[`user_pnpm_major_version`] 的 `output()`）共用本函数，避免两套
 /// 探测策略再次分叉。
-fn pnpm_probe_command(pnpm: &Path, node: Option<&Path>) -> std::process::Command {
+///
+/// `bin_dir` 为桌面端 shim 目录：传入即复现安装子进程的解析条件（见
+/// [`pnpm_probe_path`]）；按精确路径探测（`verify`）传 None。
+fn pnpm_probe_command(
+    pnpm: &Path,
+    node: Option<&Path>,
+    bin_dir: Option<&Path>,
+) -> std::process::Command {
     let mut command = std::process::Command::new(pnpm);
     command.arg("--version");
-    if let Some(path) = pnpm_probe_path(pnpm, node) {
+    if let Some(path) = pnpm_probe_path(pnpm, node, bin_dir) {
         command.env("PATH", path);
+    }
+    // 探测必须与安装走同一套解析：`build_plugin_envs` 会把候选路径写进 `DSH_PNPM`
+    // 并把桌面端 shim 目录前置，`dsh plugin` 经 PATH 命中的正是那个 shim。只测
+    // 候选自身会漏掉这条间接层——探测顺利拿到版本，实际安装却在两个 shim 之间
+    // 反复 exec 永不返回（症状：日志停在 `dsh plugin install started` 再无下文）。
+    if bin_dir.is_some() {
+        command.env("DSH_PNPM", pnpm);
     }
     command.stdin(std::process::Stdio::null());
     // 打包版是 GUI 进程（无控制台）：版本探测不能弹出可见黑窗。
@@ -618,10 +632,25 @@ fn parse_pnpm_major_output(pnpm: &Path, output: &std::process::Output) -> Option
     stdout.split('.').next()?.trim().parse::<u32>().ok()
 }
 
-/// 构建 pnpm 探测专用 PATH：用户 pnpm 所在目录和选定 Node 目录前置，其余环境保留。
-fn pnpm_probe_path(pnpm: &Path, node: Option<&Path>) -> Option<OsString> {
+/// 构建 pnpm 探测专用 PATH：**与 `build_plugin_envs` 同序**——桌面端 shim 目录
+/// 首位，随后选定 Node 目录、用户 pnpm 所在目录，其余环境保留。
+///
+/// 顺序必须一致：安装子进程的 PATH 就是 `[bin_dir, node_dir, ...]`，`dsh plugin`
+/// 的 `spawnSync("pnpm")` 命中的是 `bin_dir/pnpm`，而该 shim 只会按 `DSH_PNPM`
+/// 或 PATH 继续转发。探测若把 `bin_dir` 排到用户 pnpm 之后，就可能解析出与真实
+/// 安装不同的 pnpm（Corepack / 转发型 shim 尤其明显），使选出的主版本与实际安装
+/// 的不一致；反过来，少了 `bin_dir` 这一层就会漏掉「按 PATH 解析回桌面 shim」的
+/// 间接层，得出与安装相反的结论。
+fn pnpm_probe_path(
+    pnpm: &Path,
+    node: Option<&Path>,
+    bin_dir: Option<&Path>,
+) -> Option<OsString> {
     let mut paths = Vec::new();
-    // 选定 Node 必须位于 pnpm shim 目录之前：corepack 目录可能残留另一份 node，
+    if let Some(bin_dir) = bin_dir {
+        paths.push(bin_dir.to_path_buf());
+    }
+    // 选定 Node 仍须位于 pnpm shim 目录之前：corepack 目录可能残留另一份 node，
     // bare `node` 应与桌面端预检和后续插件命令使用同一运行时。
     if let Some(parent) = node.and_then(Path::parent) {
         paths.push(parent.to_path_buf());
@@ -725,19 +754,20 @@ fn read_modules_yaml(app_handle: &AppHandle) -> Option<String> {
 
 /// 从 `.modules.yaml` 文本解析 `storeDir`（纯函数，便于单测）。
 ///
-/// 兼容 pnpm 的两种写法：未加引号的裸路径（Windows 反斜杠、Unix 正斜杠），以及
-/// 含特殊字符时 YAML 双引号包裹 + `\\` 转义的形式。
+/// pnpm 落盘该文件可能是 YAML 块结构，也可能是 **JSON 流结构**（pnpm 11 实测输出
+/// `{ "storeDir": "..." }`）。旧实现按行前缀匹配裸 `storeDir:`，遇到 JSON 形态
+/// 恒定返回 None，于是 `profile_store_major` 永远未知：store 主版本选版、
+/// `reset_incompatible_modules_metadata` 与 `pnpm_config_store_dir` 下传全部静默
+/// 失效（症状是 `ensure_pnpm` 打「for plugin install」而不是「matching profile
+/// store」、`build_plugin_envs` 从不打 store 固定日志）。JSON 是 YAML 的子集，
+/// 统一按 YAML 解析即可覆盖两种形态；转义也交给解析器，不再手工替换 `\\`。
 fn parse_store_dir_from_modules_yaml(content: &str) -> Option<String> {
-    let raw = content
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("storeDir:").map(str::trim))?
-        .trim_matches(['"', '\''])
-        .trim();
+    let value: serde_yaml::Value = serde_yaml::from_str(content).ok()?;
+    let raw = value.get("storeDir")?.as_str()?.trim();
     if raw.is_empty() {
         return None;
     }
-    // YAML 双引号标量里的 `\\` 表示单个反斜杠；裸路径不会出现连续反斜杠，替换是安全的。
-    Some(raw.replace("\\\\", "\\"))
+    Some(raw.to_string())
 }
 
 /// 从 `.modules.yaml` 文本解析 store 主版本（纯函数，便于单测）。
@@ -862,7 +892,7 @@ mod tests {
         permissions.set_mode(0o700);
         std::fs::set_permissions(&pnpm, permissions).unwrap();
 
-        let mut child = pnpm_probe_command(&pnpm, None)
+        let mut child = pnpm_probe_command(&pnpm, None, None)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -1073,6 +1103,41 @@ virtualStoreDir: node_modules/.pnpm
         );
     }
 
+    /// 回归：pnpm 11 把 `.modules.yaml` 写成 JSON 流结构（`"storeDir": "..."`）。
+    /// 旧实现按行前缀匹配裸 `storeDir:`，对真实文件恒定失败，导致 store 主版本
+    /// 感知、元数据重置与 store 下传全部静默失效。
+    #[test]
+    fn store_dir_parsed_from_json_modules_yaml() {
+        let content = r#"{
+  "hoistPattern": [
+    "*"
+  ],
+  "layoutVersion": 5,
+  "storeDir": "/Users/ruan/Library/pnpm/store/v11",
+  "virtualStoreDir": "node_modules/.pnpm"
+}"#;
+        assert_eq!(
+            parse_store_dir_from_modules_yaml(content).as_deref(),
+            Some("/Users/ruan/Library/pnpm/store/v11")
+        );
+        assert_eq!(parse_store_major_from_modules_yaml(content), Some(11));
+
+        // JSON 双引号里的 `\\` 由解析器还原为单个反斜杠（Windows 档案同样命中）。
+        let windows = r#"{"storeDir": "C:\\Users\\test\\AppData\\Local\\pnpm\\store\\v10"}"#;
+        assert_eq!(
+            parse_store_dir_from_modules_yaml(windows).as_deref(),
+            Some(r"C:\Users\test\AppData\Local\pnpm\store\v10")
+        );
+        assert_eq!(parse_store_major_from_modules_yaml(windows), Some(10));
+
+        // 合法 JSON 但没有 storeDir（或值不是字符串）→ 仍视为未知
+        assert_eq!(parse_store_dir_from_modules_yaml("{}"), None);
+        assert_eq!(
+            parse_store_dir_from_modules_yaml(r#"{"storeDir": 5}"#),
+            None
+        );
+    }
+
     #[test]
     fn store_base_dir_strips_trailing_pnpm_version_segment() {
         assert_eq!(
@@ -1102,5 +1167,40 @@ virtualStoreDir: node_modules/.pnpm
         assert_eq!(strip_store_version("/mnt/v-store"), "/mnt/v-store");
         assert_eq!(strip_store_version("v10"), "v10");
         assert_eq!(strip_store_version(""), "");
+    }
+
+    /// 探测 PATH 必须与 `build_plugin_envs`（安装子进程）同序：桌面端 shim 目录在
+    /// 首位，然后才是选定 Node 与用户 pnpm 所在目录。顺序不一致时探测与安装可能
+    /// 解析到不同的 pnpm，`ensure_pnpm` 据探测结果选出的主版本与实际安装的不相符。
+    #[test]
+    fn probe_path_puts_desktop_shim_dir_first() {
+        let path = pnpm_probe_path(
+            Path::new("/user/bin/pnpm"),
+            Some(Path::new("/opt/node/bin/node")),
+            Some(Path::new("/desktop/bin")),
+        )
+        .unwrap();
+        let entries: Vec<String> = std::env::split_paths(&path)
+            .map(|entry| entry.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries[0], "/desktop/bin");
+        assert_eq!(entries[1], "/opt/node/bin");
+        assert_eq!(entries[2], "/user/bin");
+    }
+
+    /// 不注入桌面 shim 目录（按精确路径探测）时保持原有顺序，不凭空插入空目录。
+    #[test]
+    fn probe_path_without_bin_dir_keeps_node_first() {
+        let path = pnpm_probe_path(
+            Path::new("/user/bin/pnpm"),
+            Some(Path::new("/opt/node/bin/node")),
+            None,
+        )
+        .unwrap();
+        let entries: Vec<String> = std::env::split_paths(&path)
+            .map(|entry| entry.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries[0], "/opt/node/bin");
+        assert_eq!(entries[1], "/user/bin");
     }
 }

@@ -1,5 +1,5 @@
 import type { ConfirmDialogOptions } from './confirm-dialog.types'
-import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Modal } from 'dsh-tauri-ui/client'
 import { createRoot } from 'react-dom/client'
 import { locale } from '../locales'
 

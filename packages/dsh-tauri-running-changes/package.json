@@ -1,0 +1,71 @@
+{
+  "name": "dsh-tauri-running-changes",
+  "type": "module",
+  "version": "0.3.1",
+  "description": "Turn-level change tracking for DeepSeek Harness: per-turn Git snapshots plus an input-dock chip reporting the changed files and +N -M of the turn that is currently running. File restore is delegated to the recommended dsh-rewind plugin.",
+  "author": "Hairyf <wwu710632@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dsh-tauri-desk/dsh-tauri-plugins.git"
+  },
+  "bugs": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/issues",
+  "keywords": [
+    "dsh",
+    "plugin",
+    "dsh-plugin",
+    "tauri",
+    "deepseek-harness",
+    "rewind",
+    "snapshot"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": "./dist/index.js",
+    "./client": "./dist/client.cjs",
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "cordis.patch.yml",
+    "dist"
+  ],
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-chat",
+        "dsh-tauri",
+        "dsh-tauri-ui"
+      ],
+      "external": [
+        "dsh-tauri/client",
+        "dsh-tauri-ui/client"
+      ],
+      "platform": "web"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "prepublishOnly": "nr build",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "dsh-tauri": "workspace:*",
+    "dsh-tauri-ui": "workspace:*",
+    "hookable": "catalog:utils",
+    "pathe": "catalog:utils",
+    "unstorage": "catalog:utils"
+  },
+  "devDependencies": {
+    "dsh-tauri-tsdown": "workspace:*",
+    "tsdown": "catalog:cli"
+  }
+}

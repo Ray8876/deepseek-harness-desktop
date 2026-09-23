@@ -280,6 +280,14 @@ describe('defineAdapter — 退级阶梯（官方服务 → DOM → 明确不可
     expect(warn.mock.calls[0][0]).toContain('startSession unavailable')
   })
 
+  it('composer.workspace-less：只认桌面壳补丁写在 <html> 上的能力标记', () => {
+    vi.stubGlobal('document', { documentElement: { getAttribute: () => '1' } })
+    expect(defineAdapter(undefined, { onWarn: makeWarn() }).has('composer.workspace-less')).toBe(true)
+
+    vi.stubGlobal('document', { documentElement: { getAttribute: () => null } })
+    expect(defineAdapter(undefined, { onWarn: makeWarn() }).has('composer.workspace-less')).toBe(false)
+  })
+
   it('addWorkspace：官方三段能力全流程', async () => {
     const pickDirectory = vi.fn().mockResolvedValue('D:/work/demo')
     const create = vi.fn().mockResolvedValue({ workspaceId: 'w1' })
@@ -586,6 +594,47 @@ describe('defineAdapter — 0.1.6-alpha.2 会话面投影', () => {
     expect(openSession).toHaveBeenCalledWith('s1')
   })
 
+  it('open 桥：创建期 uiWorkspace 尚未激活，服务到达后 sessions.open 照常切换', () => {
+    const openSession = vi.fn()
+    // `dsh-client-ui-workspace` 额外等 ui-session / connection，可能晚于本适配层创建：
+    // 创建期读不到 uiWorkspace 是常态，桥的安装判据不能依赖它。
+    const services: Record<string, unknown> = { sessions: { list: makeList() } }
+    const adapter = defineAdapter(makeContext(services))
+
+    expect(adapter.migrations).toContain('sessions:open-bridge')
+    expect(adapter.has('navigation.openSession')).toBe(false)
+    expect(adapter.openSession('s1').status).toBe('unavailable')
+
+    services.uiWorkspace = { openSession }
+    expect(adapter.has('navigation.openSession')).toBe(true)
+    adapter.sessions.open?.('s1')
+    expect(openSession).toHaveBeenCalledWith('s1')
+    expect(adapter.openSession('s2').status).toBe('opened')
+    expect(openSession).toHaveBeenCalledWith('s2')
+  })
+
+  it('open 桥：能力全缺时 sessions.open 明确抛错，不静默吞掉切换请求', () => {
+    const adapter = defineAdapter(makeContext({ sessions: { list: makeList() } }))
+
+    expect(adapter.migrations).toContain('sessions:open-bridge')
+    expect(() => adapter.sessions.open?.('s1')).toThrow(/sessions\.open is unavailable/)
+  })
+
+  it('open 桥：桥装好后核心才补上原生 sessions.open，原生优先于桥', () => {
+    const native = vi.fn()
+    // 服务延迟物化：装桥时核心还没有 open，之后才补上。
+    const sessions: Record<string, unknown> = { list: makeList() }
+    const adapter = defineAdapter(makeContext({ sessions }))
+
+    expect(adapter.migrations).toContain('sessions:open-bridge')
+    expect(() => adapter.sessions.open?.('s1')).toThrow(/sessions\.open is unavailable/)
+
+    sessions.open = native
+    expect(adapter.has('navigation.openSession')).toBe(true)
+    adapter.sessions.open?.('s2')
+    expect(native).toHaveBeenCalledWith('s2')
+  })
+
   it('open 桥：原生 sessions.open 在场时不覆盖', () => {
     const open = vi.fn()
     const openSession = vi.fn()
@@ -598,5 +647,48 @@ describe('defineAdapter — 0.1.6-alpha.2 会话面投影', () => {
     adapter.sessions.open?.('s1')
     expect(open).toHaveBeenCalledWith('s1')
     expect(openSession).not.toHaveBeenCalled()
+  })
+})
+
+describe('defineAdapter — sessionList 投影', () => {
+  it('sessionList：过滤非字符串 id、只带字符串 current，subscribe 转发到核心列表', () => {
+    const list = makeLiveList<{ ids: unknown[], current?: unknown }>({ ids: ['s1', 7, 's2', null], current: 's2' })
+    const adapter = defineAdapter(makeContext({ sessions: { list } }))
+
+    const projection = adapter.sessionList()
+    expect(projection?.ids).toEqual(['s1', 's2'])
+    expect(projection?.current).toBe('s2')
+
+    const listener = vi.fn()
+    const off = projection?.subscribe(listener)
+    list.publish({ ids: ['s3'], current: 's3' })
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(adapter.sessionList()?.ids).toEqual(['s3'])
+    expect(adapter.sessionList()?.current).toBe('s3')
+    off?.()
+    list.publish({ ids: ['s4'], current: 's4' })
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(adapter.sessionList()?.ids).toEqual(['s4'])
+  })
+
+  it('sessionList：快照非对象时按「无法判断」返回 undefined，ids 非数组时退化为空列表', () => {
+    const nullSnapshot = makeLiveList<unknown>(null)
+    expect(defineAdapter(makeContext({ sessions: { list: nullSnapshot } })).sessionList()).toBeUndefined()
+
+    const stringIds = makeLiveList<unknown>({ ids: 's1' })
+    expect(defineAdapter(makeContext({ sessions: { list: stringIds } })).sessionList())
+      .toEqual({ ids: [], subscribe: expect.any(Function) })
+
+    // current 只认字符串：非字符串一律当缺席，不猜一个结论
+    const numericCurrent = makeLiveList<unknown>({ ids: ['s1'], current: 42 })
+    expect(defineAdapter(makeContext({ sessions: { list: numericCurrent } })).sessionList())
+      .toEqual({ ids: ['s1'], subscribe: expect.any(Function) })
+  })
+
+  it('sessionList：核心没有 list 投影时返回 undefined', () => {
+    const adapter = defineAdapter(makeContext({ sessions: { getSnapshot: vi.fn() } }))
+
+    expect(adapter.has('sessions.list')).toBe(false)
+    expect(adapter.sessionList()).toBeUndefined()
   })
 })

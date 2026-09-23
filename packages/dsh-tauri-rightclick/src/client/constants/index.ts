@@ -3,17 +3,7 @@ import { PLUGIN_ID } from '../../shared/constants'
 export { PLUGIN_ID } from '../../shared/constants'
 
 export const LOCALE_EFFECT = `${PLUGIN_ID}: locale`
-export const STYLES_EFFECT = `${PLUGIN_ID}: styles`
 export const CONTEXT_MENU_EFFECT = `${PLUGIN_ID}: context menu`
-
-export const MENU_STYLE_ID = `${PLUGIN_ID}-menu-styles`
-
-export const MENU_BLOCK = 'dshp-menu'
-export const MENU_ITEM_CLASS = `${MENU_BLOCK}__item`
-export const MENU_ITEM_DANGER_CLASS = `${MENU_ITEM_CLASS}--danger`
-export const MENU_SHORTCUT_CLASS = `${MENU_BLOCK}__shortcut`
-export const MENU_SEPARATOR_CLASS = `${MENU_BLOCK}__separator`
-export const TOAST_CLASS = 'dshp-toast'
 
 export const TREE_ITEM_SELECTOR = '[role="treeitem"]'
 export const TREE_ITEM_EXPANDED_SELECTOR = '[role="treeitem"][aria-expanded]'
@@ -30,4 +20,3 @@ export const EXTENSIONS_REGISTRY_KEY = 'dsh.rightclick-menu.extensions'
 export const CONTEXT_MENU_EVENT = 'dsh:rightclick-menu'
 
 export const TOAST_DURATION_MS = 1800
-export const MENU_VIEWPORT_MARGIN = 6

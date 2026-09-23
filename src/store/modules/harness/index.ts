@@ -11,3 +11,4 @@ export type {
   SidebarBusyAction,
   StartupError,
 } from './types'
+export { waitForHarnessStopped } from './utils'

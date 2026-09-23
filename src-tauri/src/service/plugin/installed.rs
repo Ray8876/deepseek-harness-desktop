@@ -87,7 +87,10 @@ pub struct PreinstallPlugin {
     pub fix: bool,
     /// 无 chip 但默认勾选（首次引导直接勾上，不标「推荐」）
     pub default_checked: bool,
+    /// 显式声明首次引导不默认勾选（仍可标「推荐」chip，但不预选）
+    pub default_unchecked: bool,
     pub installed: bool,
+    pub unsupported: bool,
 }
 
 /// 用于“已安装”检测的包名：预设显式声明 `package` 时用它（scoped 包名与预设
@@ -103,6 +106,8 @@ pub fn list(app_handle: &AppHandle) -> Vec<PreinstallPlugin> {
     // 弃用插件（deprecated-plugins.json 登记）不再提供安装入口，启动时自动卸载，
     // 不进入首次引导清单。
     let deprecated_ids = load_deprecated_ids(app_handle);
+    // 当前活动核心版本：用于判定预设声明的 `dshSupportedVersion` 是否已被超越。
+    let core_version = crate::service::core::active_version(app_handle);
 
     load_presets(app_handle)
         .into_iter()
@@ -116,6 +121,9 @@ pub fn list(app_handle: &AppHandle) -> Vec<PreinstallPlugin> {
             // 已安装检测以实际 npm 包名为准：预设可显式声明 package（scoped 包
             // 名与预设 id 不一致时），未声明则回落到 id。
             let is_installed = installed.contains(installed_name(&p));
+            // 超出支持上限的预设仍留在清单里：界面置灰并给出「不支持当前核心」，
+            // 而不是静默消失，用户才能理解插件为何不再可选。
+            let unsupported = p.unsupported_on(core_version.as_deref());
             PreinstallPlugin {
                 id: p.id,
                 name: p.name,
@@ -124,7 +132,9 @@ pub fn list(app_handle: &AppHandle) -> Vec<PreinstallPlugin> {
                 recommended: p.recommended,
                 fix: p.fix,
                 default_checked: p.default_checked,
+                default_unchecked: p.default_unchecked,
                 installed: is_installed,
+                unsupported,
             }
         })
         .collect()
@@ -270,6 +280,9 @@ mod tests {
             recommended: false,
             fix: false,
             default_checked: true,
+            default_unchecked: false,
+            dsh_supported_version: None,
+            version: None,
             win_only: false,
             internal: false,
         };

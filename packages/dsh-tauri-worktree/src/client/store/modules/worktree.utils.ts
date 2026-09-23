@@ -2,7 +2,7 @@ import type { WorktreeSessionState } from './worktree.types'
 
 export const EMPTY_SESSION_STATE: WorktreeSessionState = {
   mode: 'local',
-  isGit: true,
+  isGit: null,
   phase: 'idle',
   loadingLabel: '',
   log: [],

@@ -52,31 +52,20 @@ export function joinProviderDirectory(
 }
 
 export interface ProviderRow {
-
   entry: ProviderDirectoryEntry
-
   configured: boolean
-
   removable: boolean
-
   apiKeyEnv: string | undefined
-
   credential: CredentialInfo | undefined
-
   derivedCredential?: CredentialInfo
 }
 
 export interface ModelsSettingsState {
   status: 'idle' | 'loading' | 'ready' | 'error'
-
   error: string | null
-
   credentialError: string | null
-
   writable: boolean
-
   rows: readonly ProviderRow[]
-
   namespaces: ReadonlyMap<string, SettingsNamespaceView>
 }
 

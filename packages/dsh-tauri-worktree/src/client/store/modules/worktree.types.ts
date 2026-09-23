@@ -2,7 +2,7 @@ export type WorktreePhase = 'idle' | 'creating' | 'created' | 'thinking' | 'dele
 
 export interface WorktreeSessionState {
   mode: 'local' | 'pending' | 'worktree'
-  isGit: boolean
+  isGit: boolean | null
   phase: WorktreePhase
   loadingLabel: string
   log: string[]

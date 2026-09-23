@@ -4,6 +4,7 @@ import { clearHostRuntime, setCurrentHostInstance } from './config/runtime'
 import { handleSessionEvent } from './events/session-event'
 import { handleToolsExecute } from './events/tools-execute'
 import { checkoutContextProvider } from './prompts/checkout-context'
+import { worktreeContextProvider } from './prompts/worktree-context'
 import { worktreeSectionProvider } from './prompts/worktree-section'
 import { routes } from './routes'
 import { workspace } from './service/workspace'
@@ -23,6 +24,7 @@ export function apply(ctx: HostContext): void {
   ctx.on('tools/execute', handleToolsExecute)
 
   ctx.systemPrompt.section(worktreeSectionProvider)
+  ctx.systemPrompt.context(worktreeContextProvider)
   ctx.systemPrompt.context(checkoutContextProvider)
 
   ctx.effect(() => {

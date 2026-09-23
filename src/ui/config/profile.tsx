@@ -16,6 +16,7 @@ import { Panel } from '@/components/panel'
 import { queryKeys } from '@/config/query-keys'
 import { useInvalidateOnSettingUpdated } from '@/hooks/use-invalidate-on-setting-updated'
 import { store } from '@/store'
+import { waitForHarnessStopped } from '@/store/modules/harness'
 import { ConfigBackup } from '@/ui/config/backup'
 import { silence } from '@/utils/silence'
 import { toast } from '@/utils/toast'
@@ -55,6 +56,10 @@ export function ConfigProfile() {
     mutationFn: (id: string) => invoke<void>('remove_profile', { id }),
     onSuccess: invalidate,
   })
+  const reset = useMutation({
+    mutationFn: (id: string) => invoke<void>('reset_profile', { id }),
+    onSuccess: invalidate,
+  })
   const clone = useMutation({
     mutationFn: (params: { sourceId: string, name: string }) => invoke<Profile>('clone_profile', params),
     onSuccess: invalidate,
@@ -78,6 +83,11 @@ export function ConfigProfile() {
     await refetch()
   }
 
+  async function resetProfile(id: string) {
+    await reset.mutateAsync(id)
+    await refetch()
+  }
+
   async function cloneProfile(sourceId: string, name: string): Promise<Profile> {
     const created = await clone.mutateAsync({ sourceId, name })
     await refetch()
@@ -87,8 +97,8 @@ export function ConfigProfile() {
   const profiles = profileList ?? []
   const loading = isLoading
   const error = profileError ? String(profileError) : ''
-  /** 操作进行中标记（新建/切换/删除/克隆任一） */
-  const busy = create.isPending || activate.isPending || remove.isPending || clone.isPending
+  /** 操作进行中标记（新建/切换/删除/重置/克隆任一） */
+  const busy = create.isPending || activate.isPending || remove.isPending || reset.isPending || clone.isPending
 
   const [dialogHolder, openDialog] = useOverlay(Modal, { type: 'holder' })
 
@@ -237,6 +247,69 @@ export function ConfigProfile() {
     }
   }
 
+  /**
+   * 重置档案：清空档案数据（插件/补丁/设置）后按模板重新初始化。
+   *
+   * 会话存放在 `$DSH_HOME/sessions`（档案目录之外），重置不受影响。
+   * 只有当前使用中的档案会被运行中的服务锁住目录，因此仅此时沿用备份还原的编排
+   * （先停服务并确认已停止，再重置，最后重新拉起）；重置其余档案不打扰在跑的服务。
+   */
+  async function onReset(id: string) {
+    const target = profiles.find(p => p.id === id)
+    if (!target || busy)
+      return
+    try {
+      await openDialog({
+        status: 'danger',
+        title: t('profiles.reset_confirm_title'),
+        description: (
+          <p>
+            {t('profiles.reset_confirm_desc', { name: target.name })}
+          </p>
+        ),
+        confirmText: t('profiles.reset_confirm'),
+      })
+    }
+    catch (e) {
+      silence(e, 'profile reset: dialog cancelled')
+      return
+    }
+    if (target.active) {
+      toast(t('profiles.reset_stopped_toast'), { variant: 'accent' })
+      try {
+        await invoke('shutdown_harness')
+      }
+      catch (e) {
+        console.warn('[ConfigProfile] shutdown_harness failed (may already be stopped):', e)
+      }
+      await waitForHarnessStopped()
+    }
+    try {
+      await resetProfile(id)
+      if (target.active) {
+        invoke('launch_harness').catch((e) => {
+          console.warn('[ConfigProfile] launch_harness failed:', e)
+        })
+      }
+      const key = toast(t('profiles.reset_success', { name: target.name }), {
+        variant: 'accent',
+        description: t('profiles.reset_success_hint'),
+        timeout: 10_000,
+        actionProps: {
+          children: t('app.restart'),
+          onPress: () => {
+            store.harness.restart()
+            toast.close(key)
+          },
+        },
+      })
+    }
+    catch (err) {
+      console.error('[ConfigProfile] reset failed:', err)
+      toast(t('profiles.reset_failed'), {})
+    }
+  }
+
   // 备份子视图：点击档案的「备份」芯片后进入
   if (activeView !== 'list') {
     return (
@@ -305,18 +378,22 @@ export function ConfigProfile() {
                     {t('profiles.clone')}
                   </Chip>
                   <Chip
-                    className={`rounded-md${profile.default || busy ? ' cursor-not-allowed opacity-50' : ' cursor-pointer'}`}
-                    variant={profile.default ? 'soft' : 'primary'}
-                    color={profile.default ? 'default' : 'danger'}
+                    className={`rounded-md${busy ? ' cursor-not-allowed opacity-50' : ' cursor-pointer'}`}
+                    variant="primary"
+                    color="danger"
                     size="sm"
                     onClick={(event) => {
                       event.stopPropagation()
-                      if (profile.default || busy)
+                      if (busy)
                         return
+                      if (profile.default) {
+                        onReset(profile.id)
+                        return
+                      }
                       onRemove(profile.id)
                     }}
                   >
-                    {t('profiles.remove')}
+                    {profile.default ? t('profiles.reset') : t('profiles.remove')}
                   </Chip>
                 </>
               )}

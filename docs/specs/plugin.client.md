@@ -1,3 +1,5 @@
+> 该文档已被固定，禁止修改
+
 # 插件客户端架构规范 (Plugin Client Architecture Protocol)
 
 > 本规范是 [通用软件开发规范与协议 (devlopment.md)](./devlopment.md)[cite: 1] 在 **DeepSeek Harness 插件客户端半区（Browser Runtime）** 的具象化工程落地协议。所有插件的 `src/client` 实现必须严格遵循本规范。
@@ -76,7 +78,7 @@ $$\text{client/index.ts} \longrightarrow \begin{bmatrix} \text{register/} \\ \te
 ### 1. 装配入口 (`src/client/index.ts`)
 
 * 平铺调用 `ctx.effect(feature, LABEL)` 与 `ctx.slots.register()`，禁止内联回调 >2 行，禁止启动期异步请求[cite: 2]。
-* effect 标签不得硬编码字符串：按 [agents.plugins.md](./agents.plugins.md) 的《通用协议：常量归属》决定落点——多消费方进 `constants/`（如 `LOCALE_EFFECT`），单一消费方留在消费方文件[cite: 2]。
+* effect 标签不得硬编码字符串：按 [plugin.baisc.md](./plugin.baisc.md) 的《通用协议：常量归属》决定落点——多消费方进 `constants/`（如 `LOCALE_EFFECT`），单一消费方留在消费方文件[cite: 2]。
 
 ### 2. 状态层 (`store/`)
 
@@ -100,6 +102,7 @@ $$\text{client/index.ts} \longrightarrow \begin{bmatrix} \text{register/} \\ \te
 * 一个 feature 一个文件，导出 `export const <feature> = defineRegister(...)`。
 * 资源必须通过 `controller.add()` / `observe()` / `interval()` / `timeout()` / `listen()` 托管，彻底避免手动清理[cite: 1]。
 * 长流程必须显式检查 `controller.isDisposed()`。代码超过 150 行时，必须将纯状态机逻辑下沉至 `service/`。
+* **内核能力差异一律经适配层**：`defineRegister` 第三个参数 `adapter`（由 `defineAdapter(ctx)` 创建）只读能力探测面（`adapter.has('sessions.list')`、`adapter.sessions`、`adapter.workspaces`），按 [plugin.baisc.md](./plugin.baisc.md) 的退级阶梯择路，**不猜核心版本号、不写死槽名**。
 * **DOM 补丁**归属于 `register/`（不设 `dom/` 目录），观察器与事件必须经由 controller 托管，选择器仅允许使用稳定属性（`aria-label`、`role`、插件前缀 class）。
 
 ### 5. API 层 (`apis/`)
@@ -110,6 +113,8 @@ $$\text{client/index.ts} \longrightarrow \begin{bmatrix} \text{register/} \\ \te
 ### 6. UI 与样式 (`components/`, `styles/`, `hooks/`)
 
 * 组件全小写 kebab-case，仅读 store 和调用 service，禁止直接修改 store 或发网络请求[cite: 1]。
+* **资源化优先 `dsh-tauri-ui`**：通用控件（按钮、图标按钮、chip、tag、开关、复选框、下拉菜单、输入、分段控件、面板容器）与图标一律从 `dsh-tauri-ui/client` 取用；严禁在包内自建同名通用组件，也严禁直接 import 官方 `@deepseek-ai/dsh-client-ui-primitives`（官方组件的跨内核版本差异由 `dsh-tauri-ui` 统一吸收）。缺什么就补进 `dsh-tauri-ui` 的组件层，不在消费包里各写一份。
+* 包内 `components/` 只保留业务组件与包专属布局样式；任何可能被第二个包复用的组件，上提到 `dsh-tauri-ui`。
 * `.cssr.ts` **只导出 `CNode**`，挂载统一通过 `useMountStyle` 或收敛至 `register/styles.ts`[cite: 1]。
 * Hook 命名为 `use-<thing>.ts`，优先复用 `@reause/core` 原语（如 `useIntervalFn`）[cite: 1]。
 
@@ -152,4 +157,5 @@ $$\text{client/index.ts} \longrightarrow \begin{bmatrix} \text{register/} \\ \te
 * [ ] **依赖与本地化**：无第三方库直接 import；本地化统一采用 `defineLocale`[cite: 1]。
 * [ ] **类型/工具归属**：单一模块专属的类型/工具是否与所属模块**同目录同名**（`<module>.types.ts` / `<module>.utils.ts`），`types/`、`utils/` 是否只留真正跨模块共享的文件？
 * [ ] **零无意义封装**：不存在 `function f(x) { return lodashFn(x) }` 这类纯转调包装；手写处理逻辑（裁剪、比较、排序、去重、取值、判空）一律改用 `dsh-tauri/client` 转出的 `lodash-es`。
+* [ ] **组件资源化**：通用控件与图标全部来自 `dsh-tauri-ui/client`，包内无重复实现、无对官方 `@deepseek-ai/dsh-client-ui-primitives` 的直连 import。
 * [ ] **工程校验**：`pnpm --filter <pkg> typecheck` / `lint` / `test` / `build` 全部通过[cite: 2]。

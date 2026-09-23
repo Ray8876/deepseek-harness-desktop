@@ -3,21 +3,13 @@ import type { en } from './locales.ts'
 import { modelStyles as styles } from './styles.ts'
 
 export interface EditorFooterProps {
-
   t: (key: keyof typeof en) => string
-
   busy: boolean
-
   submitDisabled: boolean
-
   submitLabelKey: keyof typeof en
-
   submitBusyLabelKey: keyof typeof en
-
   cancelLabelKey?: keyof typeof en
-
   onCancel: () => void
-
   onSubmit: () => void
 }
 

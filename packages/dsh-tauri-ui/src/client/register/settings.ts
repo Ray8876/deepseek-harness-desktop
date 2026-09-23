@@ -1,8 +1,6 @@
 import type { ClientContext } from 'dsh-tauri/client'
 import { SlotOutlet } from '@deepseek-ai/dsh-client-ui-renderer'
 import { defineRegister } from 'dsh-tauri/client'
-import { SettingsSidebar } from '../components/sidebar'
-import { SettingsTrigger } from '../components/trigger'
 import {
   SETTINGS_REGISTRANT,
   SETTINGS_SHELL_OVERLAY_SLOT,
@@ -10,6 +8,8 @@ import {
   SETTINGS_SIDEBAR_SLOT,
   SETTINGS_TRIGGER_PRIORITY,
 } from '../constants'
+import { SettingsSidebar } from '../ui/sidebar'
+import { SettingsTrigger } from '../ui/trigger'
 
 export const registerSettings = defineRegister<ClientContext>((controller, ctx) => {
   if (typeof SlotOutlet !== 'function') {

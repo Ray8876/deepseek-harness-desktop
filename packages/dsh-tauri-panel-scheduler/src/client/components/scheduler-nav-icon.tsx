@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { Clock, Icon } from 'dsh-tauri-ui/client'
+import { Clock, Dot, Icon } from 'dsh-tauri-ui/client'
 import { useStore } from 'dsh-tauri/client'
 import { store } from '../store'
 import { countUnreadRuns } from './schedule.utils'
@@ -10,11 +10,7 @@ export function SchedulerNavIcon({ size }: { size: number }): ReactElement {
     <>
       <Icon as={Clock} size={size} />
       {countUnreadRuns(state.runs, state.readAt, state.readIds) > 0
-        ? (
-            <span className="dshp-scheduler__nav-badge">
-              <span className="dshp-scheduler__unread-dot" />
-            </span>
-          )
+        ? <Dot className="dshp-scheduler__nav-dot" state="done" />
         : null}
     </>
   )

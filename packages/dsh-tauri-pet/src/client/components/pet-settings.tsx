@@ -1,9 +1,9 @@
 import type { ChangeEvent, ReactElement } from 'react'
 import type { PetSettingsProps } from './pet-settings.types'
-import { ArrowDownToLine, Icon, Plus, useMountStyle } from 'dsh-tauri-ui/client'
+import { ArrowRightFromSquare, Button, Icon, Plus, SegmentedControl } from 'dsh-tauri-ui/client'
 import { useStore, useWatchImmediate } from 'dsh-tauri/client'
-import { useEffect, useRef, useState } from 'react'
-import { PET_DEFAULT_SIZE, PET_SETTINGS_STYLES_ID, PET_SIZE_MAX, PET_SIZE_MIN, PET_SIZE_STEP } from '../constants'
+import { useEffect, useId, useRef, useState } from 'react'
+import { PET_DEFAULT_SIZE, PET_SIZE_MAX, PET_SIZE_MIN, PET_SIZE_STEP } from '../constants'
 import { locale } from '../locales'
 import {
   choosePet,
@@ -16,7 +16,11 @@ import {
 } from '../service/pet'
 import { store } from '../store'
 import { PetCard } from './pet-card'
-import petSettingsStyle from './pet-settings.cssr'
+
+const TAB_OPTIONS = [
+  { value: 'pets', label: 'Pets' },
+  { value: 'codex', label: 'Codex' },
+] as const
 
 /** 读取 .zip 归档为 base64（桌面端命令按字符串收包）。 */
 function readAsBase64(file: File): Promise<string> {
@@ -34,20 +38,20 @@ function readAsBase64(file: File): Promise<string> {
 
 /** 桌宠设置页：预设 / Chat / Codex 三类宠物卡片（选择、启用、取消选择）、开关、大小滑条与导入。 */
 export function PetSettings(props: PetSettingsProps): ReactElement {
-  useMountStyle(petSettingsStyle, PET_SETTINGS_STYLES_ID)
   locale.useLocale()
   const { status, presetPets, chatPets, codexPets, catalogLoaded } = useStore(store.pet)
   const [tab, setTab] = useState<'pets' | 'codex'>('pets')
-  // 无缓存（首次挂载）时进入加载态，避免空列表闪烁；有缓存直接渲染、后台静默刷新。
   const [busy, setBusy] = useState(() => !catalogLoaded)
   const [error, setError] = useState<string | null>(null)
   const [size, setSize] = useState(status?.pet_size ?? PET_DEFAULT_SIZE)
+  const tabsId = useId()
+  const fileRef = useRef<HTMLInputElement>(null)
   const committedSizeRef = useRef<number | null>(null)
   const enabled = Boolean(status?.enabled)
   const active = status?.active_pet ?? ''
   const statusSize = status?.pet_size ?? PET_DEFAULT_SIZE
 
-  // 宿主状态里的尺寸变化（别的入口改过）同步到本地滑条；本地正在拖动的值不被覆盖。
+  // 宿主侧尺寸变化同步到本地滑条，正在拖动的本地值不被覆盖。
   useWatchImmediate(statusSize, () => {
     if (statusSize !== committedSizeRef.current)
       setSize(statusSize)
@@ -67,7 +71,6 @@ export function PetSettings(props: PetSettingsProps): ReactElement {
     }
   }, [])
 
-  /** 启用预设宠物：选择它，并确保桌宠被唤醒。 */
   async function enablePreset(id: string): Promise<void> {
     if (busy || active === id)
       return
@@ -90,7 +93,6 @@ export function PetSettings(props: PetSettingsProps): ReactElement {
     setBusy(false)
   }
 
-  /** 取消选择：清空已选宠物；仍在启用时一并关闭桌宠（无内容可渲染，不留空窗口）。 */
   async function clearSelection(): Promise<void> {
     if (busy || active === '')
       return
@@ -102,7 +104,6 @@ export function PetSettings(props: PetSettingsProps): ReactElement {
     setBusy(false)
   }
 
-  /** 启用/关闭桌宠：纯持久开关，关闭后重启不再自动拉起。 */
   async function toggleEnabled(): Promise<void> {
     if (busy)
       return
@@ -162,7 +163,6 @@ export function PetSettings(props: PetSettingsProps): ReactElement {
         ? <div className="dshp-pet__loading">{locale.text('loading')}</div>
         : (
             <div className="dshp-pet__cards">
-              {/* 预设宠物直连远端素材：没有下载/更新步骤，卡片动作只有「启用 / 已选」。 */}
               {presetPets.map(item => (
                 <PetCard
                   key={item.id}
@@ -216,59 +216,68 @@ export function PetSettings(props: PetSettingsProps): ReactElement {
   return (
     <div className="dshp-pet__page">
       <div className="dshp-pet__tabs">
-        <div className="dshp-pet__tab-list" role="tablist" aria-label={locale.text('name')}>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'pets'}
-            className={tab === 'pets' ? 'dshp-pet__tab-btn dshp-pet__tab-btnActive' : 'dshp-pet__tab-btn'}
-            onClick={() => setTab('pets')}
-          >
-            Pets
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'codex'}
-            className={tab === 'codex' ? 'dshp-pet__tab-btn dshp-pet__tab-btnActive' : 'dshp-pet__tab-btn'}
-            onClick={() => setTab('codex')}
-          >
-            Codex
-          </button>
-        </div>
+        <SegmentedControl
+          id={tabsId}
+          label={locale.text('name')}
+          value={tab}
+          options={TAB_OPTIONS}
+          onChange={next => setTab(next === 'codex' ? 'codex' : 'pets')}
+        />
         <div className="dshp-pet__tab-tools">
           {tab === 'pets'
             ? (
                 <>
-                  <button type="button" className="dshp-pet__tool-btn" disabled={busy} onClick={() => { void createPet() }}>
-                    <Icon as={Plus} />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    icon={<Icon as={Plus} />}
+                    disabled={busy}
+                    onClick={() => { void createPet() }}
+                  >
                     {locale.text('create')}
-                  </button>
-                  <button type="button" className="dshp-pet__tool-btn" disabled={busy} onClick={() => { void toggleEnabled() }}>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => { void toggleEnabled() }}
+                  >
                     {enabled ? locale.text('closePet') : locale.text('enablePet')}
-                  </button>
+                  </Button>
                 </>
               )
             : (
-                <label className="dshp-pet__tool-btn" aria-disabled={busy}>
-                  <Icon as={ArrowDownToLine} />
-                  {locale.text('import')}
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    icon={<Icon as={ArrowRightFromSquare} />}
+                    disabled={busy}
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    {locale.text('import')}
+                  </Button>
                   <input
+                    ref={fileRef}
                     type="file"
                     accept=".zip"
                     hidden
                     disabled={busy}
                     onChange={(event) => { void onImport(event) }}
                   />
-                </label>
+                </>
               )}
         </div>
       </div>
       <p className="dshp-pet__tab-desc">
         {tab === 'pets' ? locale.text('tabInstalledDesc') : locale.text('tabCodexDesc')}
       </p>
-      <div className="dshp-pet__divider" role="separator" />
-      {tab === 'pets' ? petsPanel : codexPanel}
+      <div id={`${tabsId}-${tab}-panel`} role="tabpanel" aria-labelledby={`${tabsId}-${tab}`}>
+        {tab === 'pets' ? petsPanel : codexPanel}
+      </div>
       {error ? <div className="dshp-pet__error" role="alert">{error}</div> : null}
       <div className="dshp-pet__size-row">
         <span className="dshp-pet__size-label">{locale.text('sizeLabel')}</span>

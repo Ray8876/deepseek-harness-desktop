@@ -37,6 +37,7 @@ import type {
   AdapterGeneration,
   AdapterListProjection,
   AdapterMigrationFailure,
+  AdapterOpenSession,
   AdapterOpenSessionOutcome,
   AdapterProbe,
   AdapterRuntimeObject,
@@ -58,6 +59,15 @@ export type * from '../types/adapter'
 
 /** 官方「添加工作区」按钮：工作区创建能力缺席时的 DOM 退级目标（只有本文件消费）。 */
 const ADD_WORKSPACE_SELECTOR = 'button[aria-label="添加工作区"],button[aria-label="Add workspace"]'
+
+/**
+ * 桌面壳 composer 补丁的能力标记（与 `src-tauri/src/service/patch/composer.rs` 逐字一致）。
+ *
+ * 官方 `ConversationRoot` 对「不属于任何工作区的空白会话」把 composer 换成「选择工作区」
+ * 触发器；桌面壳补丁放宽该判定并在 `<html>` 上写下这个标记。消费方据此决定「未分组」
+ * 入口是否可用——不猜核心版本，也不看补丁文件。
+ */
+const COMPOSER_CWD_ATTRIBUTE = 'data-dsh-composer-cwd'
 
 /** 适配层告警出口（默认 console.warn；宿主可注入以上报到插件面板）。 */
 type AdapterWarn = (message: string, error?: unknown) => void
@@ -462,53 +472,103 @@ const NAVIGATION_MIGRATION: DshMigration = {
 }
 
 /**
- * 跨布局：把「打开已有会话」收敛成 `surface.openSession`。
+ * `sessions.open` 兼容桥登记表（`surface` → 桥函数）。
  *
- * 落点逐版本漂移：`≤0.1.5-rc.2` 在 `sessions.open`，`0.1.6-alpha.2` 收进
- * `uiWorkspace.openSession` 并且不再暴露 `sessions.open`。与 `startSession` 同样逐个候选
- * 找「真的实现了」的那一个，按能力而非版号判断。
+ * 桥带着 `open` 方法，`surface.sessions.open` 在桥缺席时会读回桥自身；能力探测与桥内部解析
+ * 都要按函数身份把它排除，否则 `has('navigation.openSession')` 会永久自证为 true、
+ * 桥也会递归调用自己。用 WeakMap 而不是给 `AdapterSurface` 加字段：这是纯诊断用途的
+ * 内部登记，不进入公开契约。
  */
+const openBridges = new WeakMap<AdapterSurface, unknown>()
+
+/**
+ * 解析一个候选落点上的 `open` 能力，返回**绑定到 owner** 的调用器。
+ *
+ * 调用期 `surface.sessions` 可能已是被投影包装的 Proxy，`open` 由内层桥提供；桥自身带着
+ * `open` 方法，因此按函数身份 `exclude` 掉它，避免把桥当成「原生 open」而递归调用。
+ */
+function openCapabilityAt(owner: AdapterRuntimeObject | undefined, member: string, exclude: unknown): AdapterOpenSession | undefined {
+  if (owner === undefined)
+    return undefined
+  const fn = owner[member]
+  if (typeof fn !== 'function' || fn === exclude)
+    return undefined
+  return (sessionId: AdapterSessionId) => fn.call(owner, sessionId)
+}
+
+/** 按能力解析「打开已有会话」的官方入口（调用期解析，见 {@link SESSIONS_OPEN_MIGRATION}）。 */
+function resolveOpenCapability(surface: AdapterSurface, exclude?: unknown): AdapterOpenSession | undefined {
+  return openCapabilityAt(surface.uiWorkspace, 'openSession', exclude)
+    ?? openCapabilityAt(surface.workspaces, 'open', exclude)
+    ?? openCapabilityAt(surface.sessions, 'open', exclude)
+}
+
+/** 迁移表里解析出的 `surface.openSession` 快照（调用期重解析，见 {@link resolveOpenCapability}）。 */
+function surfaceOpenSession(surface: AdapterSurface, exclude?: unknown): AdapterOpenSession | undefined {
+  return resolveOpenCapability(surface, exclude) ?? surface.openSession
+}
+
+/**
+ * `surface.openSession` 快照是否真的是官方能力（不是 `sessions.open` 兼容桥自己）。
+ *
+ * 桥缺席时 `surface.sessions.open` 读到的就是桥本身，能力探测必须把桥排除掉。
+ */
+function hasOpenCapability(surface: AdapterSurface): boolean {
+  if (resolveOpenCapability(surface, openBridges.get(surface)) !== undefined)
+    return true
+  const snapshot = surface.openSession
+  return snapshot !== undefined && snapshot !== openBridges.get(surface)
+}
+
+/** 跨布局：把「打开已有会话」收敛成 `surface.openSession`（解析结果仅作诊断快照）。 */
 const NAVIGATION_OPEN_MIGRATION: DshMigration = {
   id: 'navigation:resolve-open-session',
   description: 'uiWorkspace.openSession ?? workspaces.open ?? sessions.open → surface.openSession',
   detect: () => true,
   apply(surface) {
-    const candidates: readonly (readonly [AdapterRuntimeObject | undefined, string])[] = [
-      [surface.uiWorkspace, 'openSession'],
-      [surface.workspaces, 'open'],
-      [surface.sessions, 'open'],
-    ]
-    for (const [owner, member] of candidates) {
-      const fn = owner?.[member]
-      if (owner !== undefined && typeof fn === 'function') {
-        surface.openSession = (sessionId: AdapterSessionId) => fn.call(owner, sessionId)
-        return
-      }
-    }
+    const resolved = resolveOpenCapability(surface)
+    if (resolved !== undefined)
+      surface.openSession = resolved
   },
 }
 
 /**
- * 把已解析的「打开已有会话」补回 `sessions.open`（旧式消费方免改）。
+ * 把「打开已有会话」补回 `sessions.open`（旧式消费方免改）。
  *
  * `0.1.6-alpha.2` 起核心移除了 `sessions.open`，选中态改由 `uiWorkspace.openSession` 承担；
- * 桌面消费方（worktree 会话切换等）仍按 `sessions.open(id)` 切换，因此这里复用上一条迁移解析出的
- * `surface.openSession` 做别名。原生 `sessions.open` 在场时不装桥，能力全缺时保持缺席。
+ * 桌面消费方（worktree 会话切换、桌宠新建会话、右键分叉等）仍按 `sessions.open(id)` 切换。
+ *
+ * 桥的**安装判据只看核心有没有 `sessions.open`**：`uiWorkspace` 可能晚于适配层创建，
+ * 用「创建期是否解析出 openSession」当判据会让桥永久缺席。真正的落点在调用期按能力重解析，
+ * 与 `provideInfo` / `current` 两条投影同一条约束。原生 `sessions.open` 在场时不装桥。
+ *
+ * 候选 owner 一律**读 `target`（内层投影）而不是 `surface.sessions`**：后者在本迁移之后就是
+ * 本 Proxy，读回来会把桥自身当成原生能力。
  */
 const SESSIONS_OPEN_MIGRATION: DshMigration = {
   id: 'sessions:open-bridge',
-  description: 'uiWorkspace.openSession / workspaces.open → sessions.open 兼容桥',
-  detect: (_probe, surface) =>
-    typeof surface.sessions?.open !== 'function' && surface.openSession !== undefined,
+  description: 'uiWorkspace.openSession / workspaces.open → sessions.open 兼容桥（调用期解析）',
+  detect: (_probe, surface) => typeof surface.sessions?.open !== 'function',
   apply(surface) {
     const sessions = surface.sessions
-    const open = surface.openSession
-    if (sessions === undefined || open === undefined)
+    if (sessions === undefined)
       return
+    const bridge: (sessionId: AdapterSessionId) => unknown = (sessionId) => {
+      const open = surfaceOpenSession(surface, bridge)
+      // 能力全缺时明确抛错，不静默吞掉消费方的切换请求。
+      if (open === undefined)
+        throw new Error('sessions.open is unavailable: no uiWorkspace.openSession / workspaces.open / sessions.open capability')
+      return open(sessionId)
+    }
+    openBridges.set(surface, bridge)
     surface.sessions = new Proxy(sessions as object, {
       get(target, prop) {
-        if (prop === 'open')
-          return (sessionId: AdapterSessionId) => open(sessionId)
+        if (prop === 'open') {
+          // 核心可能在被捕获之后才补上原生 `open`（服务延迟物化）：原生永远优先于兼容桥，
+          // 否则桥会永久遮蔽后到的原生能力，消费方拿到的仍是「不可用」。
+          const native = Reflect.get(target, prop)
+          return typeof native === 'function' ? native.bind(target) : bridge
+        }
         const member = Reflect.get(target, prop)
         return typeof member === 'function' ? member.bind(target) : member
       },
@@ -554,7 +614,8 @@ const WORKSPACE_ADD_MIGRATION: DshMigration = {
  * 内置迁移（按序执行，后一条能看到前一条的投影）：
  * 1. 基线自动绑定 → 2. 会话列表投影别名 → 3. 列表 `current` 投影 → 4. `provideInfo` 兼容桥 →
  * 5. legacy 工作区导航投影 → 6. 跨布局导航解析 → 7. 跨布局「打开会话」解析 →
- * 8. `sessions.open` 兼容桥 → 9. 跨布局「打开文件夹」解析。
+ * 8. `sessions.open` 兼容桥（安装只看核心有无 `sessions.open`，落点在调用期解析）→
+ * 9. 跨布局「打开文件夹」解析。
  * 消费方可用 `defineAdapter(ctx, { migrations })` 追加，追加项在最后执行。
  */
 export const DEFAULT_DSH_MIGRATIONS: readonly DshMigration[] = [
@@ -638,7 +699,7 @@ function readSessionList(surface: AdapterSurface): AdapterSessionList | undefine
 
 /** 打开已有会话：官方入口在场即打开；会话导航没有 DOM 退级目标，缺席只能明确回报。 */
 function runOpenSession(surface: AdapterSurface, sessionId: AdapterSessionId, warn: AdapterWarn): AdapterOpenSessionOutcome {
-  const open = surface.openSession
+  const open = surfaceOpenSession(surface, openBridges.get(surface))
   if (open === undefined) {
     const reason = 'no uiWorkspace.openSession / workspaces.open / sessions.open capability'
     warn(`[dsh-adapter] openSession unavailable: ${reason}`)
@@ -696,7 +757,11 @@ export function defineAdapter(ctx: unknown, options: DefineAdapterOptions = {}):
   const surface: AdapterSurface = {
     sessions: service<AdapterSessions>('sessions') ?? {},
     workspaces: service<AdapterWorkspaces>('workspaces') ?? {},
-    uiWorkspace: service<AdapterRuntimeObject>('uiWorkspace'),
+    // 取值为 live：`dsh-client-ui-workspace` 额外等 `ui-session` / `connection`，可能晚于本适配层
+    // 激活；缓存创建期快照会让依赖它的「打开会话」能力永久缺席（见 {@link SESSIONS_OPEN_MIGRATION}）。
+    get uiWorkspace() {
+      return service<AdapterRuntimeObject>('uiWorkspace')
+    },
     // 取值为 live：`ui-session` 晚于本适配层激活，缓存创建期快照会让依赖它的迁移永久缺席。
     get uiSession() {
       return service<AdapterRuntimeObject>('uiSession')
@@ -728,8 +793,11 @@ export function defineAdapter(ctx: unknown, options: DefineAdapterOptions = {}):
     'workspaces.list': () => typeof workspaces.list?.getSnapshot === 'function',
     'workspaces.create': () => typeof workspaces.create === 'function',
     'navigation.startSession': () => surface.startSession !== undefined,
-    'navigation.openSession': () => surface.openSession !== undefined,
+    'navigation.openSession': () => hasOpenCapability(surface),
     'navigation.addWorkspace': () => surface.addWorkspace !== undefined,
+    'composer.workspace-less': () =>
+      typeof document !== 'undefined'
+      && document.documentElement.getAttribute(COMPOSER_CWD_ATTRIBUTE) === '1',
     'dom.newSession': () => typeof document !== 'undefined' && document.querySelector(NEW_SESSION_SELECTOR) !== null,
     'dom.addWorkspace': () => typeof document !== 'undefined' && document.querySelector(ADD_WORKSPACE_SELECTOR) !== null,
   }
@@ -744,7 +812,7 @@ export function defineAdapter(ctx: unknown, options: DefineAdapterOptions = {}):
     service,
     has: capability => capabilityChecks[capability](),
     resolveStartSession: () => surface.startSession,
-    resolveOpenSession: () => surface.openSession,
+    resolveOpenSession: () => surfaceOpenSession(surface, openBridges.get(surface)),
     sessionList: () => readSessionList(surface),
     resolveAddWorkspace: () => surface.addWorkspace,
     startSession: workspaceId => runStartSession(surface, workspaceId, warn),

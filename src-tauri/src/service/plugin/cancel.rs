@@ -24,18 +24,40 @@ pub(crate) async fn terminate_active_install() -> bool {
         log::debug!("plugin install cancel: no active install process");
         return false;
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut all_terminated = true;
-        for (_, pid) in active {
-            all_terminated &= terminate_pid_tree(pid);
-        }
-        all_terminated
-    })
-    .await
-    .unwrap_or_else(|e| {
-        log::warn!("plugin install cancel task failed: {e}");
-        false
-    })
+    tauri::async_runtime::spawn_blocking(move || terminate_pid_trees(active))
+        .await
+        .unwrap_or_else(|e| {
+            log::warn!("plugin install cancel task failed: {e}");
+            false
+        })
+}
+
+/// 退出前同步回收所有进行中的插件安装进程树（`RunEvent::Exit` 调用）。
+///
+/// 安装子进程以独立进程组启动（`process_group(0)`），父进程退出**不会**连带结束
+/// 它们；而取消只由前端命令（`cancel_preinstall_plugins` / `cancel_internal_plugins`）
+/// 触发。用户在安装看起来毫无进展时关窗，留下的孤儿会继续占着档案与 pnpm store，
+/// 下一次启动的安装便排在它后面——表现为永久卡在「Loading internal plugins…」且
+/// 后端日志一行输出都没有。回收必须在退出路径上显式做。
+pub(crate) fn terminate_active_installs_blocking() -> bool {
+    let active = super::process::active_plugin_processes();
+    if active.is_empty() {
+        return false;
+    }
+    log::warn!(
+        "plugin install cancel: reaping {} in-flight install process(es) before exit",
+        active.len()
+    );
+    terminate_pid_trees(active)
+}
+
+/// 逐个结束进程树；单个失败不影响其余，返回是否全部成功。
+fn terminate_pid_trees(active: Vec<(super::process::ProcessOwner, u32)>) -> bool {
+    let mut all_terminated = true;
+    for (_, pid) in active {
+        all_terminated &= terminate_pid_tree(pid);
+    }
+    all_terminated
 }
 
 pub(crate) async fn terminate_owned_install(owner: super::process::ProcessOwner) -> bool {

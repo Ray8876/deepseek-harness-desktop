@@ -26,17 +26,17 @@ describe('seedNumber', () => {
   })
 
   it('non-numeric strings sum char code points (stable per string)', () => {
-    expect(seedNumber('abc')).toBe(97 + 98 + 99)
-    expect(seedNumber('abc')).toBe(seedNumber('abc'))
+    expect(seedNumber('abc')).toBe(294)
+    expect(seedNumber('abd')).toBe(295)
     expect(seedNumber(undefined)).toBe(0)
     expect(seedNumber('')).toBe(0)
   })
 })
 
 describe('statusCopy', () => {
-  it('returns a stable sentence for the same seed within a group', () => {
-    const first = statusCopy('thinking', 'session-1')
-    expect(statusCopy('thinking', 'session-1')).toBe(first)
+  it('returns the literal sentence selected by the seed within a group', () => {
+    expect(statusCopy('thinking', 'session-1')).toBe('整理结果中')
+    expect(statusCopy('thinking', 0)).toBe('正在分析')
   })
 
   it('picks from known groups only', () => {
@@ -136,9 +136,8 @@ describe('sessionTitle', () => {
 
   it('keeps the attention prefixes on top of the untitled fallback', () => {
     for (const phase of ['approval', 'user-question', 'blocked']) {
-      const title = sessionTitle({ phase, title: '会话' })
-      expect(title).toContain('会话')
-      expect(title).toBe(sessionTitle({ phase, title: '会话' }))
+      const expected = phase === 'approval' ? '需授权 · 会话' : '需选择 · 会话'
+      expect(sessionTitle({ phase, title: '会话' })).toBe(expected)
     }
     expect(sessionTitle({ phase: 'approval' })).toContain(UNTITLED_SESSION_TITLE)
     expect(sessionTitle({ origin: 'subagent' })).toContain(UNTITLED_SESSION_TITLE)

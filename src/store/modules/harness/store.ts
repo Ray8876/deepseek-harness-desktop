@@ -84,13 +84,6 @@ export const harness = defineStore({
     status: 'ready' as SetupStatus,
     installer: initialInstaller,
     errorMsg: '',
-    /**
-     * 依赖自动下载被环境禁用（E2E 的 `DSH_E2E_DISABLE_DOWNLOAD=1`）。
-     *
-     * 此时装配必然失败在「找不到 dsh CLI」，但那不是真实故障——Setup 页据此把
-     * 错误态渲染成「下载已被环境禁用」，而不是让 E2E 看起来像启动崩溃。
-     */
-    downloadDisabled: false,
     /** 启动失败时从 dsh 服务日志中读取的真实错误行（Loadable 错误态日志面板） */
     errorLogs: [] as string[],
     /** 识别到插件路由冲突时的针对性提示（Loadable children 展示） */
@@ -511,9 +504,8 @@ export const harness = defineStore({
         catch (err) {
           console.error('[Harness] failed to listen install-progress:', err)
         }
-        const runtimeInfo = await invoke<{ service_url: string, auto_download_disabled?: boolean }>('get_runtime_info')
+        const runtimeInfo = await invoke<{ service_url: string }>('get_runtime_info')
         this.serviceUrl = runtimeInfo.service_url
-        this.downloadDisabled = runtimeInfo.auto_download_disabled === true
         this.iframeSrc = generateTimestampedUrl(runtimeInfo.service_url)
 
         // 已安装过则跳过安装界面，避免每次启动都闪现"正在安装依赖..."

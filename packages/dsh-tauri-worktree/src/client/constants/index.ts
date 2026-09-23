@@ -31,10 +31,7 @@ export const DISCARD_MAX_POLLS = 120
 
 export const HANDOFF_WINDOW_MS = 60_000
 
-export const MODE_SELECT_STYLE_ID = '@deepseek-ai/dsh-tauri-worktree/ModeSelect.module.css'
-export const WORKTREE_STYLE_ID = '@deepseek-ai/dsh-tauri-worktree/SurfaceDialog.module.css'
-export const SURFACE_STYLE_ID = '@deepseek-ai/dsh-tauri-worktree/Surface.module.css'
-export const DIALOG_STYLE_ID = '@deepseek-ai/dsh-tauri-worktree/Dialog.module.css'
+export const WORKTREE_STYLE_ID = '@deepseek-ai/dsh-tauri-worktree/Worktree.module.css'
 export const SESSION_ICON_STYLE_ID = '@deepseek-ai/dsh-tauri-worktree/SessionBranchIcon.module.css'
 
 export const SESSION_ICON_ATTRIBUTE = 'data-dsh-worktree-icon'

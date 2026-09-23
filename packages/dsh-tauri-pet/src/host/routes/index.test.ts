@@ -98,6 +98,14 @@ const openServers: Array<() => Promise<void>> = []
 /** 每个用例注册的插件卸载回调（见 createHost 尾部）。 */
 const unloaders: Array<() => void> = []
 
+/** 用例内安装的全局定时器 spy：配置无 restoreMocks，异常/超时路径也必须自己还原。 */
+const intervalSpyRestores: Array<() => void> = []
+
+function restoreIntervalSpies(): void {
+  for (const restore of intervalSpyRestores.splice(0))
+    restore()
+}
+
 /**
  * 最小宿主上下文替身：记录标题折叠次数、路由、会话监听挂载情况，
  * 并把 defineRoutes 注册出来的 node 处理器交给真实 http server。
@@ -243,6 +251,7 @@ function chunk(seq: number) {
 }
 
 afterEach(async () => {
+  restoreIntervalSpies()
   for (const connection of openConnections.splice(0))
     await connection.disconnect()
   for (const stop of openServers.splice(0))
@@ -402,33 +411,38 @@ describe('pet host apply()', () => {
     apply(host.ctx)
 
     const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
+    intervalSpyRestores.push(() => setIntervalSpy.mockRestore())
     const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
-    const connection = await host.connect()
+    intervalSpyRestores.push(() => clearIntervalSpy.mockRestore())
 
-    // 接入帧：Node 的 writeHead 不会单独刷响应头，握手必须有一帧（注释帧，客户端可忽略）。
-    const handshake = await connection.waitFor(
-      () => connection.frames.find(frame => frame.startsWith(': ')),
-      '接入心跳注释帧',
-    )
-    expect(handshake).toBe(': keepalive')
+    try {
+      const connection = await host.connect()
 
-    // 心跳计时器按 15s 注册；手动触发一次等价于 15s 后触发，避免真实等待。
-    const heartbeatIndex = setIntervalSpy.mock.calls.findIndex(([, ms]) => ms === SSE_KEEPALIVE_MS)
-    expect(heartbeatIndex).toBeGreaterThanOrEqual(0)
-    const handle = setIntervalSpy.mock.results[heartbeatIndex]?.value
-    setIntervalSpy.mock.calls[heartbeatIndex]?.[0]()
-    const tick = await connection.waitFor(
-      () => connection.frames.filter(frame => frame === ': keepalive')[1],
-      '周期心跳注释帧',
-    )
-    expect(tick).toBe(': keepalive')
+      // 接入帧：Node 的 writeHead 不会单独刷响应头，握手必须有一帧（注释帧，客户端可忽略）。
+      const handshake = await connection.waitFor(
+        () => connection.frames.find(frame => frame.startsWith(': ')),
+        '接入心跳注释帧',
+      )
+      expect(handshake).toBe(': keepalive')
 
-    await connection.disconnect()
-    await waitUntil(() => host.listenerCount('session/event') === 0, '断开后注销监听')
-    expect(clearIntervalSpy.mock.calls.some(([value]) => value === handle)).toBe(true)
+      // 心跳计时器按 15s 注册；手动触发一次等价于 15s 后触发，避免真实等待。
+      const heartbeatIndex = setIntervalSpy.mock.calls.findIndex(([, ms]) => ms === SSE_KEEPALIVE_MS)
+      expect(heartbeatIndex).toBeGreaterThanOrEqual(0)
+      const handle = setIntervalSpy.mock.results[heartbeatIndex]?.value
+      setIntervalSpy.mock.calls[heartbeatIndex]?.[0]()
+      const tick = await connection.waitFor(
+        () => connection.frames.filter(frame => frame === ': keepalive')[1],
+        '周期心跳注释帧',
+      )
+      expect(tick).toBe(': keepalive')
 
-    setIntervalSpy.mockRestore()
-    clearIntervalSpy.mockRestore()
+      await connection.disconnect()
+      await waitUntil(() => host.listenerCount('session/event') === 0, '断开后注销监听')
+      expect(clearIntervalSpy.mock.calls.some(([value]) => value === handle)).toBe(true)
+    }
+    finally {
+      restoreIntervalSpies()
+    }
   })
 
   it('有 title 投影时只走 O(新事件) 的 stateOf，不做全量折叠', async () => {

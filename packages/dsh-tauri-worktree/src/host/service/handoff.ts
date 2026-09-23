@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { defineService } from 'dsh-tauri'
 import { get } from 'lodash-es'
 import { getCurrentHostInstance } from '../config/runtime'
+import { worktreeHandoffText } from '../utils/worktree-facts'
 import { checkoutContext } from './checkout-context'
 import { sessionContext } from './session-context'
 import { worktree } from './worktree'
@@ -102,7 +103,7 @@ export const handoff = defineService({
         role: 'user',
         content: [{
           type: 'text',
-          text: 'The task has moved to an isolated worktree session. Continue the user request from the inherited context without explaining the handoff again.',
+          text: worktreeHandoffText(binding),
         }],
         source: { kind: 'user' },
       })
