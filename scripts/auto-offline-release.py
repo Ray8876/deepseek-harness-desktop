@@ -19,8 +19,7 @@ def api(path):
     return json.loads(run('gh', 'api', path))
 
 
-def get_release(repo, tag):
-    releases = json.loads(run('gh', 'api', f'repos/{repo}/releases?per_page=100'))
+def select_release(releases, tag):
     matches = [release for release in releases if release['tag_name'] == tag]
     public = [release for release in matches if not release['draft']]
     if len(public) > 1:
@@ -30,6 +29,12 @@ def get_release(repo, tag):
     if len({release['target_commitish'] for release in matches}) > 1:
         raise RuntimeError(f'Draft GitHub Releases target different commits for tag {tag}')
     return min(matches, key=lambda release: release['created_at']) if matches else None
+
+
+def get_release(repo, tag):
+    releases = json.loads(run('gh', 'api', f'repos/{repo}/releases?per_page=100'))
+    return select_release(releases, tag)
+
 
 
 def select_harness(releases, version):

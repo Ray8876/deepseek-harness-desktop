@@ -26,6 +26,18 @@ class AutomationTests(unittest.TestCase):
         self.assertEqual(sync.select_harness(releases, '0.1.5-rc.3')['tag_name'], 'dsh-0.1.5-rc.3-10')
         self.assertIsNone(sync.select_harness(releases, '0.1.8'))
 
+    def test_duplicate_drafts_reuse_the_same_target_and_public_release_wins(self):
+        releases = [
+            dict(tag_name='v0.17.0-offline-sidecar', draft=True, target_commitish='a' * 40, created_at='2026-09-24T01:00:00Z'),
+            dict(tag_name='v0.17.0-offline-sidecar', draft=True, target_commitish='a' * 40, created_at='2026-09-24T01:01:00Z'),
+        ]
+        self.assertEqual(sync.select_release(releases, 'v0.17.0-offline-sidecar'), releases[0])
+        releases.append(dict(tag_name='v0.17.0-offline-sidecar', draft=False, target_commitish='a' * 40))
+        self.assertEqual(sync.select_release(releases, 'v0.17.0-offline-sidecar'), releases[2])
+        releases[1]['target_commitish'] = 'b' * 40
+        with self.assertRaisesRegex(RuntimeError, 'different commits'):
+            sync.select_release(releases[:2], 'v0.17.0-offline-sidecar')
+
     def test_runtime_pins_match(self):
         sync.check_runtime_pins()
 

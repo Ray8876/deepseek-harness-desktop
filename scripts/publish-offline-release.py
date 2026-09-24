@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 
 
 def gh(*args):
@@ -123,10 +124,15 @@ def main():
             'gh', 'release', 'create', tag, '--target', sha, '--draft',
             '--title', title, '--notes-file', str(notes),
         ], check=True, text=True, capture_output=True)
-        release = [r for r in release_list(repo) if r['tag_name'] == tag and r['draft']]
-        if len(release) != 1 or release[0]['target_commitish'] != sha:
+        matches = []
+        for attempt in range(15):
+            matches = [r for r in release_list(repo) if r['tag_name'] == tag and r['draft']]
+            if matches:
+                break
+            time.sleep(2)
+        if len(matches) != 1 or matches[0]['target_commitish'] != sha:
             raise RuntimeError(f'Could not resolve the new draft release: {result.stdout.strip()}')
-        release = release[0]
+        release = matches[0]
     expected_names = {path.name for path in directory.iterdir()}
     remote = {asset['name']: asset for asset in release['assets']}
     for name, asset in list(remote.items()):
