@@ -101,8 +101,16 @@ def main():
             raise RuntimeError('Draft release is missing its source run or target commit')
         source_run_id = match.group(1)
         source_run = api(f'repos/{repo}/actions/runs/{source_run_id}')
-        if source_run.get('conclusion') != 'success':
+        if source_run['path'] == '.github/workflows/auto-offline-release.yml':
+            jobs = api(f'repos/{repo}/actions/runs/{source_run_id}/jobs')['jobs']
+            build_succeeded = any(job['name'].startswith('build / ') and job['conclusion'] == 'success' for job in jobs)
+        else:
+            build_succeeded = source_run.get('conclusion') == 'success'
+        if not build_succeeded:
             raise RuntimeError('Draft release source build did not succeed')
+        artifacts = api(f'repos/{repo}/actions/runs/{source_run_id}/artifacts')['artifacts']
+        if not any(a['name'] == 'deepseek-harness-desktop-windows-x64-offline' and not a['expired'] for a in artifacts):
+            raise RuntimeError('Draft release source artifact is missing or expired')
         output(should_build='false', resume_publish='true', source_ref=existing_release['target_commitish'],
                artifact_run_id=source_run_id, tag=release_tag)
         print(f'Resuming verified artifact publication for {release_tag} from run {source_run_id}')
