@@ -21,6 +21,7 @@ jobs:
     outputs:
       should_build: ${{ steps.prepare.outputs.should_build }}
       resume_publish: ${{ steps.prepare.outputs.resume_publish }}
+      already_published: ${{ steps.prepare.outputs.already_published }}
       artifact_run_id: ${{ steps.prepare.outputs.artifact_run_id }}
       source_ref: ${{ steps.prepare.outputs.source_ref }}
       tag: ${{ steps.prepare.outputs.tag }}
@@ -60,3 +61,28 @@ jobs:
       artifact_run_id: ${{ needs.prepare.outputs.artifact_run_id || github.run_id }}
       tag: ${{ needs.prepare.outputs.tag }}
       target_sha: ${{ needs.prepare.outputs.source_ref }}
+
+  cleanup:
+    needs: [prepare, build, publish]
+    if: >-
+      always() && needs.prepare.result == 'success' &&
+      (needs.prepare.outputs.should_build == 'true' ||
+       needs.prepare.outputs.resume_publish == 'true' ||
+       needs.prepare.outputs.already_published == 'true')
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Cleanup completed temporary source branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          TARGET_SHA: ${{ needs.prepare.outputs.source_ref }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+        run: python3 scripts/cleanup-auto-offline-branch.py

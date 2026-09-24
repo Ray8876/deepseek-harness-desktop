@@ -15,9 +15,30 @@ def load(name):
 
 sync = load('auto-offline-release')
 publish = load('publish-offline-release')
+cleanup = load('cleanup-auto-offline-branch')
 
 
 class AutomationTests(unittest.TestCase):
+    def test_cleanup_deletes_branch_after_publication_points_to_source(self):
+        releases = [dict(tag_name='v0.17.0-offline-sidecar', draft=False, target_commitish='a' * 40)]
+        self.assertEqual(cleanup.cleanup_action(releases, 'v0.17.0-offline-sidecar', 'a' * 40, 'success'), 'delete')
+
+    def test_cleanup_preserves_matching_draft_for_publication_resume(self):
+        releases = [dict(tag_name='v0.17.0-offline-sidecar', draft=True, target_commitish='a' * 40)]
+        self.assertEqual(cleanup.cleanup_action(releases, 'v0.17.0-offline-sidecar', 'a' * 40, 'failure'), 'preserve')
+
+    def test_cleanup_deletes_failed_build_branch_without_release(self):
+        self.assertEqual(cleanup.cleanup_action([], 'v0.17.0-offline-sidecar', 'a' * 40, 'skipped'), 'delete')
+
+    def test_cleanup_rejects_success_without_public_release(self):
+        with self.assertRaisesRegex(RuntimeError, 'no matching public release'):
+            cleanup.cleanup_action([], 'v0.17.0-offline-sidecar', 'a' * 40, 'success')
+
+    def test_cleanup_rejects_public_release_for_a_different_source_commit(self):
+        releases = [dict(tag_name='v0.17.0-offline-sidecar', draft=False, target_commitish='b' * 40)]
+        with self.assertRaisesRegex(RuntimeError, 'different source commit'):
+            cleanup.cleanup_action(releases, 'v0.17.0-offline-sidecar', 'a' * 40, 'success')
+
     def test_exact_recommended_core_and_newest_build(self):
         releases = [dict(tag_name=tag, draft=draft) for tag, draft in [
             ('dsh-0.1.5-rc.3-9', False), ('dsh-0.1.5-rc.3-10', False),

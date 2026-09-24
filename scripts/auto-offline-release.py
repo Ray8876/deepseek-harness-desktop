@@ -102,7 +102,11 @@ def main():
     release_tag = f'{tag}-offline-sidecar'
     existing_release = get_release(repo, release_tag)
     if existing_release and not existing_release['draft']:
-        output(should_build='false')
+        target = existing_release['target_commitish']
+        if re.fullmatch(r'[0-9a-f]{40}', target):
+            output(should_build='false', already_published='true', source_ref=target, tag=release_tag)
+        else:
+            output(should_build='false')
         print(f'{release_tag} already published')
         return
     if existing_release:
@@ -132,7 +136,8 @@ def main():
     patch = run('git', 'diff', '--binary', baseline, upstream_sha, '--', '.', ':(exclude).github', ':(exclude)README.md',
                 ':(exclude)scripts/auto-offline-release.py', ':(exclude)scripts/offline-upstream.json',
                 ':(exclude)scripts/offline-harness-lock.json', ':(exclude)scripts/offline-windows.mjs',
-                ':(exclude)scripts/test-auto-offline-release.py', ':(exclude)scripts/publish-offline-release.py', ':(exclude)docs/OFFLINE_WINDOWS.md', preserve=True)
+                ':(exclude)scripts/test-auto-offline-release.py', ':(exclude)scripts/publish-offline-release.py',
+                ':(exclude)scripts/cleanup-auto-offline-branch.py', ':(exclude)docs/OFFLINE_WINDOWS.md', preserve=True)
     if patch:
         run('git', 'apply', '--3way', '--index', input=patch)
     version = json.loads((ROOT / 'package.json').read_text())['version']
