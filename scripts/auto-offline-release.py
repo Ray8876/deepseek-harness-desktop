@@ -19,12 +19,12 @@ def api(path):
     return json.loads(run('gh', 'api', path))
 
 
-def release_exists(repo, tag):
+def get_release(repo, tag):
     result = subprocess.run(['gh', 'api', f'repos/{repo}/releases/tags/{tag}'], text=True, capture_output=True)
     if result.returncode == 0:
-        return not json.loads(result.stdout)['draft']
+        return json.loads(result.stdout)
     if 'HTTP 404' in result.stderr:
-        return False
+        return None
     raise RuntimeError(result.stderr)
 
 
@@ -91,9 +91,22 @@ def main():
     if release['draft'] or release['prerelease'] or not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag):
         raise RuntimeError(f'Unexpected stable release tag: {tag}')
     release_tag = f'{tag}-offline-sidecar'
-    if release_exists(repo, release_tag):
+    existing_release = get_release(repo, release_tag)
+    if existing_release and not existing_release['draft']:
         output(should_build='false')
         print(f'{release_tag} already published')
+        return
+    if existing_release:
+        match = re.search(r'/actions/runs/(\d+)', existing_release.get('body') or '')
+        if not match or not re.fullmatch(r'[0-9a-f]{40}', existing_release['target_commitish']):
+            raise RuntimeError('Draft release is missing its source run or target commit')
+        source_run_id = match.group(1)
+        source_run = api(f'repos/{repo}/actions/runs/{source_run_id}')
+        if source_run.get('conclusion') != 'success':
+            raise RuntimeError('Draft release source build did not succeed')
+        output(should_build='false', resume_publish='true', source_ref=existing_release['target_commitish'],
+               artifact_run_id=source_run_id, tag=release_tag)
+        print(f'Resuming verified artifact publication for {release_tag} from run {source_run_id}')
         return
     baseline = settings['baseline']
     run('git', 'fetch', '--no-tags', f'https://github.com/{settings["repository"]}.git', f'refs/tags/{tag}')

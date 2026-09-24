@@ -20,6 +20,8 @@ jobs:
       contents: write
     outputs:
       should_build: ${{ steps.prepare.outputs.should_build }}
+      resume_publish: ${{ steps.prepare.outputs.resume_publish }}
+      artifact_run_id: ${{ steps.prepare.outputs.artifact_run_id }}
       source_ref: ${{ steps.prepare.outputs.source_ref }}
       tag: ${{ steps.prepare.outputs.tag }}
     steps:
@@ -46,11 +48,15 @@ jobs:
 
   publish:
     needs: [prepare, build]
+    if: >-
+      always() && needs.prepare.result == 'success' &&
+      ((needs.prepare.outputs.should_build == 'true' && needs.build.result == 'success') ||
+       needs.prepare.outputs.resume_publish == 'true')
     permissions:
       actions: read
       contents: write
     uses: ./.github/workflows/publish-offline-release.yml
     with:
-      artifact_run_id: ${{ github.run_id }}
+      artifact_run_id: ${{ needs.prepare.outputs.artifact_run_id || github.run_id }}
       tag: ${{ needs.prepare.outputs.tag }}
       target_sha: ${{ needs.prepare.outputs.source_ref }}

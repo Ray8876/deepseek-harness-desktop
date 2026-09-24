@@ -60,11 +60,14 @@ def main():
     directory = Path('release-assets')
     manifest, installer = verify(directory, tag, sha)
     result = subprocess.run(['gh', 'api', f'repos/{repo}/releases/tags/{tag}'], text=True, capture_output=True)
+    release = None
     if result.returncode == 0:
         release = json.loads(result.stdout)
         if not release['draft']:
             print(f'{tag} is already public; leaving it unchanged')
             return
+        if release['target_commitish'] != sha:
+            raise ValueError('Existing draft targets a different source commit')
     elif 'HTTP 404' not in result.stderr:
         raise RuntimeError(result.stderr)
     title = f'DeepSeek Harness Desktop {manifest["desktopVersion"]} Windows 离线版'
@@ -79,12 +82,15 @@ def main():
 - [构建记录](https://github.com/{repo}/actions/runs/{run_id})
 - 已校验四个发布文件及 SHA-256；自动构建不代表已完成人工 Windows 断网安装验收。
 ''')
-    if result.returncode != 0:
+    if release is None:
         gh('release', 'create', tag, '--target', sha, '--draft', '--title', title, '--notes-file', str(notes))
+        release = json.loads(gh('api', f'repos/{repo}/releases/tags/{tag}'))
+        if release['target_commitish'] != sha:
+            raise ValueError('New draft targets a different source commit')
+    gh('release', 'upload', tag, *[str(p) for p in sorted(directory.iterdir())], '--clobber')
     resolved = json.loads(gh('api', f'repos/{repo}/commits/{tag}'))['sha']
     if resolved != sha:
-        raise ValueError('Existing release tag points to a different commit')
-    gh('release', 'upload', tag, *[str(p) for p in sorted(directory.iterdir())], '--clobber')
+        raise ValueError('Release tag points to a different commit')
     uploaded = json.loads(gh('api', f'repos/{repo}/releases/tags/{tag}'))
     remote = {a['name']: a for a in uploaded['assets']}
     if set(remote) != {p.name for p in directory.iterdir()}:
