@@ -144,6 +144,11 @@ pub fn setup(app_handle: tauri::AppHandle) {
     // 启动进程监控（tick 检测 dsh 服务状态）
     crate::service::scheduler::start(&app_handle);
 
+    // `dsh://` 深链（成功页「打开应用」按钮）：仅打包态注册协议并接管 open-url
+    // （debug 注册会把系统 `dsh:` 指向调试产物）。
+    #[cfg(not(debug_assertions))]
+    crate::desktop::deep_link::init(&app_handle);
+
     // 开机自启动：已安装且开启 auto_start 时拉起服务
     let app_for_start = app_handle.clone();
     tauri::async_runtime::spawn(async move {
@@ -1149,6 +1154,8 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
     // 仅在生产环境（release）启用：debug 开发调试时若启用单例，
     // 二次启动的调试进程会被吞掉（例如 tauri dev 多实例调试），
     // 因此开发环境跳过该插件。
+    // `deep-link` feature 只在单例在场时起作用：把二次启动携带的 `dsh://` URL
+    // （成功页「打开应用」按钮）转发给主实例派发 open-url。
     #[cfg(not(debug_assertions))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
         crate::utils::show_main_window(app);
@@ -1161,7 +1168,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
     #[cfg(windows)]
     let builder = builder.plugin(crate::desktop::tauri_internals::shim());
 
-    builder
+    let builder = builder
         // 官方跨平台登录启动实现：Windows HKCU Run、macOS LaunchAgent、Linux XDG。
         .plugin(
             tauri_plugin_autostart::Builder::new()
@@ -1182,5 +1189,12 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
         .plugin(tauri_plugin_store::Builder::new().build())
         // OS plugin：前端据此判断系统版本（macOS 10.15 没有 `WKWebView.pageZoom`，
         // 不能把缩放应用到 WebView），见 `hooks/use-zoom-factor.ts`。
-        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_os::init());
+
+    // `dsh://` 深链（成功页「打开应用」按钮）只在打包态启用：debug 注册会把系统
+    // `dsh:` 指向调试产物，与官方 Electron 的 `app.isPackaged` 门禁一致。
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_deep_link::init());
+
+    builder
 }

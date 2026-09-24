@@ -55,8 +55,14 @@ export interface HostPluginLoader {
  * `sessions` 单独钉住：上游把 `Context` 同时按宿主/客户端两侧增广，本仓库的单个 TS
  * 程序里两侧都在场，因此不依赖增广合并顺序，显式取宿主权威面 `SessionStore`。
  */
+/** 宿主 webserver 的结构化 index 注入行（与 `dsh-host-webserver` 的 renderRow 契约一致）。 */
+export type IndexInjectRow
+  = | { kind: 'global', name: string, value: unknown }
+    | { kind: 'script', placement: 'head' | 'body', text: string }
+
 export type HostContext = Omit<Context, 'sessions'> & {
   sessions: SessionStore
   webServer: WebServerService
   loader: HostPluginLoader
+  on: Context['on'] & ((event: 'webserver/index-inject', listener: (table: IndexInjectRow[]) => void) => () => void)
 }

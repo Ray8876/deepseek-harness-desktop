@@ -154,7 +154,7 @@ node node_modules/vitest/vitest.mjs run --project plugin test/e2e/plugins/dsh-ta
 | --- | --- | --- |
 | **插件包** (`packages/*`) | `data-dsh-*`<br>
 
-<br>*(例: `[data-dsh-tauri-pet-icon]`)* | 插件渲染的挂载点。某些属性属于**行为钩子**（如 DOM 变更过滤），**严禁为测试擅改**。 |
+<br>*(例: `[data-dsh-tauri-pet-menu-item]`)* | 插件渲染的挂载点。某些属性属于**行为钩子**（如 DOM 变更过滤），**严禁为测试擅改**。 |
 | **壳层** (`src/**`) | `data-testid="dsh-<域>-<名称>"` | 全小写连字符，集中登记于 `test/e2e/support/selectors.ts`。 |
 | **dsh 上游结构** | `data-slot` / `role` / 前缀类 (`dsh`/`dshp`) | 上游 DOM 结构，属于 C 浏览器层断言范畴。用例中需注释来源。 |
 | **帧内阻塞弹层** | 结构与类名后缀组合 | 详见 §5，严禁依赖文本内容。 |

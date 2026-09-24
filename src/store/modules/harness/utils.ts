@@ -34,11 +34,15 @@ import { pollReadiness } from './readiness'
  * 构建带时间戳的 iframe URL，避免 WebView2 缓存旧页面。
  * alpha 鉴权由启动前的桌面端 patch 处理，iframe 永远不携带启动 token；旧核心
  * 同样继续使用原有的缓存查询参数。
+ *
+ * `dshDesktop` 是桌面载体的唯一凭据：宿主只给带该参数的 index 注入官方 Electron
+ * 载体标记（`globalThis.dshDesktop`），因此用户用浏览器直开同一端口时不会被误判成
+ * 桌面端而冒出账号登录入口。
  */
 export function generateTimestampedUrl(baseUrl: string): string {
   const timestamp = Date.now()
   const separator = baseUrl.includes('?') ? '&' : '?'
-  return `${baseUrl}${separator}t=${timestamp}`
+  return `${baseUrl}${separator}t=${timestamp}&dshDesktop=1`
 }
 
 /**

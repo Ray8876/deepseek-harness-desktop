@@ -7,6 +7,7 @@ export const settings = defineStore({
     activeId: undefined,
     query: '',
     railWidth: undefined,
+    launcherAvailable: false,
   }),
   actions: {
     openAt(sectionId?: string) {
@@ -28,6 +29,9 @@ export const settings = defineStore({
     },
     setRailWidth(px: number) {
       this.railWidth = px
+    },
+    setLauncherAvailable(available: boolean) {
+      this.launcherAvailable = available
     },
   },
 })

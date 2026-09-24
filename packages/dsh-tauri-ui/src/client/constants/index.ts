@@ -11,6 +11,13 @@ export const SETTINGS_SECTION_SLOT = 'settings.section'
 export const SETTINGS_TRIGGER_SLOT = 'settings.trigger'
 export const SETTINGS_ONBOARDING_SLOT = 'settings.onboarding'
 
+/**
+ * 官方设定面板底部的启动器座位：官方 `ui-settings-general` 的 `SettingsRoot` 在此渲染账号菜单
+ * （DeepSeek 官方登录入口），本插件以 `SETTINGS_TRIGGER_PRIORITY` 顶掉该条目后必须自行留位，
+ * 否则官方账号 UI 注册了也没有宿主。
+ */
+export const SETTINGS_LAUNCHER_SLOT = 'settings.launcher'
+
 export const SETTINGS_SIDEBAR_ID = 'dsh-tauri-ui-settings'
 export const SETTINGS_SIDEBAR_CLASS = 'dshp-settings-sidebar'
 

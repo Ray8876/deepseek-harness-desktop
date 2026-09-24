@@ -35,6 +35,9 @@ interface InvokeBridgeRequest {
 const ALLOWED_INVOKE_CMDS = new Set([
   // 只读布尔量，供 dsh-tauri-ui 决定是否挂载仅 dev 可见的调试面板。
   'is_dev_build',
+  // dsh-tauri 客户端接管官方登录：账号流进入 waiting-browser 时把授权地址交给系统浏览器
+  // （命令自身只放行 http(s)，见 bridge/system_os.rs）。
+  'open_external_url',
   'get_pet_status',
   'set_pet_enabled',
   'set_active_pet',

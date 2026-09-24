@@ -98,11 +98,11 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Switch: (props: { checked: boolean, disabled?: boolean, label: string, title?: string }) => (
     <button type="button" role="switch" aria-checked={props.checked} disabled={props.disabled} aria-label={props.label} title={props.title} />
   ),
-  Menu: (props: { anchor?: ReactNode, items?: readonly { id: string, icon?: ReactNode }[] }) => (
-    <>
+  Menu: (props: { anchor?: ReactNode, items?: readonly { id: string, icon?: ReactNode }[], className?: string }) => (
+    <span className={props.className}>
       {props.anchor}
       {(props.items ?? []).map(entry => <span key={entry.id}>{entry.icon}</span>)}
-    </>
+    </span>
   ),
   Modal: (props: { children?: ReactNode, footer?: ReactNode }) => (
     <div>
