@@ -55,7 +55,12 @@ def main():
     source_run = json.loads(gh('api', f'repos/{repo}/actions/runs/{run_id}'))
     if source_run['path'] not in ['.github/workflows/auto-offline-release.yml', '.github/workflows/build-windows-offline.yml']:
         raise ValueError('Artifact was not produced by an offline build workflow')
-    if run_id != os.environ['GITHUB_RUN_ID'] and source_run['conclusion'] != 'success':
+    if source_run['path'] == '.github/workflows/auto-offline-release.yml':
+        jobs = json.loads(gh('api', f'repos/{repo}/actions/runs/{run_id}/jobs'))['jobs']
+        build_succeeded = any(job['name'].startswith('build / ') and job['conclusion'] == 'success' for job in jobs)
+    else:
+        build_succeeded = source_run.get('conclusion') == 'success'
+    if not build_succeeded:
         raise ValueError('Source build run did not succeed')
     directory = Path('release-assets')
     manifest, installer = verify(directory, tag, sha)
