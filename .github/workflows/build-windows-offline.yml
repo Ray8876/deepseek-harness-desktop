@@ -81,7 +81,7 @@ jobs:
             throw "WebView2 sidecar is too small to be the standalone installer: $($sidecar.Length) bytes"
           }
           Write-Host "WebView2 standalone sidecar: $($sidecar.FullName) ($($sidecar.Length) bytes)"
-          $resourceCopy = rg --files src-tauri/resources | Where-Object { (Split-Path $_ -Leaf) -eq 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe' } | Select-Object -First 1
+          $resourceCopy = [System.IO.Directory]::EnumerateFiles((Resolve-Path 'src-tauri/resources').Path, 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe', [System.IO.SearchOption]::AllDirectories) | Select-Object -First 1
           if ($null -ne $resourceCopy) {
             throw 'WebView2 standalone installer must not be included in Tauri resources.'
           }
