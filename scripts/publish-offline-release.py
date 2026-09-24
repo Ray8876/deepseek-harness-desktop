@@ -47,6 +47,39 @@ def verify(directory, tag, sha):
     return manifest, installer
 
 
+def release_list(repo):
+    return json.loads(gh('api', f'repos/{repo}/releases?per_page=100'))
+
+
+def release_tag_sha(repo, tag):
+    result = subprocess.run(['gh', 'api', f'repos/{repo}/git/ref/tags/{tag}'], text=True, capture_output=True)
+    if result.returncode != 0:
+        if 'HTTP 404' in result.stderr:
+            return None
+        raise RuntimeError(result.stderr)
+    ref = json.loads(result.stdout)['object']
+    while ref['type'] == 'tag':
+        ref_sha = ref['sha']
+        ref = json.loads(gh('api', f'repos/{repo}/git/tags/{ref_sha}'))['object']
+    return ref['sha']
+
+
+def upload_asset(repo, release_id, path):
+    import urllib.parse
+
+    token = os.environ['GH_TOKEN']
+    url = f'https://uploads.github.com/repos/{repo}/releases/{release_id}/assets?name={urllib.parse.quote(path.name)}'
+    result = subprocess.run([
+        'curl', '--fail-with-body', '--silent', '--show-error', '--request', 'POST',
+        '--header', 'Accept: application/vnd.github+json',
+        '--header', f'Authorization: Bearer {token}',
+        '--header', 'X-GitHub-Api-Version: 2022-11-28',
+        '--header', 'Content-Type: application/octet-stream',
+        '--data-binary', f'@{path.resolve()}', url,
+    ], check=True, text=True, capture_output=True)
+    return json.loads(result.stdout)
+
+
 def main():
     repo = os.environ['GH_REPO']
     tag = os.environ['RELEASE_TAG']
@@ -64,18 +97,7 @@ def main():
         raise ValueError('Source build run did not succeed')
     directory = Path('release-assets')
     manifest, installer = verify(directory, tag, sha)
-    result = subprocess.run(['gh', 'api', f'repos/{repo}/releases/tags/{tag}'], text=True, capture_output=True)
-    release = None
-    if result.returncode == 0:
-        release = json.loads(result.stdout)
-        if not release['draft']:
-            print(f'{tag} is already public; leaving it unchanged')
-            return
-        if release['target_commitish'] != sha:
-            raise ValueError('Existing draft targets a different source commit')
-    elif 'HTTP 404' not in result.stderr:
-        raise RuntimeError(result.stderr)
-    title = f'DeepSeek Harness Desktop {manifest["desktopVersion"]} Windows 离线版'
+    title = f'DeepSeek Harness Desktop {manifest['desktopVersion']} Windows 离线版'
     notes = Path('release-notes.md')
     notes.write_text(f'''Windows x64 离线修改版（未签名），由 GitHub Actions 自动构建并发布。
 
@@ -87,25 +109,62 @@ def main():
 - [构建记录](https://github.com/{repo}/actions/runs/{run_id})
 - 已校验四个发布文件及 SHA-256；自动构建不代表已完成人工 Windows 断网安装验收。
 ''')
-    if release is None:
-        gh('release', 'create', tag, '--target', sha, '--draft', '--title', title, '--notes-file', str(notes))
-        release = json.loads(gh('api', f'repos/{repo}/releases/tags/{tag}'))
-        if release['target_commitish'] != sha:
-            raise ValueError('New draft targets a different source commit')
-    gh('release', 'upload', tag, *[str(p) for p in sorted(directory.iterdir())], '--clobber')
-    resolved = json.loads(gh('api', f'repos/{repo}/commits/{tag}'))['sha']
-    if resolved != sha:
-        raise ValueError('Release tag points to a different commit')
-    uploaded = json.loads(gh('api', f'repos/{repo}/releases/tags/{tag}'))
-    remote = {a['name']: a for a in uploaded['assets']}
-    if set(remote) != {p.name for p in directory.iterdir()}:
+    candidates = [r for r in release_list(repo) if r['tag_name'] == tag]
+    if any(not r['draft'] for r in candidates):
+        print(f'{tag} is already public; leaving it unchanged')
+        return
+    if any(r['target_commitish'] != sha for r in candidates):
+        raise ValueError('Existing draft targets a different source commit')
+    if candidates:
+        release = min(candidates, key=lambda r: r['created_at'])
+    else:
+        result = subprocess.run([
+            'gh', 'release', 'create', tag, '--target', sha, '--draft',
+            '--title', title, '--notes-file', str(notes),
+        ], check=True, text=True, capture_output=True)
+        release = [r for r in release_list(repo) if r['tag_name'] == tag and r['draft']]
+        if len(release) != 1 or release[0]['target_commitish'] != sha:
+            raise RuntimeError(f'Could not resolve the new draft release: {result.stdout.strip()}')
+        release = release[0]
+    expected_names = {path.name for path in directory.iterdir()}
+    remote = {asset['name']: asset for asset in release['assets']}
+    for name, asset in list(remote.items()):
+        if name not in expected_names:
+            raise ValueError(f'Unexpected existing draft asset: {name}')
+        path = directory / name
+        if asset['size'] == path.stat().st_size and asset.get('digest') == 'sha256:' + digest(path):
+            continue
+        asset_id = asset['id']
+        gh('api', '--method', 'DELETE', f'repos/{repo}/releases/assets/{asset_id}')
+    for path in sorted(directory.iterdir()):
+        release_id = release['id']
+        current = json.loads(gh('api', f'repos/{repo}/releases/{release_id}'))['assets']
+        existing = next((asset for asset in current if asset['name'] == path.name), None)
+        expected_digest = 'sha256:' + digest(path)
+        if existing and existing['size'] == path.stat().st_size and existing.get('digest') == expected_digest:
+            continue
+        uploaded = upload_asset(repo, release_id, path)
+        if uploaded['size'] != path.stat().st_size or uploaded.get('digest') != expected_digest:
+            raise ValueError(f'Uploaded release digest mismatch: {path.name}')
+    release_id = release['id']
+    uploaded = json.loads(gh('api', f'repos/{repo}/releases/{release_id}'))
+    remote = {asset['name']: asset for asset in uploaded['assets']}
+    if set(remote) != expected_names:
         raise ValueError('Remote release file list mismatch')
     for path in directory.iterdir():
         expected_digest = 'sha256:' + digest(path)
         if remote[path.name]['size'] != path.stat().st_size or remote[path.name].get('digest') != expected_digest:
             raise ValueError(f'Remote release digest mismatch: {path.name}')
-    gh('release', 'edit', tag, '--draft=false', '--prerelease=false', '--latest', '--title', title, '--notes-file', str(notes))
-    print(uploaded['html_url'])
+    tag_sha = release_tag_sha(repo, tag)
+    if tag_sha and tag_sha != sha:
+        raise ValueError('Release tag points to a different commit')
+    if tag_sha is None:
+        gh('api', '--method', 'POST', f'repos/{repo}/git/refs', '-f', f'ref=refs/tags/{tag}', '-f', f'sha={sha}')
+    if release_tag_sha(repo, tag) != sha:
+        raise ValueError('Release tag target verification failed')
+    gh('api', '--method', 'PATCH', f'repos/{repo}/releases/{release_id}',
+       '-F', 'draft=false', '-F', 'prerelease=false', '-f', f'name={title}', '-F', f'body=@{notes}')
+    print(f'https://github.com/{repo}/releases/tag/{tag}')
 
 
 if __name__ == '__main__':
