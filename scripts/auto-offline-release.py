@@ -20,12 +20,11 @@ def api(path):
 
 
 def get_release(repo, tag):
-    result = subprocess.run(['gh', 'api', f'repos/{repo}/releases/tags/{tag}'], text=True, capture_output=True)
-    if result.returncode == 0:
-        return json.loads(result.stdout)
-    if 'HTTP 404' in result.stderr:
-        return None
-    raise RuntimeError(result.stderr)
+    releases = json.loads(run('gh', 'api', f'repos/{repo}/releases?per_page=100'))
+    matches = [release for release in releases if release['tag_name'] == tag]
+    if len(matches) > 1:
+        raise RuntimeError(f'Multiple GitHub Releases use tag {tag}')
+    return matches[0] if matches else None
 
 
 def select_harness(releases, version):
