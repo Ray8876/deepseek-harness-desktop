@@ -97,7 +97,8 @@ def main():
         raise ValueError('Source build run did not succeed')
     directory = Path('release-assets')
     manifest, installer = verify(directory, tag, sha)
-    title = f'DeepSeek Harness Desktop {manifest['desktopVersion']} Windows 离线版'
+    version = manifest['desktopVersion']
+    title = f'DeepSeek Harness Desktop {version} Windows 离线版'
     notes = Path('release-notes.md')
     notes.write_text(f'''Windows x64 离线修改版（未签名），由 GitHub Actions 自动构建并发布。
 
