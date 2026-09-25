@@ -62,6 +62,29 @@ class AutomationTests(unittest.TestCase):
     def test_runtime_pins_match(self):
         sync.check_runtime_pins()
 
+    def test_upstream_download_exports_merge_with_offline_manifest_exports(self):
+        ours = '''mod core;
+mod installable;
+mod offline;
+pub use installable::{Dsh, InstallKind, Installable, Nodejs, Pnpm};
+pub use offline::{load_offline_manifest, read_offline_asset, OfflineAsset, OfflineManifest};
+'''
+        theirs = '''mod core;
+mod installable;
+pub use installable::{record_mappings, tasks, Dsh, InstallKind, Installable, Nodejs, Pnpm};
+'''
+
+        merged = sync.merge_download_module(ours, theirs)
+
+        self.assertIn('mod offline;', merged)
+        self.assertIn('pub use offline::{load_offline_manifest, read_offline_asset, OfflineAsset, OfflineManifest};', merged)
+        self.assertIn('pub use installable::{record_mappings, tasks, Dsh, InstallKind, Installable, Nodejs, Pnpm};', merged)
+        self.assertEqual(merged.count('mod offline;'), 1)
+
+    def test_upstream_download_merge_rejects_unexpected_conflict_shape(self):
+        with self.assertRaisesRegex(RuntimeError, 'Unexpected conflict'):
+            sync.merge_download_module('mod core;\n', 'mod core;\n')
+
     def test_publication_rejects_wrong_source_corruption_and_extra_files(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

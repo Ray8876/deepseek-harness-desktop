@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import time
 from urllib.parse import quote
 
@@ -11,8 +12,50 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def run(*args, **kwargs):
     preserve = kwargs.pop('preserve', False)
-    result = subprocess.run(args, cwd=ROOT, check=True, text=True, capture_output=True, **kwargs).stdout
-    return result if preserve else result.strip()
+    result = subprocess.run(args, cwd=ROOT, check=False, text=True, capture_output=True, **kwargs)
+    if result.returncode:
+        if result.stdout:
+            print(result.stdout, end='', file=sys.stderr)
+        if result.stderr:
+            print(result.stderr, end='', file=sys.stderr)
+        raise subprocess.CalledProcessError(
+            result.returncode, args, output=result.stdout, stderr=result.stderr
+        )
+    return result.stdout if preserve else result.stdout.strip()
+
+
+def merge_download_module(ours, theirs):
+    offline_module = 'mod offline;'
+    offline_exports = 'pub use offline::{load_offline_manifest, read_offline_asset, OfflineAsset, OfflineManifest};'
+    upstream_exports = next(
+        (line for line in theirs.splitlines() if 'pub use installable::{record_mappings, tasks,' in line),
+        None,
+    )
+    if offline_module not in ours or offline_exports not in ours or not upstream_exports:
+        raise RuntimeError('Unexpected conflict in src-tauri/src/service/download/mod.rs')
+
+    merged = theirs
+    if offline_module not in merged:
+        anchor = 'mod installable;\n'
+        if anchor not in merged:
+            raise RuntimeError('Cannot locate installable module declaration while resolving upstream conflict')
+        merged = merged.replace(anchor, anchor + offline_module + '\n', 1)
+    if offline_exports not in merged:
+        merged = merged.replace(upstream_exports, upstream_exports + '\n' + offline_exports, 1)
+    return merged
+
+
+def resolve_download_module_conflict():
+    path = 'src-tauri/src/service/download/mod.rs'
+    conflicts = run('git', 'diff', '--name-only', '--diff-filter=U').splitlines()
+    if conflicts != [path]:
+        return False
+    ours = run('git', 'show', f':2:{path}', preserve=True)
+    theirs = run('git', 'show', f':3:{path}', preserve=True)
+    (ROOT / path).write_text(merge_download_module(ours, theirs))
+    run('git', 'add', '--', path)
+    print(f'Resolved known offline/upstream export conflict in {path}')
+    return True
 
 
 def api(path):
@@ -139,7 +182,11 @@ def main():
                 ':(exclude)scripts/test-auto-offline-release.py', ':(exclude)scripts/publish-offline-release.py',
                 ':(exclude)scripts/cleanup-auto-offline-branch.py', ':(exclude)docs/OFFLINE_WINDOWS.md', preserve=True)
     if patch:
-        run('git', 'apply', '--3way', '--index', input=patch)
+        try:
+            run('git', 'apply', '--3way', '--index', input=patch)
+        except subprocess.CalledProcessError:
+            if not resolve_download_module_conflict():
+                raise
     version = json.loads((ROOT / 'package.json').read_text())['version']
     if tag != f'v{version}':
         raise RuntimeError('Desktop version does not match upstream release tag')
