@@ -40,6 +40,18 @@ pub fn run() {
             eprintln!("[wayland] set {} for WebKitGTK EGL", applied.join("="));
         }
     }
+    // 强制 XWayland（默认关闭的设置项，见 `should_force_xwayland`）。必须在此处执行：
+    // GDK 只在初始化时读一次 GDK_BACKEND，建窗之后再改无效。
+    if should_force_xwayland(
+        config::force_xwayland_setting(),
+        &std::env::var("WAYLAND_DISPLAY").unwrap_or_default(),
+        &std::env::var("GDK_BACKEND").unwrap_or_default(),
+        &std::env::var("DISPLAY").unwrap_or_default(),
+    ) {
+        std::env::set_var("GDK_BACKEND", "x11");
+        // 同上，logger::init() 尚未执行，只能用 eprintln
+        eprintln!("[wayland] set GDK_BACKEND=x11 so the pet window can stay on top (issue #649)");
+    }
     // 初始化日志系统
     logger::init();
 
@@ -95,6 +107,62 @@ fn should_apply_wayland_egl_workaround(session_type: &str, appimage_present: boo
     session_type == "wayland" && appimage_present
 }
 
+/// 桌宠窗口的置顶与绝对定位能力是否可用。
+///
+/// xdg-shell 不提供这两项能力。tao 的 Linux 后端基于 GTK3，`always_on_top` 与
+/// `set_position` 最终落到 `gtk_window_set_keep_above` 与 `gtk_window_move`，
+/// 二者在 GDK 的 Wayland 后端上是 no-op：不生效，也不返回错误。桌宠因此成为
+/// 层级由合成器决定的普通 toplevel，被主窗口覆盖。X11 / XWayland 下窗口管理器
+/// 识别 `_NET_WM_STATE_ABOVE` 并接受绝对放置，两项能力都可用。
+///
+/// 判定读 `WAYLAND_DISPLAY` 而非 `XDG_SESSION_TYPE`：后者由 pam_systemd 设置，
+/// 从 TTY 直接起的合成器（sway / weston / cage）下为空，而 GDK 照样连上 Wayland，
+/// 正是本提示要覆盖的场景。`WAYLAND_DISPLAY` 缺席时 `wl_display_connect` 失败，
+/// GDK 不会选中 Wayland 后端。macOS / Windows 上该变量为空，判定为可用。
+///
+/// `GDK_BACKEND` 是逗号分隔的优先级列表，首项为 `x11` 即强制走 XWayland。GDK 在
+/// 首项打开失败时会顺延到后续项，因此 `x11,wayland` 在没有 XWayland 的环境下会被
+/// 判为可用而实际不可用；该写法需显式配置，这里不为它牺牲判定的简单性。
+pub(crate) fn pet_overlay_supported(wayland_display: &str, gdk_backend: &str) -> bool {
+    wayland_display.is_empty() || gdk_backend.split(',').next() == Some("x11")
+}
+
+/// 本次启动是否应把应用拉到 XWayland 上（`force_xwayland` 设置项的判定）。
+///
+/// 值取 `x11` 而不是 `x11,wayland`：后者在 XWayland 缺席时会回落到 Wayland，看似
+/// 更安全，但 [`pet_overlay_supported`] 只看列表首项，回落之后提示反而消失，用户
+/// 拿到「桌宠仍被遮挡且没有解释」这个最差结果。GDK 是否发生了回落无法从环境变量
+/// 观测，判定侧补不回来。改为要求 `DISPLAY` 非空能买到同样的启动安全性——合成器
+/// 运行 XWayland 时才导出该变量——同时让判定保持诚实：`DISPLAY` 为空时什么都不设，
+/// 提示照常显示。
+///
+/// 已显式设过 `GDK_BACKEND` 的用户不被覆盖，与上方 EGL workaround 的约定一致：
+/// 启动脚本或 `.desktop` 里的 `Exec=env GDK_BACKEND=…` 保持权威，显式设了
+/// `wayland` 的用户是在主动接受该限制。
+///
+/// macOS / Windows 上 `WAYLAND_DISPLAY` 为空，[`pet_overlay_supported`] 返回 true，
+/// 判定短路为 false，变量不会被设置。因此不加 `#[cfg(target_os)]`，单测在三条 CI
+/// 腿上都跑得到。
+pub(crate) fn should_force_xwayland(
+    enabled: bool,
+    wayland_display: &str,
+    gdk_backend: &str,
+    display: &str,
+) -> bool {
+    enabled
+        && !pet_overlay_supported(wayland_display, gdk_backend)
+        && gdk_backend.is_empty()
+        && !display.is_empty()
+}
+
+/// [`pet_overlay_supported`] 的环境变量读取版本，供查询命令与建窗路径共用。
+pub(crate) fn pet_overlay_supported_env() -> bool {
+    pet_overlay_supported(
+        &std::env::var("WAYLAND_DISPLAY").unwrap_or_default(),
+        &std::env::var("GDK_BACKEND").unwrap_or_default(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +178,39 @@ mod tests {
         assert!(!should_apply_wayland_egl_workaround("x11", true));
         assert!(!should_apply_wayland_egl_workaround("", true));
         assert!(!should_apply_wayland_egl_workaround("", false));
+    }
+
+    #[test]
+    fn pet_overlay_unsupported_only_on_native_wayland() {
+        // 原生 Wayland：GTK 的置顶与定位调用是 no-op，桌宠被主窗口遮挡。
+        assert!(!pet_overlay_supported("wayland-0", ""));
+        assert!(!pet_overlay_supported("wayland-0", "wayland"));
+        // 首项决定 GDK 实际后端；wayland 排在前面时仍走 Wayland。
+        assert!(!pet_overlay_supported("wayland-0", "wayland,x11"));
+        // 强制 XWayland：窗口管理器接受 _NET_WM_STATE_ABOVE 与绝对放置。
+        assert!(pet_overlay_supported("wayland-0", "x11"));
+        assert!(pet_overlay_supported("wayland-0", "x11,wayland"));
+        // 冒号不是 GDK 的分隔符，整串匹配不上 `x11`，仍判为 Wayland。
+        assert!(!pet_overlay_supported("wayland-0", "x11:wayland"));
+        // X11 会话与 macOS / Windows：没有 Wayland 套接字。
+        assert!(pet_overlay_supported("", ""));
+        assert!(pet_overlay_supported("", "wayland"));
+    }
+
+    #[test]
+    fn force_xwayland_only_on_native_wayland_with_xserver() {
+        // 设置项默认关闭：其余条件全部满足也不改环境。
+        assert!(!should_force_xwayland(false, "wayland-0", "", ":0"));
+        // 开启 + 原生 Wayland + XWayland 在跑：唯一生效的组合。
+        assert!(should_force_xwayland(true, "wayland-0", "", ":0"));
+        // DISPLAY 为空说明合成器没起 XWayland，设了 x11 会让应用起不来。
+        assert!(!should_force_xwayland(true, "wayland-0", "", ""));
+        // 用户已显式指定后端，不覆盖（无论指定的是哪一个）。
+        assert!(!should_force_xwayland(true, "wayland-0", "wayland", ":0"));
+        assert!(!should_force_xwayland(true, "wayland-0", "x11", ":0"));
+        // X11 会话：置顶与定位本来就能用。
+        assert!(!should_force_xwayland(true, "", "", ":0"));
+        // macOS / Windows：三个变量都为空，GDK_BACKEND 在那里也无意义。
+        assert!(!should_force_xwayland(true, "", "", ""));
     }
 }

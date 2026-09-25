@@ -22,8 +22,14 @@ const MAIN_WEBVIEW = 'main'
 /** 桌宠独立窗口 label（`src-tauri/src/desktop/pet.rs:29`）。 */
 const PET_WEBVIEW = 'pet'
 
-/** 插件侧栏入口的稳定锚点（`packages/dsh-tauri-pet/src/client/constants/index.ts:38`）。 */
-const PET_ICON = '[data-dsh-tauri-pet-icon]'
+/** 插件就绪锚点：插件样式元素（`mountStyle` 交给 css-render 落成 `style[cssr-id=…]`）。 */
+const PET_STYLES = 'style[cssr-id="dsh-tauri-pet-styles"]'
+
+/** 设置入口触发器（`packages/dsh-tauri-ui/src/client/ui/trigger.tsx`）。 */
+const SETTINGS_TRIGGER = '.dshp-settings-trigger'
+
+/** 设置菜单里的桌宠条目（`packages/dsh-tauri-pet/src/client/constants/index.ts`）。 */
+const PET_MENU_ITEM = '[data-dsh-tauri-pet-menu-item="1"]'
 
 /** 桌宠尺寸合法区间（`src-tauri/src/desktop/pet.rs:48-49` 的 50.0 / 200.0）。 */
 const PET_SIZE_MIN = 50
@@ -57,9 +63,9 @@ function elementExists(selector: string): boolean {
   return document.querySelector(selector) !== null
 }
 
-/** 元素的 `aria-pressed` 属性 */
-function elementAriaPressed(selector: string): string | null {
-  return document.querySelector(selector)?.getAttribute('aria-pressed') ?? null
+/** 匹配元素的数量（`browser.$$` 的 `length` 在 WDIO 9 里是 Promise，脚本函数更直接） */
+function elementCount(selector: string): number {
+  return document.querySelectorAll(selector).length
 }
 
 /** 在页面（壳层或帧内）安装报错收集器：三类页面级错误收进 `window.__dshE2eErrors` */
@@ -116,8 +122,8 @@ describe.skipIf(process.platform !== 'win32')('桌面端桌宠独立窗口', () 
     await withIframe(async () => {
       await browser.execute(collectPageErrors)
       await browser.waitUntil(
-        () => browser.execute(elementExists, PET_ICON),
-        { timeout: 60_000, timeoutMsg: '内嵌 dsh 界面未渲染出桌宠入口（插件 client 未生效）' },
+        () => browser.execute(elementExists, PET_STYLES),
+        { timeout: 60_000, timeoutMsg: '内嵌 dsh 界面未渲染出桌宠插件产物（插件 client 未生效）' },
       )
     })
 
@@ -203,34 +209,53 @@ describe.skipIf(process.platform !== 'win32')('桌面端桌宠独立窗口', () 
     }
   }
 
-  /** 帧内读入口两态 */
-  async function iconAriaPressed(): Promise<string | null> {
-    return withIframe(() => app.browser.execute(elementAriaPressed, PET_ICON))
-  }
-
-  /** 帧内点击侧栏桌宠入口（用户路径），返回点击前的 `aria-pressed` */
-  async function clickSidebarIcon(): Promise<string | null> {
+  /**
+   * 帧内打开设置入口，并等菜单里出现唯一的桌宠条目。
+   *
+   * 桌宠条目由插件在「设置」菜单展开时才克隆出来，只有菜单处于展开态才存在；
+   * `.dshp-settings-trigger` / `data-dsh-tauri-pet-menu-item` 都是插件自有的稳定选择器。
+   */
+  async function openPetMenu(): Promise<void> {
     const browser = app.browser
     await dismissDshModals(browser)
 
-    return withIframe(async () => {
-      const icon = await browser.$(PET_ICON)
-      expect(await icon.isExisting(), '侧栏桌宠入口必须存在').toBe(true)
+    await withIframe(async () => {
+      const trigger = await browser.$(SETTINGS_TRIGGER)
+      await browser.waitUntil(
+        async () => await trigger.isExisting(),
+        { timeout: 30_000, timeoutMsg: '设置入口未渲染（dsh-tauri-ui 未生效）' },
+      )
 
-      const before = await browser.execute(elementAriaPressed, PET_ICON)
-      await icon.click()
-      return before
+      if (await trigger.getAttribute('aria-expanded') !== 'true')
+        await trigger.click()
+
+      await browser.waitUntil(
+        async () => await browser.execute(elementCount, PET_MENU_ITEM) === 1,
+        { timeout: 30_000, timeoutMsg: '设置菜单展开后必须出现唯一的桌宠条目' },
+      )
     })
   }
 
-  /** 点击侧栏入口并验证句柄及同步状态 */
-  async function clickIconToggling(expectBefore: string, expected: string[], message: string): Promise<void> {
-    const beforeState = await clickSidebarIcon()
-    expect(
-      beforeState,
-      `点击前入口 aria-pressed 必须为 ${expectBefore}（不一致即入口 store 与后端失同步）`,
-    ).toBe(expectBefore)
+  /** 帧内点击设置菜单里的桌宠条目（用户路径的唯一开关入口），随后菜单自行收起。 */
+  async function togglePet(): Promise<void> {
+    const browser = app.browser
+    await openPetMenu()
 
+    await withIframe(async () => {
+      await (await browser.$(PET_MENU_ITEM)).click()
+    })
+
+    await dismissDshModals(browser)
+  }
+
+  /** 从设置菜单切换桌宠，先断后端状态真的翻转，再等窗口句柄收敛（全部断言 Tauri 原生产物）。 */
+  async function togglePetExpecting(expected: string[], message: string): Promise<void> {
+    const before = (await status()).enabled
+    expect(before, '切换前必须能读到后端 enabled 状态（否则后端已失联）').toBeTypeOf('boolean')
+
+    await togglePet()
+
+    expect((await status()).enabled, `点击桌宠条目后后端 enabled 必须从 ${before} 翻转`).toBe(!before)
     await waitHandles(expected, message)
   }
 
@@ -241,13 +266,13 @@ describe.skipIf(process.platform !== 'win32')('桌面端桌宠独立窗口', () 
   it('TC-PET-L3-02-001 启用后出现独立的桌宠窗口', async () => {
     await waitHandles([MAIN_WEBVIEW], '复位后窗口句柄必须恰为主窗口')
 
-    await clickIconToggling('false', [MAIN_WEBVIEW, PET_WEBVIEW], '点击侧栏入口后必须出现独立的 pet 窗口句柄')
+    await togglePetExpecting([MAIN_WEBVIEW, PET_WEBVIEW], '点击设置菜单里的桌宠条目后必须出现独立的 pet 窗口句柄')
 
     const state = await status()
     expect(state.enabled, '创建窗口后状态必须为 enabled:true').toBe(true)
     expect(state.visible, 'enabled 为真时 visible 必须同为真').toBe(true)
 
-    await clickIconToggling('true', [MAIN_WEBVIEW], '再次点击入口后 pet 窗口必须销毁')
+    await togglePetExpecting([MAIN_WEBVIEW], '再次点击桌宠条目后 pet 窗口必须销毁')
     expect((await status()).enabled, '关闭后状态必须回到 enabled:false').toBe(false)
 
     await expectNoPageErrors('TC-PET-L3-02-001 建窗/销毁全流程')
@@ -262,15 +287,15 @@ describe.skipIf(process.platform !== 'win32')('桌面端桌宠独立窗口', () 
     expect(await app.browser.getWindowHandles(), '未启用时窗口句柄必须恰为 [main]').toEqual([MAIN_WEBVIEW])
   })
 
-  it('TC-PET-L3-02-003 侧栏入口按钮切换后窗口随之创建与销毁', async () => {
+  it('TC-PET-L3-02-003 设置菜单桌宠条目切换后窗口随之创建与销毁', async () => {
     await setEnabled(false)
     await waitHandles([MAIN_WEBVIEW], '复位后窗口句柄必须恰为主窗口')
-    expect(await iconAriaPressed(), '复位后入口两态必须停在关闭态').toBe('false')
+    expect((await status()).enabled, '复位后后端必须停在关闭态').toBe(false)
 
-    await clickIconToggling('false', [MAIN_WEBVIEW, PET_WEBVIEW], '首次点击后必须出现 pet 窗口')
+    await togglePetExpecting([MAIN_WEBVIEW, PET_WEBVIEW], '首次点击后必须出现 pet 窗口')
     expect((await status()).enabled, '首次点击后状态必须为 enabled:true').toBe(true)
 
-    await clickIconToggling('true', [MAIN_WEBVIEW], '二次点击后 pet 窗口必须销毁')
+    await togglePetExpecting([MAIN_WEBVIEW], '二次点击后 pet 窗口必须销毁')
     expect((await status()).enabled, '二次点击后状态必须回到 enabled:false').toBe(false)
 
     await expectNoPageErrors('TC-PET-L3-02-003 点击切换往返')

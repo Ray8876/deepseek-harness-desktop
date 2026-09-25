@@ -41,6 +41,50 @@ pub fn escape_path_cmd(path: &Path) -> String {
     path.to_string_lossy().replace('%', "%%")
 }
 
+/// 把路径烘焙进 `.cmd` 前，尽量换成语义等价的纯 ASCII 写法。
+///
+/// cmd.exe 按控制台代码页解析批处理文件：路径含非 ASCII（中文用户名）时，英文
+/// 系统（CP437）根本无法用该代码页表示，`if exist "%PNPM_BIN%"` 必然落空、shim
+/// 以退出码 1 结束。依次尝试：用户目录下的 `%APPDATA%`/`%LOCALAPPDATA%`/
+/// `%USERPROFILE%` 令牌、Windows 8.3 短名；都拿不到纯 ASCII 时才保留原字面量，
+/// 由 write.rs 的按代码页编码兜底。
+pub fn portable_path_cmd(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if text.is_ascii() {
+        return escape_path_cmd(path);
+    }
+    for (var, token) in [
+        ("APPDATA", "%APPDATA%"),
+        ("LOCALAPPDATA", "%LOCALAPPDATA%"),
+        ("USERPROFILE", "%USERPROFILE%"),
+    ] {
+        let Some(root) = std::env::var_os(var) else {
+            continue;
+        };
+        if let Some(rendered) = under_root(path, Path::new(&root), token) {
+            return rendered;
+        }
+    }
+    // 令牌之外的路径（如 `D:\软件\nodejs`）用 8.3 短名换回 ASCII；卷上关掉
+    // 短名或路径不存在时拿回的仍是长名，此处按 is_ascii 拒绝。
+    #[cfg(windows)]
+    if let Some(short) = crate::utils::short_path(path) {
+        if short.to_string_lossy().is_ascii() {
+            return escape_path_cmd(&short);
+        }
+    }
+    escape_path_cmd(path)
+}
+
+/// `path` 在 `root` 之下时渲染成 `<token>\<其余部分>`，其余部分按批处理转义。
+fn under_root(path: &Path, root: &Path, token: &str) -> Option<String> {
+    let rest = path.strip_prefix(root).ok()?;
+    if rest.as_os_str().is_empty() {
+        return None;
+    }
+    Some(format!("{token}\\{}", escape_path_cmd(rest)))
+}
+
 /// 单引号字符串中 `'` 需翻倍
 #[inline]
 pub fn escape_path_ps1(path: &Path) -> String {
@@ -56,6 +100,40 @@ pub fn escape_path_sh(path: &Path) -> String {
 #[cfg(test)]
 mod test_util {
     use std::path::PathBuf;
+
+    /// 与生产同源的默认布局样例（AppData 托管根 + 清单入口相对路径），
+    /// 供 shim 构建/落盘测试断言烘焙结果。
+    pub(super) fn sample_shim_paths() -> super::build::ShimPaths {
+        shim_paths_for(&sample_app_dir())
+    }
+
+    /// 任意根目录 + 清单默认布局的等价 `ShimPaths`：生产侧入口路径来自依赖映射表
+    /// 与清单 `entry`，按临时目录构造的测试用同一布局换算。
+    pub(super) fn shim_paths_for(app_dir: &std::path::Path) -> super::build::ShimPaths {
+        let app_dir = app_dir.to_path_buf();
+        let node_root = app_dir.join("runtime");
+        super::build::ShimPaths {
+            node_bin: if cfg!(windows) {
+                node_root.join("node.exe")
+            } else {
+                node_root.join("bin").join("node")
+            },
+            dsh_bin: app_dir
+                .join("dependencies")
+                .join("dsh")
+                .join("node_modules")
+                .join("@deepseek-ai")
+                .join("dsh")
+                .join("lib")
+                .join("bin.js"),
+            pnpm_bin: app_dir
+                .join("dependencies")
+                .join("pnpm")
+                .join("bin")
+                .join("pnpm.cjs"),
+            bundled_git_dir: Some(app_dir.join("dependencies").join("git").join("cmd")),
+        }
+    }
 
     pub(super) fn sample_app_dir() -> PathBuf {
         if cfg!(windows) {
@@ -123,5 +201,56 @@ mod tests {
             r"/home/o'\''brien/.dsh"
         );
         assert_eq!(escape_path_sh(Path::new("/plain/.dsh")), "/plain/.dsh");
+    }
+
+    // ------------------------------------------------------------------
+    // 非 ASCII 路径的 ASCII 令牌改写（cmd.exe 按代码页读批处理）
+    // ------------------------------------------------------------------
+
+    /// 中文用户名下的 AppData 路径必须退化成 `%APPDATA%` 令牌：英文系统
+    /// （CP437）用代码页也编不出这些字符，只有纯 ASCII 才与代码页无关。
+    #[test]
+    #[cfg(windows)]
+    fn portable_path_cmd_renders_non_ascii_user_paths_as_tokens() {
+        let root = Path::new(r"C:\Users\小蔡\AppData\Roaming");
+        assert_eq!(
+            under_root(
+                Path::new(r"C:\Users\小蔡\AppData\Roaming\dsh-tauri\dependencies\pnpm\bin\pnpm.cjs"),
+                root,
+                "%APPDATA%",
+            )
+            .as_deref(),
+            Some(r"%APPDATA%\dsh-tauri\dependencies\pnpm\bin\pnpm.cjs")
+        );
+        assert_eq!(
+            under_root(Path::new(r"C:\Users\小蔡\.dsh"), Path::new(r"C:\Users\小蔡"), "%USERPROFILE%")
+                .as_deref(),
+            Some(r"%USERPROFILE%\.dsh")
+        );
+        // 令牌之外没有剩余内容、或路径不在根下时不改写。
+        assert_eq!(under_root(root, root, "%APPDATA%"), None);
+        assert_eq!(
+            under_root(Path::new(r"D:\tools\x"), root, "%APPDATA%"),
+            None
+        );
+        // 其余部分仍按批处理转义。
+        assert_eq!(
+            under_root(Path::new(r"C:\Users\小蔡\a%20b"), Path::new(r"C:\Users\小蔡"), "%USERPROFILE%")
+                .as_deref(),
+            Some(r"%USERPROFILE%\a%%20b")
+        );
+    }
+
+    /// 纯 ASCII 路径逐字节走原逻辑（不留令牌、不做无谓改写）。
+    #[test]
+    fn portable_path_cmd_keeps_ascii_paths_verbatim() {
+        assert_eq!(
+            portable_path_cmd(Path::new(r"C:\Users\test\AppData\Roaming\dsh-tauri\pnpm.cjs")),
+            r"C:\Users\test\AppData\Roaming\dsh-tauri\pnpm.cjs"
+        );
+        assert_eq!(
+            portable_path_cmd(Path::new(r"C:\tools\100%\pnpm.cjs")),
+            r"C:\tools\100%%\pnpm.cjs"
+        );
     }
 }

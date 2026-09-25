@@ -85,6 +85,14 @@ export function Iframe({ iframeRef }: IframeProps) {
 
   // iframe → 宿主：iframe 自身的桥共用一个监听器，按 `data.type` 分发
   useIframeMessage<IframeBridgeMessage>(iframeRef, (data) => {
+    // 帧内文档离开（帧内导航）：旧确认立刻作废，等新文档自己重新自报（issue #705）
+    if (data.type === 'dsh://plugin-boot:leaving') {
+      store.harness.markIframeLeaving()
+      return
+    }
+    // 能走到这里说明帧内确实跑着 dsh 页面（来源与 origin 已由 hook 校验过），
+    // 与具体桥无关——据此确认 iframe 不是一张浏览器内部错误页（issue #705）。
+    store.harness.markIframeAlive()
     switch (data.type) {
       // 原生通知：转发给 Tauri 命令弹出系统通知
       case 'dsh://native-notification':
@@ -210,7 +218,12 @@ export function Iframe({ iframeRef }: IframeProps) {
             title={t('ui.iframe_error')}
             errorMsg={t('ui.ensure_running', { url: harness.serviceUrl })}
             onRetry={store.harness.refreshIframe}
-          />
+          >
+            {/* 服务就绪却毫无帧内消息：帧里根本没有 dsh 页面（浏览器内部错误页） */}
+            <If cond={harness.iframeErrorHint !== ''}>
+              <p className="text-xs leading-[18px] break-all text-load-muted">{harness.iframeErrorHint}</p>
+            </If>
+          </Loadable>
         </div>
       </If>
     </div>

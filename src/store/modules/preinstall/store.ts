@@ -12,7 +12,7 @@ import { harnessUpdater } from '../harness-updater'
 const LOG_LIMIT = 200
 
 /**
- * 预装插件引导模块：首次安装、老版本升级或 preset-plugins.json 内容变更后，
+ * 预装插件引导模块：首次安装、老版本升级或资源清单 plugins 节内容变更后，
  * 展示推荐插件列表（可增选/减选），确认或跳过后继续启动服务。
  *
  * 与 harness 模块的分工：本模块只负责「引导页的选择与安装」，

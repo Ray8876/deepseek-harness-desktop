@@ -18,6 +18,7 @@ pub(crate) mod win_inspector;
 pub(crate) mod win_spawn;
 
 mod health;
+mod heap;
 mod install;
 mod launch;
 mod process;

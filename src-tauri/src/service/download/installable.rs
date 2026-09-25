@@ -15,6 +15,18 @@ pub enum InstallKind {
     Git,
 }
 
+impl InstallKind {
+    /// 对应的依赖映射键（见 `config::dependencies`）
+    pub fn dependency_key(self) -> &'static str {
+        match self {
+            InstallKind::Node => config::dependencies::DEP_NODE,
+            InstallKind::Dsh => config::dependencies::DEP_DSH,
+            InstallKind::Pnpm => config::dependencies::DEP_PNPM,
+            InstallKind::Git => config::dependencies::DEP_GIT,
+        }
+    }
+}
+
 #[async_trait]
 pub trait Installable: Send + Sync {
     fn kind(&self) -> InstallKind;
@@ -22,6 +34,28 @@ pub trait Installable: Send + Sync {
     fn check_installed(&self, app: &AppHandle) -> bool;
     fn get_download_url(&self) -> Result<String, String>;
     fn get_install_path(&self, app: &AppHandle) -> PathBuf;
+    /// 把该依赖当前解析出的安装根写回映射表（系统环境满足 → `null`）。
+    ///
+    /// 与 [`Installable::check_installed`] 同一套判定：检测到系统合规版本就不托管，
+    /// 只有真正落到托管根的依赖才记录路径。
+    fn record_mapping(&self, app: &AppHandle);
+}
+
+/// 依赖任务清单（唯一构造点：安装流程与映射回写共用同一组任务）。
+pub fn tasks() -> Vec<Box<dyn Installable>> {
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let mut tasks: Vec<Box<dyn Installable>> =
+        vec![Box::new(Nodejs), Box::new(Dsh), Box::new(Pnpm)];
+    #[cfg(windows)]
+    tasks.push(Box::new(Git));
+    tasks
+}
+
+/// 回写全部依赖的映射（幂等；内容未变化时不落盘）。
+pub fn record_mappings(app: &AppHandle) {
+    for task in tasks() {
+        task.record_mapping(app);
+    }
 }
 
 // --- Node.js 实现 ---
@@ -61,7 +95,8 @@ impl Installable for Nodejs {
         // 此时不能再以"本机有版本兼容的 node"为由跳过捆绑运行时，否则服务进程仍会
         // 用那个 ABI 不匹配的运行时启动。
         if config::prefer_bundled_node_runtime() {
-            return config::bundled_node_binary(app).is_some() && config::is_runtime_compatible(app);
+            return config::bundled_node_binary(app).is_some()
+                && config::is_runtime_compatible(app);
         }
         if let Some(local_node) = config::get_local_node_path() {
             log::info!(
@@ -71,6 +106,17 @@ impl Installable for Nodejs {
             return true;
         }
         config::get_node_binary_path(app).exists() && config::is_runtime_compatible(app)
+    }
+    fn record_mapping(&self, app: &AppHandle) {
+        let managed = config::get_node_install_path(app);
+        // ABI 探测要求捆绑运行时时不能把系统 node 记为可用（与实际拉起的进程一致）。
+        let system =
+            !config::prefer_bundled_node_runtime() && config::get_local_node_path().is_some();
+        config::dependencies::record(
+            app,
+            InstallKind::Node.dependency_key(),
+            (!system).then_some(managed),
+        );
     }
 }
 
@@ -93,6 +139,15 @@ impl Installable for Dsh {
     }
     fn check_installed(&self, app: &AppHandle) -> bool {
         config::get_dsh_binary_path(app).exists()
+    }
+    fn record_mapping(&self, app: &AppHandle) {
+        let managed = config::dependencies::managed_root(app, config::dependencies::DEP_DSH);
+        if config::get_dsh_binary_path(app).is_file() {
+            config::dependencies::record(app, InstallKind::Dsh.dependency_key(), Some(managed));
+        } else if crate::service::core::active_version(app).is_some() {
+            // 只有系统（本地）核心可用：该依赖由系统环境满足。
+            config::dependencies::record(app, InstallKind::Dsh.dependency_key(), None);
+        }
     }
 }
 
@@ -141,6 +196,17 @@ impl Installable for Pnpm {
         }
         config::get_pnpm_binary_path(app).exists()
     }
+    fn record_mapping(&self, app: &AppHandle) {
+        let managed = config::get_pnpm_install_path(app);
+        let bundled_present = config::get_pnpm_binary_path(app).exists();
+        // 捆绑版优先（`dsh plugin` 需要可校验的 pnpm）：只有捆绑版缺失、且系统确有
+        // 用户 pnpm 时才把该依赖记为「系统环境满足」；两者都缺失时不写，等下载后记录。
+        if bundled_present {
+            config::dependencies::record(app, InstallKind::Pnpm.dependency_key(), Some(managed));
+        } else if crate::service::cli::find_user_pnpm(app).is_some() {
+            config::dependencies::record(app, InstallKind::Pnpm.dependency_key(), None);
+        }
+    }
 }
 
 // --- Windows Git 实现（插件的 git 托管依赖需要） ---
@@ -177,5 +243,15 @@ impl Installable for Git {
             return true;
         }
         config::git_runtime_ready(app)
+    }
+
+    fn record_mapping(&self, app: &AppHandle) {
+        let system = config::find_system_git_binary().is_some();
+        let managed = config::get_mingit_install_path(app);
+        config::dependencies::record(
+            app,
+            InstallKind::Git.dependency_key(),
+            (!system).then_some(managed),
+        );
     }
 }

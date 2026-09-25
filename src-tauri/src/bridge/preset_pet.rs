@@ -1,4 +1,4 @@
-//! bridge/preset_pet.rs — 预设宠物清单（`resources/preset-pets.json`）。
+//! bridge/preset_pet.rs — 预设宠物清单（`resources/manifest.jsonc` 的 `pets.built-in`）。
 //!
 //! 预设宠物不再下载到本地：清单里的条目本身就是 `dsh-pet-component` 的
 //! `<Pet>` 渲染参数（`config` / `uri` / `ext` / `kind` / `size`），pet 窗口按
@@ -6,67 +6,13 @@
 //! 指向 HEVC-with-Alpha 的 `.mov` 素材：WKWebView 不认 VP9-alpha WebM）。
 //!
 //! 于是本模块只剩两件事，全部与「下载/解压/安装」无关：
-//! 1. 定位并读取随安装包分发的清单；
+//! 1. 从资源清单取 `pets.built-in`；
 //! 2. 校验形状（id 安全 + 唯一、地址非空、kind 合法）后原样交给前端。
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::fs;
-use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
-/// 预设宠物清单文件名（随安装包分发，见 `tauri.conf.json` 的 bundle.resources）。
-const PRESET_PETS_FILE: &str = "preset-pets.json";
-
-/// 清单条目（`resources/preset-pets.json` 的一个元素）。
-///
-/// 字段名与 `dsh-pet-component` 的 props 一一对应，前端拿到后直接展开给 `<Pet>`；
-/// `deny_unknown_fields` 保证清单写错字段（如 `sizeMB`）立即报错，而不是被静默忽略。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PresetPetSpec {
-    /// 唯一标识（`active_pet` 持久化的就是它）。
-    pub id: String,
-    /// 设置页展示名。
-    pub name: String,
-    /// 设置页展示描述。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub desc: Option<String>,
-    /// 设置页卡片预览图（远端 URL，主窗口 CSP 需允许该图源）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image: Option<String>,
-    /// 渲染器协议：`dsh`（逐动作透明视频）/ `codex`（单张雪碧图集）；缺省由组件自动判定。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-    /// 渲染宽度 px（高度由协议画布比例推算）；缺省取组件默认值。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size: Option<f64>,
-    /// 配置文件地址（dsh-pet `config.jsonc` 或 Codex `pet.json`）。
-    pub config: String,
-    /// 素材地址（dsh-pet 用 `{ default, mac }`：macOS 换 HEVC-alpha 素材）。
-    pub uri: PresetPetUri,
-    /// 素材后缀；缺省 `{ default: "webm", mac: "mov" }`（Codex 渲染器忽略）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ext: Option<PresetPetExt>,
-}
-
-/// 素材基地址：`default` 必填，`mac` 覆盖 Apple 平台（WKWebView 不认 VP9-alpha）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PresetPetUri {
-    pub default: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mac: Option<String>,
-}
-
-/// 素材后缀：`default` 必填，`mac` 覆盖 Apple 平台。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PresetPetExt {
-    pub default: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mac: Option<String>,
-}
+use crate::config::manifest::{self, PresetPetSpec};
 
 /// 预设 id 是否安全（直接进入设置持久化与命令参数，只允许 ASCII 字母数字与 `-`/`_`）。
 pub(crate) fn safe_preset_id(id: &str) -> bool {
@@ -77,37 +23,11 @@ pub(crate) fn safe_preset_id(id: &str) -> bool {
             .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
 }
 
-/// 定位清单文件：优先随安装包分发的资源目录，回落源码 `resources/`。
-fn preset_pets_path(app: &AppHandle) -> Option<PathBuf> {
-    if let Ok(dir) = app.path().resource_dir() {
-        for candidate in [
-            dir.join(PRESET_PETS_FILE),
-            dir.join("resources").join(PRESET_PETS_FILE),
-        ] {
-            if candidate.exists() {
-                return Some(candidate);
-            }
-        }
-    }
-    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("resources")
-        .join(PRESET_PETS_FILE);
-    source.exists().then_some(source)
-}
-
 /// 读取并校验清单。任何形状问题都返回带 `PET_PRESET_CATALOG_*` 前缀的错误，不做静默兜底。
 pub fn read_preset_catalog(app: &AppHandle) -> Result<Vec<PresetPetSpec>, String> {
-    let path = preset_pets_path(app)
-        .ok_or_else(|| "PET_PRESET_CATALOG_MISSING: preset-pets.json was not found".to_string())?;
-    let bytes = fs::read(&path).map_err(|error| {
-        format!(
-            "PET_PRESET_CATALOG_READ_FAILED: failed to read {}: {error}",
-            path.display()
-        )
-    })?;
-    let catalog: Vec<PresetPetSpec> = serde_json::from_slice(&bytes).map_err(|error| {
-        format!("PET_PRESET_CATALOG_INVALID: invalid preset-pets.json: {error}")
-    })?;
+    let manifest = manifest::read(app)
+        .ok_or_else(|| "PET_PRESET_CATALOG_MISSING: manifest.jsonc was not found".to_string())?;
+    let catalog = manifest.pets.built_in;
     let mut ids = HashSet::new();
     for spec in &catalog {
         if !safe_preset_id(&spec.id) {
@@ -163,21 +83,21 @@ mod tests {
     use super::*;
 
     fn shipped_catalog() -> Vec<PresetPetSpec> {
-        let bytes = fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/resources/preset-pets.json"
-        ))
-        .unwrap();
-        let catalog: Vec<PresetPetSpec> = serde_json::from_slice(&bytes).unwrap();
-        assert!(!catalog.is_empty(), "预设清单不应为空");
-        catalog
+        manifest::read_at(
+            &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/manifest.jsonc"),
+        )
+        .expect("shipped manifest should be valid")
+        .pets
+        .built_in
     }
 
     #[test]
     fn shipped_catalog_is_valid_and_remote_only() {
         // 随包分发的清单是唯一事实来源：字段名/形状写错必须在这里炸，
         // 而不是等用户点「启用」才在运行时静默失败。
-        for spec in shipped_catalog() {
+        let catalog = shipped_catalog();
+        assert!(!catalog.is_empty(), "预设清单不应为空");
+        for spec in catalog {
             assert!(safe_preset_id(&spec.id), "非法 id: {}", spec.id);
             assert!(!spec.name.trim().is_empty());
             assert!(!spec.config.trim().is_empty());
@@ -259,7 +179,7 @@ mod tests {
             kind: Some("dsh".to_string()),
             size: Some(220.0),
             config: "https://example.com/config.jsonc".to_string(),
-            uri: PresetPetUri {
+            uri: manifest::PresetPetUri {
                 default: "https://example.com/webm".to_string(),
                 mac: None,
             },

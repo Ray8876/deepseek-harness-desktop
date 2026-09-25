@@ -3,7 +3,7 @@
  *
  * `5b3b9534` 重建时 `client/apply.ts` 连同四个注册器被整体删除，宿主侧发送方
  * （`src/layout/components/webview.tsx`、`iframe.tsx`）原地保留，结果「壳的收起侧边栏」
- * 等控件全部空转。这里锁住四条 effect 都被登记，且登记过程确实挂上了父窗口桥监听。
+ * 等控件全部空转。这里锁住每条 effect 都被登记，且登记过程确实挂上了父窗口桥监听。
  */
 import type { ClientContext, ParentMessage } from './types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -16,6 +16,7 @@ const EXPECTED_LABELS = [
   'dsh-tauri: navigation (new session, add workspace)',
   'dsh-tauri: zoom shortcuts (ctrl/cmd +/-/0)',
   'dsh-tauri: sidebar tweaks (hide collapse toggle, center brand)',
+  'dsh-tauri: account sign-in (auto-open the authorize url)',
 ]
 
 /** 假 MutationObserver：只保证 controller.observe 可用。 */

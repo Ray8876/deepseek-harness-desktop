@@ -158,7 +158,7 @@ El paquete Harness prearmado lo publica [deepseek-harness-pkg](https://github.co
 
 Recursos remotos y catálogos oficiales que los plugins consumen en tiempo de ejecución:
 
-- [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) — recursos de las mascotas predefinidas (movimientos WebM, GIF de vista previa, `config.jsonc`); `preset-pets.json` fija `e1ff8c1`
+- [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) — recursos de las mascotas predefinidas (movimientos WebM, GIF de vista previa, `config.jsonc`); `pets.built-in` de `manifest.jsonc` fija `e1ff8c1`
 - [dsh-tauri/dsh-pet-mov](https://github.com/dsh-tauri/dsh-pet-mov) — espejo `.mov` HEVC-alpha para macOS (WKWebView no soporta VP9-alpha), fijado en `be0f3bb`
 - [hairyf/dsh-pet-component](https://github.com/hairyf/dsh-pet-component) — componente de render de la mascota (npm `dsh-pet-component`)
 

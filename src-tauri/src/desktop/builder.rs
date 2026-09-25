@@ -1,15 +1,12 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(windows)]
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(windows)]
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use std::sync::{Mutex, OnceLock};
 
-use tauri::{
-    ipc::Invoke,
-    Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuilder, Wry,
-};
+use tauri::{ipc::Invoke, Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuilder, Wry};
 
 // 托盘相关的 tauri 类型只在非 Linux 路径使用：Linux 走 desktop::linux_tray 的
 // KSNI 托盘（见该文件的背景说明），届时这些导入会变成未使用。
@@ -143,6 +140,11 @@ pub fn setup(app_handle: tauri::AppHandle) {
 
     // 启动进程监控（tick 检测 dsh 服务状态）
     crate::service::scheduler::start(&app_handle);
+
+    // `dsh://` 深链（成功页「打开应用」按钮）：仅打包态注册协议并接管 open-url
+    // （debug 注册会把系统 `dsh:` 指向调试产物）。
+    #[cfg(not(debug_assertions))]
+    crate::desktop::deep_link::init(&app_handle);
 
     // 开机自启动：已安装且开启 auto_start 时拉起服务
     let app_for_start = app_handle.clone();
@@ -562,7 +564,7 @@ pub fn build_main_window(app: &tauri::AppHandle<Wry>) -> tauri::Result<tauri::We
         // “源码”按钮在桌面端因此无法跳转（浏览器里正常）。
         // 这里把 http(s) 链接交给系统浏览器打开，其余协议一律拒绝。
         .on_new_window(move |url, features| on_new_window(app_handle.clone(), url, features))
-        .on_download(|webview, event| on_download(webview, event));
+        .on_download(on_download);
 
     #[cfg(windows)]
     let webview_builder = webview_builder.on_page_load(move |webview_window, payload| {
@@ -700,7 +702,7 @@ pub fn build_extra_window(app: &tauri::AppHandle<Wry>) -> tauri::Result<tauri::W
     let webview_builder = webview_builder
         .disable_drag_drop_handler()
         .on_new_window(move |url, features| on_new_window(app_handle.clone(), url, features))
-        .on_download(|webview, event| on_download(webview, event));
+        .on_download(on_download);
 
     #[cfg(windows)]
     let webview_builder = {
@@ -979,6 +981,9 @@ pub fn handler() -> impl Fn(Invoke<Wry>) -> bool + Send + Sync + 'static {
         crate::desktop::window::quit_app,
         crate::bridge::log_frontend,
         crate::bridge::get_pet_status,
+        crate::bridge::get_pet_overlay_supported,
+        crate::bridge::get_force_xwayland,
+        crate::bridge::set_force_xwayland,
         crate::bridge::set_pet_enabled,
         crate::bridge::set_active_pet,
         crate::bridge::set_pet_size,
@@ -1070,7 +1075,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
                 }
                 // get_store_dat_setting 内部已归一化，取值只可能是 tray 或 quit
                 let close_action =
-                    crate::config::get_store_dat_setting(&window.app_handle()).close_action;
+                    crate::config::get_store_dat_setting(window.app_handle()).close_action;
                 if close_action == crate::desktop::activation::CLOSE_ACTION_QUIT {
                     // 不 prevent_close、不 hide：直接退出。app.exit(0) 会走
                     // RunEvent::ExitRequested，既有的几何保存逻辑照常触发
@@ -1117,7 +1122,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             },
             tauri::WindowEvent::ScaleFactorChanged { .. } => {
                 if window.label() == crate::desktop::pet::PET_WINDOW_LABEL {
-                    crate::desktop::pet::apply_pet_size(&window.app_handle());
+                    crate::desktop::pet::apply_pet_size(window.app_handle());
                 }
             }
             tauri::WindowEvent::Resized(_) => {
@@ -1149,6 +1154,8 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
     // 仅在生产环境（release）启用：debug 开发调试时若启用单例，
     // 二次启动的调试进程会被吞掉（例如 tauri dev 多实例调试），
     // 因此开发环境跳过该插件。
+    // `deep-link` feature 只在单例在场时起作用：把二次启动携带的 `dsh://` URL
+    // （成功页「打开应用」按钮）转发给主实例派发 open-url。
     #[cfg(not(debug_assertions))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
         crate::utils::show_main_window(app);
@@ -1161,7 +1168,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
     #[cfg(windows)]
     let builder = builder.plugin(crate::desktop::tauri_internals::shim());
 
-    builder
+    let builder = builder
         // 官方跨平台登录启动实现：Windows HKCU Run、macOS LaunchAgent、Linux XDG。
         .plugin(
             tauri_plugin_autostart::Builder::new()
@@ -1182,5 +1189,12 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
         .plugin(tauri_plugin_store::Builder::new().build())
         // OS plugin：前端据此判断系统版本（macOS 10.15 没有 `WKWebView.pageZoom`，
         // 不能把缩放应用到 WebView），见 `hooks/use-zoom-factor.ts`。
-        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_os::init());
+
+    // `dsh://` 深链（成功页「打开应用」按钮）只在打包态启用：debug 注册会把系统
+    // `dsh:` 指向调试产物，与官方 Electron 的 `app.isPackaged` 门禁一致。
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_deep_link::init());
+
+    builder
 }

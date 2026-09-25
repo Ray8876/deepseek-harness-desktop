@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { containsInotifyLimitError, formatLogLine, pickErrorLines } from '../src/components/logs.utils'
+import { containsHeapOomError, containsInotifyLimitError, formatLogLine, pickErrorLines } from '../src/components/logs.utils'
 
 describe('formatLogLine', () => {
   it('strips the official GitHub release download prefix', () => {
@@ -39,6 +39,27 @@ describe('pickErrorLines', () => {
 
   it('handles empty input', () => {
     expect(pickErrorLines([])).toEqual([])
+  })
+})
+
+describe('containsHeapOomError', () => {
+  it('recognizes the V8 heap exhaustion message', () => {
+    expect(containsHeapOomError([
+      'FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory',
+    ])).toBe(true)
+  })
+
+  it('recognizes the heap exhaustion marker even when split across lines', () => {
+    expect(containsHeapOomError([
+      'FATAL ERROR: Ineffective mark-compacts near heap limit',
+      'Allocation failed - JavaScript heap out of memory',
+    ])).toBe(true)
+  })
+
+  it('does not treat a generic abort or unrelated memory error as V8 heap exhaustion', () => {
+    expect(containsHeapOomError(['Owned Harness process 42 exited with code 134; HARNESS_HEAP_OOM suspected'])).toBe(false)
+    expect(containsHeapOomError(['Error: JavaScript memory allocation failed'])).toBe(false)
+    expect(containsHeapOomError([])).toBe(false)
   })
 })
 

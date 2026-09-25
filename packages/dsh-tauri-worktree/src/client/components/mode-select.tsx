@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react'
+import type { DraftAttachmentDescriptor } from '../service/attachments.types'
 import type { InputActions } from '../service/session-switch.types'
 import type { ModeSelectProps } from './mode-select.types'
 import { ChevronDown, Chip, CircleTree, Icon, Menu } from 'dsh-tauri-ui/client'
@@ -15,10 +16,11 @@ import {
 import { useWaiter } from '../hooks/use-waiter'
 import { useWorktreeSession } from '../hooks/use-worktree-session'
 import { locale } from '../locales'
+import { awaitDraftUploads, captureDraftAttachments, mergeCapturedAttachments, recreateDraftAttachments, releaseDraftAttachments } from '../service/attachments'
 import { waitForInputActions, waitForSessionListed } from '../service/session-switch'
 import { attach, create } from '../service/worktree'
 import { store } from '../store'
-import { addDraftAttachments, canAddDraftAttachments, draftAttachmentIds, interceptsSubmit, removeDraftAttachment, resolveAccessModeGroup, showsModeSelect } from './mode-select.utils'
+import { addDraftAttachments, canAddDraftAttachments, draftAttachmentIds, hasSendableContent, interceptsSubmit, removeDraftAttachment, resolveAccessModeGroup, showsModeSelect } from './mode-select.utils'
 
 export function WorktreeModeSelect(props: ModeSelectProps): ReactElement {
   const { sessionId } = props
@@ -74,14 +76,30 @@ export function WorktreeModeSelect(props: ModeSelectProps): ReactElement {
   )
 }
 
-function WorktreeModeControl({ sessionId, useInput, inputActions, sessionsRuntime, workspacesRuntime }: ModeSelectProps): ReactElement | null {
+function WorktreeModeControl({ sessionId, useInput, inputActions, sessionsRuntime, workspacesRuntime, resolveAttachments }: ModeSelectProps): ReactElement | null {
   const state = useWorktreeSession(sessionId)
   const draft = useInput(input => input.draft)
-  const imageIds = useInput(draftAttachmentIds)
+  const attachmentIds = useInput(draftAttachmentIds)
   const { wait } = useWaiter()
   locale.useLocale()
   const [open, setOpen] = useState(false)
   const submittingRef = useRef(false)
+  const capturedRef = useRef<readonly DraftAttachmentDescriptor[]>([])
+  const sendable = hasSendableContent(draft, attachmentIds)
+
+  // keep:effect 附件本体必须尽早抓：会话作用域随时可能重新物化，对象一被释放就只剩死 id。
+  // 部分解析也要与早先那份按 id 合并——已经释放的对象再也抓不回来，替换掉等于丢附件。
+  useEffect(() => {
+    if (attachmentIds.length === 0) {
+      capturedRef.current = []
+      return
+    }
+    capturedRef.current = mergeCapturedAttachments(
+      captureDraftAttachments(resolveAttachments(), attachmentIds),
+      capturedRef.current,
+      attachmentIds,
+    )
+  }, [attachmentIds, resolveAttachments])
 
   // keep:effect 发送拦截依赖官方 composer 私有 DOM，没有 pre-submit 钩子可用
   useEffect(() => {
@@ -93,13 +111,22 @@ function WorktreeModeControl({ sessionId, useInput, inputActions, sessionsRuntim
       return
 
     const start = async (): Promise<void> => {
-      if (submittingRef.current || draft.trim() === '')
+      if (submittingRef.current || !sendable)
         return
       submittingRef.current = true
+      // 关键一步：在**任何 await 之前**拿到附件本体。建工作树要几秒，期间会话作用域会重新物化，
+      // 附件对象随即被释放（只剩死 id）——正文有持久化兜底，附件没有；现场抓一次，再与早先抓到的按 id 合并。
+      const conversation = resolveAttachments()
+      const captured = mergeCapturedAttachments(
+        captureDraftAttachments(conversation, attachmentIds),
+        capturedRef.current,
+        attachmentIds,
+      )
       const targetSessionId = `session-${crypto.randomUUID()}`
       store.worktree.patch(sessionId, { mode: 'pending', phase: 'creating', loadingLabel: locale.text('progressCreating'), error: '' })
       let switched = false
       let detached = false
+      let recreated: readonly { id: string }[] = []
       let nextActions: InputActions | undefined
       try {
         const created = await create({ sessionId: targetSessionId, sourceSessionId: sessionId, inherit: true })
@@ -118,20 +145,34 @@ function WorktreeModeControl({ sessionId, useInput, inputActions, sessionsRuntim
         await attach({ sessionId: targetSessionId })
         // 目标输入面只在切换后才物化，而源附件一旦摘除、源作用域随切换销毁就再也回不去：
         // 先用源输入面探测该核心的附件面是否可写，不可写就整体中止（此时草稿与附件都还没动）。
-        if (imageIds.length > 0 && !canAddDraftAttachments(inputActions))
+        if (attachmentIds.length > 0 && !canAddDraftAttachments(inputActions))
           throw new Error('无法迁移消息附件到工作树会话')
         // 0.1.6 起会话输入面只在被保留的会话上物化：先切换（切换即保留主视图）再取目标输入面。
         // 源会话的草稿与附件必须先摘除——源作用域随切换销毁，会把仍挂在其草稿上的附件从注册表释放。
         inputActions.setDraft('')
-        forEach(imageIds, imageId => removeDraftAttachment(inputActions, imageId))
+        forEach(attachmentIds, attachmentId => removeDraftAttachment(inputActions, attachmentId))
         detached = true
         sessionsRuntime.open(targetSessionId)
         switched = true
+        // 切换成功后才回收源侧本体：切换失败时回滚路径还要靠它们把附件放回源会话。
+        releaseDraftAttachments(conversation, captured)
         const actions = await waitForInputActions({ sessions: sessionsRuntime, sessionId: targetSessionId, wait })
         nextActions = actions
         actions.setDraft(draft)
-        if (!addDraftAttachments(actions, imageIds))
+        // 用抓到的本体在目标会话重建附件（新 id、新上传，凭证天然归属目标会话）；抓不到的旧 id 交给目标侧 prune 兜底。
+        const rebuilt = recreateDraftAttachments(conversation, targetSessionId, captured)
+        recreated = rebuilt.drafts
+        // 重建不齐就得整体中止：静默少带附件比失败回滚更糟，用户会以为发出去了（已建的先记下来供回滚回收）。
+        if (rebuilt.ids.length !== captured.length)
           throw new Error('无法迁移消息附件到工作树会话')
+        const capturedIds = new Set(captured.map(value => value.id))
+        const targetAttachmentIds = [
+          ...rebuilt.ids,
+          ...attachmentIds.filter(id => !capturedIds.has(id)),
+        ]
+        if (targetAttachmentIds.length > 0 && !addDraftAttachments(actions, targetAttachmentIds))
+          throw new Error('无法迁移消息附件到工作树会话')
+        await awaitDraftUploads({ conversation, ids: [...rebuilt.ids], wait })
         store.worktree.patch(sessionId, { mode: 'local', phase: 'idle', loadingLabel: '' })
         queueMicrotask(() => {
           try {
@@ -139,7 +180,7 @@ function WorktreeModeControl({ sessionId, useInput, inputActions, sessionsRuntim
           }
           finally {
             actions.setDraft('')
-            forEach(imageIds, imageId => removeDraftAttachment(actions, imageId))
+            forEach(targetAttachmentIds, attachmentId => removeDraftAttachment(actions, attachmentId))
           }
         })
         if (result.inherited)
@@ -155,17 +196,23 @@ function WorktreeModeControl({ sessionId, useInput, inputActions, sessionsRuntim
           try {
             sessionsRuntime.open(sessionId)
             const sourceActions = await waitForInputActions({ sessions: sessionsRuntime, sessionId, wait })
+            releaseDraftAttachments(conversation, recreated)
             sourceActions.setDraft(draft)
-            addDraftAttachments(sourceActions, imageIds)
-            restored = true
+            const back = recreateDraftAttachments(conversation, sessionId, captured)
+            // 放回也必须完整：重建不齐时不能对外声称已恢复（内容确实少了一部分）。
+            const complete = back.ids.length === captured.length
+            const added = addDraftAttachments(sourceActions, [...back.ids, ...attachmentIds.filter(id => !captured.some(value => value.id === id))])
+            restored = complete && added
           }
           catch {
             restored = false
           }
         }
         else if (detached) {
+          // 没切过去（源会话仍在当前视图）：用本体在源会话重建，避免源侧对象已被释放时把死 id 放回草稿。
           inputActions.setDraft(draft)
-          addDraftAttachments(inputActions, imageIds)
+          const back = recreateDraftAttachments(conversation, sessionId, captured)
+          addDraftAttachments(inputActions, [...back.ids, ...attachmentIds.filter(id => !captured.some(value => value.id === id))])
         }
         // 失败必须退回 local：停在 pending 会让拦截器一直吞掉发送事件，会话彻底不可用。
         store.worktree.patch(sessionId, {
@@ -200,8 +247,8 @@ function WorktreeModeControl({ sessionId, useInput, inputActions, sessionsRuntim
       }
       if (event instanceof KeyboardEvent && (event.key !== 'Enter' || event.shiftKey || event.isComposing))
         return
-      // 没有草稿就没什么可接管的，放行；吞掉事件却什么都不做，等价于把发送键焊死。
-      if (draft.trim() === '')
+      // 没有正文也没有附件就没什么可接管的，放行；吞掉事件却什么都不做，等价于把发送键焊死。
+      if (!sendable)
         return
       event.preventDefault()
       event.stopImmediatePropagation()
@@ -214,7 +261,7 @@ function WorktreeModeControl({ sessionId, useInput, inputActions, sessionsRuntim
       composerSeat.removeEventListener('click', intercept, true)
       composerSeat.removeEventListener('keydown', intercept, true)
     }
-  }, [draft, imageIds, inputActions, sessionId, sessionsRuntime, state.isGit, state.mode, wait, workspacesRuntime])
+  }, [draft, attachmentIds, inputActions, resolveAttachments, sendable, sessionId, sessionsRuntime, state.isGit, state.mode, wait, workspacesRuntime])
 
   if (!showsModeSelect(state))
     return null

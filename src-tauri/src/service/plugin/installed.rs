@@ -103,10 +103,10 @@ pub(crate) fn installed_name(p: &PreinstallPluginInfo) -> &str {
 pub fn list(app_handle: &AppHandle) -> Vec<PreinstallPlugin> {
     let installed = list_installed(app_handle);
     let is_windows = cfg!(windows);
-    // 弃用插件（deprecated-plugins.json 登记）不再提供安装入口，启动时自动卸载，
+    // 弃用插件（清单 `plugins.depercated` 登记）不再提供安装入口，启动时自动卸载，
     // 不进入首次引导清单。
     let deprecated_ids = load_deprecated_ids(app_handle);
-    // 当前活动核心版本：用于判定预设声明的 `dshSupportedVersion` 是否已被超越。
+    // 当前活动核心版本：按预设声明的（插件版本 ↔ 核心版本）矩阵判定兼容性。
     let core_version = crate::service::core::active_version(app_handle);
 
     load_presets(app_handle)
@@ -281,7 +281,6 @@ mod tests {
             fix: false,
             default_checked: true,
             default_unchecked: false,
-            dsh_supported_version: None,
             version: None,
             win_only: false,
             internal: false,

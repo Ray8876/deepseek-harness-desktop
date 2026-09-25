@@ -11,6 +11,13 @@ export const SETTINGS_SECTION_SLOT = 'settings.section'
 export const SETTINGS_TRIGGER_SLOT = 'settings.trigger'
 export const SETTINGS_ONBOARDING_SLOT = 'settings.onboarding'
 
+/**
+ * 官方设定面板底部的启动器座位：官方 `ui-settings-general` 的 `SettingsRoot` 在此渲染账号菜单
+ * （DeepSeek 官方登录入口），本插件以 `SETTINGS_TRIGGER_PRIORITY` 顶掉该条目后必须自行留位，
+ * 否则官方账号 UI 注册了也没有宿主。
+ */
+export const SETTINGS_LAUNCHER_SLOT = 'settings.launcher'
+
 export const SETTINGS_SIDEBAR_ID = 'dsh-tauri-ui-settings'
 export const SETTINGS_SIDEBAR_CLASS = 'dshp-settings-sidebar'
 
@@ -45,6 +52,12 @@ export const UNGROUPED_ROW_KEY = 'workspace:'
 /** dsh-im 客户端插件经 `ctx.provide` 发布的反射服务名（4.22.0 起）。 */
 export const DSH_IM_CLIENT_SERVICE = 'dshImClient'
 
+/**
+ * 折叠粘贴的引用源名：既是官方引用注册表里的唯一键，也是官方 chip 宿主元素写的
+ * `data-composer-chip` 值（C 浏览器层的断言锚点）。
+ */
+export const PASTE_CHIP_SOURCE = `${PLUGIN_ID}-paste`
+
 export const STYLES_EFFECT = `${PLUGIN_ID}: styles`
 export const LOCALE_EFFECT = `${PLUGIN_ID}: locale`
 export const SEAT_EFFECT = `${PLUGIN_ID}: shell.overlay seat`
@@ -55,6 +68,7 @@ export const IM_PANEL_EFFECT = `${PLUGIN_ID}: im panel`
 export const HERO_WORKSPACE_EFFECT = `${PLUGIN_ID}: hero workspace picker`
 export const NEW_SESSION_EFFECT = `${PLUGIN_ID}: sidebar new session`
 export const UNGROUPED_NEW_SESSION_EFFECT = `${PLUGIN_ID}: sidebar ungrouped new session`
+export const PASTE_COLLAPSE_EFFECT = `${PLUGIN_ID}: paste collapse`
 
 export const TURN_NAVIGATION_LABEL_ZH = '轮次导航'
 export const TURN_NAVIGATION_LABEL_EN = 'Turn navigation'

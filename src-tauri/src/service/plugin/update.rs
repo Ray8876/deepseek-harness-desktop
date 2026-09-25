@@ -8,8 +8,8 @@
 //! - `link:` / `file:` 本地依赖 → 永不视为有更新；
 //! - git 类型（`github:` / `git+https://github.com/…` / `https://codeload.github.com/…`）
 //!   → 用 pnpm-lock.yaml 里记录的 codeload 提交 SHA 对比 GitHub 跟踪目标：
-//!     git spec 显式声明 `#ref` 时跟踪该 tag / branch / SHA，未声明时跟踪 HEAD；
-//!     镜像安装写入的 codeload archive URL 记录的是当前安装提交，更新源仍是 HEAD；
+//!   git spec 显式声明 `#ref` 时跟踪该 tag / branch / SHA，未声明时跟踪 HEAD；
+//!   镜像安装写入的 codeload archive URL 记录的是当前安装提交，更新源仍是 HEAD；
 //! - 其余（registry）→ 用 npm registry 的 `latest` dist-tag 与已装版本做语义化比较，
 //!   `latest > installed` 才视为有更新（避免把 `latest` 指向更旧版本误判为可升级）。
 //!
@@ -672,17 +672,23 @@ mod tests {
     #[test]
     fn effective_spec_passes_through_when_it_cannot_resolve() {
         // 非 catalog spec、条目缺失、文件缺失/损坏 → 一律原样返回，绝不猜测
-        let dir = workspace_probe("passthrough", "packages:\n  - .\ncatalog:\n  other: ^1.0.0\n");
+        let dir = workspace_probe(
+            "passthrough",
+            "packages:\n  - .\ncatalog:\n  other: ^1.0.0\n",
+        );
         assert_eq!(effective_spec(&dir, "dsh-probe", "^2.0.0"), "^2.0.0");
-        assert_eq!(effective_spec(&dir, "dsh-probe", "github:a/b"), "github:a/b");
+        assert_eq!(
+            effective_spec(&dir, "dsh-probe", "github:a/b"),
+            "github:a/b"
+        );
         assert_eq!(effective_spec(&dir, "dsh-probe", "catalog:"), "catalog:");
         assert_eq!(
             effective_spec(&dir, "dsh-probe", "catalog:missing"),
             "catalog:missing"
         );
 
-        let absent = std::env::temp_dir()
-            .join(format!("dsh-update-cat-{}-absent", std::process::id()));
+        let absent =
+            std::env::temp_dir().join(format!("dsh-update-cat-{}-absent", std::process::id()));
         let _ = std::fs::remove_dir_all(&absent);
         assert_eq!(effective_spec(&absent, "dsh-probe", "catalog:"), "catalog:");
 

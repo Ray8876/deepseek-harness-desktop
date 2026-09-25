@@ -12,6 +12,29 @@ pub(super) fn diagnostic_suffix(detail: &str) -> String {
     }
 }
 
+/// 命中即视为可展示错误行的标记。除 pnpm/Node 的常规错误外，还覆盖「命令或
+/// shim 不可用」一类失败：cmd.exe 的 `'pnpm' is not recognized…`、shim 的
+/// `[pnpm] pnpm not found…`、批处理跳转失败 `The system cannot find the batch
+/// label…`，以及中文 cmd 文案。这些行不含 `error`/`failed`，一旦被过滤掉，
+/// 用户只会看到 dsh 包装后的 `pnpm failed in profile directory`，真实原因
+/// （shim 不可用）永远不可见。
+const ERROR_MARKERS: [&str; 14] = [
+    "ERR_",
+    "error",
+    "Error",
+    "failed",
+    "✖",
+    "warning",
+    "not recognized",
+    "not found",
+    "No such file",
+    "cannot find",
+    "Cannot find",
+    "找不到",
+    "无法",
+    "不是内部或外部命令",
+];
+
 /// 从 dsh/pnpm 失败输出中提取可展示的错误消息：优先 git 传输层提示；
 /// 否则挑出命中错误标记的行（最多 8 行），没有则取输出尾部，ANSI 清洗后
 /// 截断到 2000 字符。
@@ -26,14 +49,7 @@ pub(super) fn pick_error_message(output: &str, hint: Option<&str>) -> String {
             let trimmed = trimmed.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         })
-        .filter(|line| {
-            line.contains("ERR_")
-                || line.contains("error")
-                || line.contains("Error")
-                || line.contains("failed")
-                || line.contains("✖")
-                || line.contains("warning")
-        })
+        .filter(|line| ERROR_MARKERS.iter().any(|marker| line.contains(marker)))
         .take(8)
         .collect();
     let base = if cleaned.is_empty() {
@@ -215,6 +231,35 @@ mod tests {
     }
 
     // ---- git 传输层错误识别（区别于 allowBuilds 门禁）----
+
+    /// shim 不可用时 cmd.exe / shim 自己的原话，不含 `error`/`failed`：
+    /// 若被过滤掉，用户只剩 dsh 的 `pnpm failed in profile directory`。
+    #[test]
+    fn pick_error_message_keeps_shim_unavailable_lines() {
+        let out = "dsh: pnpm failed in profile directory C:\\Users\\小蔡\\.dsh\\profiles\\safe\n\
+                   [pnpm] pnpm not found. Please run DeepSeek Harness Desktop to install it first.\n";
+        let picked = pick_error_message(out, None);
+        assert!(
+            picked.contains("pnpm not found"),
+            "shim diagnostic must survive: {picked}"
+        );
+
+        let cmd = "'pnpm' is not recognized as an internal or external command,\noperable program or batch file.\n";
+        assert!(pick_error_message(cmd, None).contains("not recognized"));
+
+        let label = "The system cannot find the batch label specified - no_pnpm\n";
+        assert!(pick_error_message(label, None).contains("batch label"));
+    }
+
+    #[test]
+    fn pick_error_message_still_drops_noise() {
+        let out = "Progress: resolved 1, reused 0, downloaded 0\n\
+                   ERR_PNPM_LINKING_FAILED: stale symlink\n\
+                   Done in 2.8s\n";
+        let picked = pick_error_message(out, None);
+        assert!(picked.contains("ERR_PNPM_LINKING_FAILED"));
+        assert!(!picked.contains("Done in"), "progress noise must be dropped: {picked}");
+    }
 
     #[test]
     fn git_transport_hint_detects_host_key_failure() {

@@ -250,9 +250,15 @@ mod tests {
         assert_eq!(record.original, home_patch.display().to_string());
         // 原文件被移走、备份保留原始内容（绝不删除）。
         assert!(!home_patch.exists());
-        assert_eq!(std::fs::read_to_string(&record.backup).unwrap(), BROKEN_UNQUOTED_JS);
+        assert_eq!(
+            std::fs::read_to_string(&record.backup).unwrap(),
+            BROKEN_UNQUOTED_JS
+        );
         // 合法的档案层原样保留，且不产生备份。
-        assert_eq!(std::fs::read_to_string(&profile_patch).unwrap(), VALID_LAYER);
+        assert_eq!(
+            std::fs::read_to_string(&profile_patch).unwrap(),
+            VALID_LAYER
+        );
         assert_eq!(std::fs::read_dir(&profile).unwrap().count(), 1);
         let _ = std::fs::remove_dir_all(&profile);
         let _ = std::fs::remove_dir_all(&home);
@@ -264,7 +270,12 @@ mod tests {
         let home = tmp_dir("idempotent-home");
         std::fs::write(home.join(PATCH_FILENAME), BROKEN_UNQUOTED_JS).unwrap();
 
-        assert_eq!(quarantine_patch_layers_in(&profile, &home).quarantined.len(), 1);
+        assert_eq!(
+            quarantine_patch_layers_in(&profile, &home)
+                .quarantined
+                .len(),
+            1
+        );
         // 第二次调用：文件已不在，不再产生任何动作（可反复点「安全模式」）。
         let second = quarantine_patch_layers_in(&profile, &home);
         assert!(second.quarantined.is_empty());
@@ -281,17 +292,17 @@ mod tests {
         let first = dir.join(format!("{PATCH_FILENAME}.broken-20260914123456"));
         std::fs::write(&first, "keep me\n").unwrap();
 
-        let report = quarantine_layers(
-            &[patch.clone()],
-            "20260914123456",
-        );
+        let report = quarantine_layers(std::slice::from_ref(&patch), "20260914123456");
 
         assert_eq!(report.quarantined.len(), 1);
         let record = &report.quarantined[0];
         assert!(record.backup.ends_with("-2"), "{}", record.backup);
         // 既有备份内容不被覆盖。
         assert_eq!(std::fs::read_to_string(&first).unwrap(), "keep me\n");
-        assert_eq!(std::fs::read_to_string(&record.backup).unwrap(), BROKEN_UNQUOTED_JS);
+        assert_eq!(
+            std::fs::read_to_string(&record.backup).unwrap(),
+            BROKEN_UNQUOTED_JS
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -20,7 +20,7 @@ export interface HarnessCore {
   active: boolean
   /** 是否预览版（GitHub Pre-release label 或 tag 命名判定）：预览版不参与更新提示，仅列表展示 */
   preview: boolean
-  /** 是否高于 resources/version-recommend.json 中的推荐版本 */
+  /** 是否高于资源清单 engines.dsh.recommend 中的推荐版本 */
   aboveRecommended: boolean
   /** 本地存在但 pkg 仓库已不再提供的历史槽位 */
   orphaned: boolean

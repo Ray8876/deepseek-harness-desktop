@@ -1,13 +1,18 @@
+import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactElement } from 'react'
 import type { SettingsTriggerProps } from './trigger.types'
+import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import { SlotOutlet } from '@deepseek-ai/dsh-client-ui-renderer'
 import { uniq, useStore } from 'dsh-tauri/client'
 import { useCallback, useEffect, useState } from 'react'
+import { Gear } from '../components/icons'
 import {
+  SETTINGS_LAUNCHER_SLOT,
   SETTINGS_ONBOARDING_SLOT,
   SETTINGS_TRIGGER_SLOT,
 } from '../constants'
 import { useMountStyle } from '../hooks/use-mount-style'
+import { locale } from '../locales'
 import { store } from '../store'
 import settingsTriggerStyle from './trigger.cssr'
 
@@ -23,7 +28,7 @@ function isMainViewRetained(session: RetainedSessionLike): boolean {
 }
 
 export function SettingsTrigger({ wide, useSessions }: SettingsTriggerProps): ReactElement {
-  const { open } = useStore(store.settings)
+  const { open, launcherAvailable } = useStore(store.settings)
   const { onboarding } = useStore(store.sections)
   useMountStyle(settingsTriggerStyle, SETTINGS_TRIGGER_STYLE_ID)
   const [completed, setCompleted] = useState<string[]>([])
@@ -52,17 +57,66 @@ export function SettingsTrigger({ wide, useSessions }: SettingsTriggerProps): Re
     store.settings.openAt(id)
   }, [])
 
+  const [menuOpen, setMenuOpen] = useState(false)
+  locale.useLocale()
+  // 官方账号菜单占据设置座位时它就是「设置菜单」；座位缺席（更老核心 / 浏览器直开）时
+  // 由壳层自己给菜单——两者条目结构一致，宠物等插件按「含『设置』条目」补条目。
+  const menuItems: MenuEntry[] = [
+    { id: 'settings', label: locale.text('settings'), icon: <Gear width={16} height={16} /> },
+  ]
+
+  const trigger = (
+    <button
+      type="button"
+      aria-haspopup={launcherAvailable ? 'dialog' : 'menu'}
+      // 触发器同时是「设置菜单」和「设置侧栏」的入口：菜单开着或侧栏开着都算展开，
+      // 这样桌面载体（官方账号菜单直接开侧栏）与浏览器态（先开菜单再选设置）语义一致。
+      aria-expanded={open || menuOpen}
+      onClick={() => {
+        if (launcherAvailable) {
+          store.settings.openAt()
+          return
+        }
+        setMenuOpen(value => !value)
+      }}
+      className={`dshp-settings-trigger${wide ? '' : ' dshp-settings-trigger--rail'}`}
+    >
+      <SlotOutlet slotKey={SETTINGS_TRIGGER_SLOT} ownerProps={{ wide }} />
+    </button>
+  )
+
   return (
     <>
-      <button
-        type="button"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        onClick={() => store.settings.openAt()}
-        className={`dshp-settings-trigger${wide ? '' : ' dshp-settings-trigger--rail'}`}
-      >
-        <SlotOutlet slotKey={SETTINGS_TRIGGER_SLOT} ownerProps={{ wide }} />
-      </button>
+      {launcherAvailable
+        ? (
+            <SlotOutlet
+              slotKey={SETTINGS_LAUNCHER_SLOT}
+              ownerProps={{
+                wide,
+                openSettings: () => store.settings.openAt(),
+                openOnboarding: (id: string) => store.settings.openAt(id),
+              }}
+              opts={{ fallback: trigger }}
+            />
+          )
+        : (
+            <Menu
+              open={menuOpen}
+              side="top"
+              align="start"
+              portal
+              autoFocus
+              className="dshp-settings-trigger-host"
+              items={menuItems}
+              anchor={trigger}
+              onSelect={(id: string) => {
+                setMenuOpen(false)
+                if (id === 'settings')
+                  store.settings.openAt()
+              }}
+              onClose={() => setMenuOpen(false)}
+            />
+          )}
       {step !== undefined && (
         <SlotOutlet
           slotKey={SETTINGS_ONBOARDING_SLOT}

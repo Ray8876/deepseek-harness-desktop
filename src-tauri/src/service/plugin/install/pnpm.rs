@@ -119,9 +119,11 @@ pub(super) async fn ensure_pnpm(
         .map_err(|e| format!("PNPM_INTEGRITY_FAILED: {e}"))?;
     let dest = download::Pnpm.get_install_path(app_handle);
 
-    download::ensure_extract(&tracker, name, buffer, dest)
+    download::ensure_extract(&tracker, name, buffer, dest.clone())
         .await
         .map_err(|e| format!("PNPM_EXTRACT_FAILED: {e}"))?;
+    // 捆绑 pnpm 落盘后，该依赖的安装根即托管根（映射表随之更新）。
+    config::dependencies::record(app_handle, config::dependencies::DEP_PNPM, Some(dest));
 
     let _ = window.emit(
         PREINSTALL_LOG_EVENT,
@@ -641,11 +643,7 @@ fn parse_pnpm_major_output(pnpm: &Path, output: &std::process::Output) -> Option
 /// 安装不同的 pnpm（Corepack / 转发型 shim 尤其明显），使选出的主版本与实际安装
 /// 的不一致；反过来，少了 `bin_dir` 这一层就会漏掉「按 PATH 解析回桌面 shim」的
 /// 间接层，得出与安装相反的结论。
-fn pnpm_probe_path(
-    pnpm: &Path,
-    node: Option<&Path>,
-    bin_dir: Option<&Path>,
-) -> Option<OsString> {
+fn pnpm_probe_path(pnpm: &Path, node: Option<&Path>, bin_dir: Option<&Path>) -> Option<OsString> {
     let mut paths = Vec::new();
     if let Some(bin_dir) = bin_dir {
         paths.push(bin_dir.to_path_buf());
@@ -812,10 +810,7 @@ pub(crate) fn harness_prefer_bundled_pnpm(app_handle: &AppHandle) -> bool {
     }
     match store_major {
         Some(store) => bundled_major == Some(store) && user_major != Some(store),
-        None => match user_major {
-            Some(major) if major >= MIN_TRUSTED_PNPM_MAJOR => false,
-            _ => true,
-        },
+        None => !matches!(user_major, Some(major) if major >= MIN_TRUSTED_PNPM_MAJOR),
     }
 }
 
@@ -1153,7 +1148,10 @@ virtualStoreDir: node_modules/.pnpm
             strip_store_version("/Users/gao/Library/pnpm/store/v10/"),
             "/Users/gao/Library/pnpm/store"
         );
-        assert_eq!(strip_store_version("D:\\.pnpm-store\\v3"), "D:\\.pnpm-store");
+        assert_eq!(
+            strip_store_version("D:\\.pnpm-store\\v3"),
+            "D:\\.pnpm-store"
+        );
     }
 
     #[test]
@@ -1163,7 +1161,10 @@ virtualStoreDir: node_modules/.pnpm
             strip_store_version("C:\\Users\\x\\pnpm\\store"),
             "C:\\Users\\x\\pnpm\\store"
         );
-        assert_eq!(strip_store_version("/mnt/pnpm-store-v10"), "/mnt/pnpm-store-v10");
+        assert_eq!(
+            strip_store_version("/mnt/pnpm-store-v10"),
+            "/mnt/pnpm-store-v10"
+        );
         assert_eq!(strip_store_version("/mnt/v-store"), "/mnt/v-store");
         assert_eq!(strip_store_version("v10"), "v10");
         assert_eq!(strip_store_version(""), "");

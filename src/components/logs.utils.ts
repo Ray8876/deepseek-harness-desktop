@@ -39,3 +39,7 @@ export function pickErrorLines(lines: readonly string[]): string[] {
 export function containsInotifyLimitError(lines: readonly string[]): boolean {
   return lines.some(line => /ENOSPC/i.test(line) && /file watchers/i.test(line))
 }
+
+export function containsHeapOomError(lines: readonly string[]): boolean {
+  return lines.some(line => /JavaScript heap out of memory|Ineffective mark-compacts near heap limit/i.test(line))
+}

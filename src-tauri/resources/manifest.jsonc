@@ -1,0 +1,235 @@
+{
+  "engines": {
+    "dsh": {
+      "recommend": "0.1.5-rc.3",
+      "minimum": "0.1.5-rc.1"
+    },
+    "node": {
+      "version": ">=22.22.0"
+    },
+    "pnpm": {
+      "version": ">=11.7.0",
+      "sha256": "deafa7ec98a1218b6a047289b92fbe2395c1e22d3495bb711653013218ee15ee"
+    },
+    "git": {
+      "version": ">2.53.0.2",
+      "sha256": {
+        "x64": "d4bf83d6a860ccae9af44e508e1e00a39f09db6fa78a9ba5543b94d87ca22a29",
+        "arm64": "842d50edc6bbcf39693e60a8ebb9dabb89b96b932b63aae12d218522b3e497f3"
+      }
+    }
+  },
+  "dependencies": {
+    // 依赖映射规范：AppData 的 dependencies.json 只记录每个依赖的安装根
+    // （null = 用系统环境）；入口相对路径与默认托管根以本表为准。
+    // managedRoot / 映射值支持三种形态：
+    //   $AppData/...    AppData 数据目录（debug 构建为 <base>/dev 的同级）
+    //   $Resources/...  安装包资源目录（`resources/...` 为等价旧写法）
+    //   绝对路径         任意位置（如加载本地捆绑版内核）
+    "node": {
+      "engine": ">=22.22.0",
+      "entry": {
+        "windows": "node.exe",
+        "default": "bin/node"
+      },
+      "managedRoot": "$AppData/runtime",
+      "overridable": true
+    },
+    "pnpm": {
+      "engine": ">=11.7.0",
+      "entry": "bin/pnpm.cjs",
+      "managedRoot": "$AppData/dependencies/pnpm",
+      "overridable": true
+    },
+    "dsh": {
+      "engine": {
+        "recommend": "0.1.5-rc.3",
+        "minimum": "0.1.5-rc.1"
+      },
+      "entry": "node_modules/@deepseek-ai/dsh/lib/bin.js",
+      "managedRoot": "$AppData/dependencies/dsh",
+      "overridable": true
+    },
+    "git": {
+      "engine": ">2.53.0.2",
+      "entry": {
+        "windows": "cmd/git.exe",
+        "default": "bin/git"
+      },
+      "managedRoot": "$AppData/dependencies/git",
+      "overridable": true
+    }
+  },
+  "plugins": {
+    "depercated": [
+      "dsh-win-terminal-inspector",
+      "dsh-session-context-menu",
+      "dsh-notification",
+      "dsh-tauri-panel",
+      "dsh-tauri-turnrewind",
+      "dsh-tauri-connection"
+    ],
+    "built-in": [
+      {
+        "id": "dsh-tauri",
+        "spec": "dsh-tauri",
+        "name": "DSH Tauri",
+        "description": "Message bridge for the DeepSeek Harness desktop shell. Also carries the desktop authentication adaptation: the embedded sandboxed WebView is cross-origin, so it cannot complete the SameSite=Strict browser-session cookie exchange.",
+        "repo": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri"
+      },
+      {
+        "id": "dsh-tauri-running-changes",
+        "spec": "dsh-tauri-running-changes",
+        "name": "DSH Running Changes",
+        "description": "Turn-level change tracking for the desktop shell: a private Git snapshot per agent turn and an input-dock chip reporting the changed files and +N -M of the turn that is currently running. Restoring files is handled by the recommended dsh-rewind plugin.",
+        "repo": "https://github.com/dsh-tauri-desk/deepseek-harness-desktop/tree/main/packages/dsh-tauri-running-changes"
+      },
+      {
+        "id": "dsh-tauri-ui",
+        "spec": "dsh-tauri-ui",
+        "name": "DSH Tauri UI",
+        "description": "Customized Tauri UI plugin for the DeepSeek Harness desktop shell: provides the settings sidebar, settings sections, and shared UI integration points",
+        "repo": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-ui"
+      },
+      {
+        "id": "dsh-tauri-worktree",
+        "spec": "dsh-tauri-worktree",
+        "name": "DSH Tauri Worktree",
+        "description": "Per-session isolated Git Worktree for the desktop shell: switch a conversation to its own isolated worktree, then check changes back into a local dsh/ branch or discard them.",
+        "repo": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-worktree"
+      },
+      {
+        "id": "dsh-tauri-panel-extension",
+        "spec": "dsh-tauri-panel-extension",
+        "name": "DSH Tauri Panel Extension",
+        "description": "Skills, MCP, and the plugin market in the DeepSeek Harness desktop extension panel.",
+        "repo": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-panel-extension"
+      },
+      {
+        "id": "dsh-tauri-panel-scheduler",
+        "spec": "dsh-tauri-panel-scheduler",
+        "name": "DSH Tauri Panel Scheduler",
+        "description": "Scheduled tasks for the DeepSeek Harness desktop panel: create daily/interval/workday/weekly automations, run them in fresh sessions on schedule, and review run history.",
+        "repo": "https://github.com/dsh-tauri-desk/deepseek-harness-desktop/tree/main/packages/dsh-tauri-panel-scheduler"
+      },
+      {
+        "id": "dsh-tauri-session",
+        "spec": "dsh-tauri-session",
+        "name": "DSH Tauri Session",
+        "description": "Session archive for the desktop: rewrites the workspace browser's 'delete workspace' action into 'archive workspace', and adds an 'Archived chats' settings page with search, sort, grouping, project filter and unarchive.",
+        "repo": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-session"
+      },
+      {
+        "id": "dsh-tauri-pet",
+        "spec": "dsh-tauri-pet",
+        "name": "DSH Tauri Pet",
+        "description": "Persistent animated desktop pets with conversation activity states, bubbles, and Chat/Codex pet libraries.",
+        "repo": "https://github.com/dsh-tauri-desk/deepseek-harness-desktop/tree/main/packages/dsh-tauri-pet"
+      },
+      {
+        "id": "dsh-tauri-rightclick",
+        "spec": "dsh-tauri-rightclick",
+        "name": "DSH Tauri Rightclick Menu",
+        "description": "Native-style right-click context menu for the desktop shell: quick actions for sessions, workspaces, conversation text, links, and inputs — in-house successor to the deprecated dsh-session-context-menu.",
+        "repo": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-rightclick"
+      },
+      {
+        "id": "dsh-tauri-model-config",
+        "spec": "dsh-tauri-model-config",
+        "name": "DSH Tauri Model Config",
+        "description": "Model selection and parameter configuration for the DeepSeek Harness desktop shell",
+        "repo": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-model-config"
+      }
+    ],
+    "preset": [
+      {
+        "id": "dshmarket",
+        "spec": "dshmarket",
+        "name": "DSH Market",
+        "repo": "https://github.com/dsh-market/dsh-market",
+        "description": "Visual plugin market inside DeepSeek Harness — browse, search, and one-click install community plugins.",
+        "recommended": true,
+        "checked": true,
+        "version": "latest"
+      },
+      {
+        "id": "dsh-better-sidebar",
+        "spec": "dsh-better-sidebar",
+        "name": "DSH Better Sidebar",
+        "description": "A VSCode-like right sidebar (explorer / editor / terminal / git / browser), isolated per conversation session. Exposes a service for other plugins to register sidebar tabs and file viewers.",
+        "repo": "https://github.com/omdsh-dev/DSH-better-sidebar",
+        "recommended": true,
+        "checked": true,
+        "version": [
+          {
+            "version": "^0.19.1",
+            "dsh": "^0.1.5-rc.1"
+          },
+          {
+            "version": "^0.21.1",
+            "dsh": "^0.1.7-rc.1"
+          }
+        ]
+      },
+      {
+        "id": "dsh-rewind-plugin",
+        "spec": "dsh-rewind-plugin",
+        "name": "DSH Rewind",
+        "description": "In-window conversation rewind that never forks a new session, with a lightweight workspace backup that restores files together with the rewind.",
+        "repo": "https://github.com/SiriLee/dsh-rewind",
+        "recommended": true,
+        "checked": true,
+        "version": [
+          {
+            "version": "^0.12.2",
+            "dsh": "^0.1.5-rc.1"
+          },
+          {
+            "version": "^0.14.0-beta.1",
+            "dsh": "^0.1.7-rc.1"
+          }
+        ]
+      },
+      {
+        "id": "@xmanrui/dsh-im",
+        "spec": "@xmanrui/dsh-im",
+        "name": "DSH IM",
+        "description": "Connect IM channels (WeChat, Feishu, DingTalk, WeCom, QQ, Slack, Telegram, Discord, WhatsApp, iMessage and more) plus a public AI Office to a local DeepSeek Harness, with bot management in the desktop sidebar.",
+        "repo": "https://github.com/xmanrui/dsh-im",
+        "recommended": true,
+        "checked": false,
+        "version": [
+          {
+            "version": "^4.25.0",
+            "dsh": "^0.1.5-rc.1"
+          },
+          {
+            "version": "^4.28.0",
+            "dsh": "^0.1.7-rc.1"
+          }
+        ]
+      }
+    ]
+  },
+  "pets": {
+    "built-in": [
+      {
+        "id": "maid-deepseek-whale",
+        "name": "Maid DeepSeek Whale",
+        "desc": "一只小小的七比蓝头发的鲸鱼女仆Codex宠物，穿着海军蓝裙子，白色褶边，蓝眼睛，侧鳍和鲸鱼尾巴。",
+        "image": "https://raw.githubusercontent.com/PC2005-cloud/dsh-pet/e1ff8c1e4001878cbb80441262d530e16541f138/dsh-pet/assets/preview/daiji-huxi-xiuxian.gif",
+        "kind": "dsh",
+        "size": 220,
+        "config": "https://raw.githubusercontent.com/PC2005-cloud/dsh-pet/e1ff8c1e4001878cbb80441262d530e16541f138/dsh-pet/assets/config.jsonc",
+        "uri": {
+          "default": "https://raw.githubusercontent.com/PC2005-cloud/dsh-pet/e1ff8c1e4001878cbb80441262d530e16541f138/dsh-pet/assets/webm",
+          "mac": "https://raw.githubusercontent.com/dsh-tauri-desk/dsh-pet-mov/be0f3bb494cb71a4c73f916c0b92d25a3ab4d002/mov"
+        },
+        "ext": {
+          "default": "webm",
+          "mac": "mov"
+        }
+      }
+    ]
+  }
+}

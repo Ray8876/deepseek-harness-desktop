@@ -6,14 +6,14 @@
 //! 1. git 托管插件的 `prepare` 构建（`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`）——
 //!    其允许键随 pnpm 的克隆方式变化（git+ssh#sha / codeload tar.gz），无法预先确定；
 //! 2. 传递依赖的原生构建（如 `node-pty`，`ERR_PNPM_IGNORED_BUILDS`）。
-//! 因此从 pnpm 错误输出解析它建议的允许键，写入 profile 的
-//! `pnpm-workspace.yaml` 后重试，直至成功或无可解析项。
+//!    因此从 pnpm 错误输出解析它建议的允许键，写入 profile 的
+//!    `pnpm-workspace.yaml` 后重试，直至成功或无可解析项。
 //!
 //! pnpm 10 与 11 对放行项的配置键与输出形式不同（均由各自报错提示决定，只能运行期
 //! 读取，见 [`allowlist::parse_allowlist_keys`] 与 [`allowlist::apply_allow_build_keys`]）：
 //! - pnpm 10（旧 store 复用用户版）只认 `onlyBuiltDependencies`（list 形式）；
 //! - pnpm 11（捆绑版）认 `allowBuilds`（map 形式）。
-//! 应用会把同一批包名同时写入这两个键，保证任一版本 pnpm 都能读到放行项。
+//!   应用会把同一批包名同时写入这两个键，保证任一版本 pnpm 都能读到放行项。
 //!
 //! 关键陷阱：pnpm v11 在 `allowBuilds` 阻断时可能仍以 **exit 0** 退出（假成功），
 //! 所以重试逻辑不能只看退出码（见 [`run_plugin_with_allow_build_retry`]），安装成功
@@ -165,6 +165,7 @@ async fn install_with_cancel(
         let raw = normalize_git_spec(&preset_spec_for_install(
             preset,
             bundled_dir_of(app_handle, preset),
+            core_version.as_deref(),
         )?);
         if config::offline_build()
             && !raw.starts_with("link:")
@@ -406,6 +407,7 @@ async fn install_with_cancel(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_plugin_with_allow_build_retry(
     app_handle: &AppHandle,
     node: &Path,
@@ -418,6 +420,9 @@ async fn run_plugin_with_allow_build_retry(
     owner: ProcessOwner,
 ) -> Result<(i32, String), String> {
     let _operation_guard = acquire_operation_lock().await;
+    // 上一次被强杀的安装（取消 / 刷新 / 退出）会在 profile 里留下 dsh 的孤儿写锁，
+    // 之后每次安装都要静默等到 deadline。dsh 侧不做恢复，这里按 PID 存活代劳。
+    super::process::clear_orphan_plugin_writer_lock(&super::installed::profile_dir(app_handle));
     let mut retries = 0usize;
     let mut all_output = String::new();
     let exit_code = loop {
@@ -472,6 +477,7 @@ async fn run_plugin_with_allow_build_retry(
 ///
 /// 识别到瞬时失败后再跑一次完整命令（有界，见 [`TRANSIENT_FS_RETRIES`]），每次重试前
 /// 短暂休眠等 reparse point 落定 / 杀软扫完；该失败是概率性的，重试即大概率越过。
+#[allow(clippy::too_many_arguments)]
 async fn run_plugin_install_with_transient_retry(
     app_handle: &AppHandle,
     node: &Path,
@@ -554,7 +560,10 @@ mod tests {
     #[test]
     fn transient_fs_failure_detects_uv_unknown_exit_code() {
         assert!(is_transient_fs_install_failure(-4094, ""));
-        assert!(is_transient_fs_install_failure(-4094, "some unrelated output"));
+        assert!(is_transient_fs_install_failure(
+            -4094,
+            "some unrelated output"
+        ));
     }
 
     #[test]
@@ -564,20 +573,38 @@ mod tests {
         let output = "[UNKNOWN] unknown error, open 'C:\\Users\\x\\.dsh\\profiles\\web\\node_modules\\dsh-tauri\\package.json'";
         assert!(is_transient_fs_install_failure(1, output));
         // `[unknown]` / `unknown error` 大小写不敏感
-        assert!(is_transient_fs_install_failure(1, &output.to_ascii_lowercase()));
+        assert!(is_transient_fs_install_failure(
+            1,
+            &output.to_ascii_lowercase()
+        ));
     }
 
     #[test]
     fn transient_fs_retry_delay_uses_exponential_backoff() {
-        assert_eq!(transient_fs_retry_delay(1), std::time::Duration::from_secs(1));
-        assert_eq!(transient_fs_retry_delay(2), std::time::Duration::from_secs(2));
-        assert_eq!(transient_fs_retry_delay(8), std::time::Duration::from_secs(64));
+        assert_eq!(
+            transient_fs_retry_delay(1),
+            std::time::Duration::from_secs(1)
+        );
+        assert_eq!(
+            transient_fs_retry_delay(2),
+            std::time::Duration::from_secs(2)
+        );
+        assert_eq!(
+            transient_fs_retry_delay(8),
+            std::time::Duration::from_secs(64)
+        );
     }
 
     #[test]
     fn transient_fs_failure_rejects_ordinary_failures() {
-        assert!(!is_transient_fs_install_failure(1, "ERR_PNPM_SPEC_NOT_SUPPORTED"));
-        assert!(!is_transient_fs_install_failure(254, "ENOENT: no such file"));
+        assert!(!is_transient_fs_install_failure(
+            1,
+            "ERR_PNPM_SPEC_NOT_SUPPORTED"
+        ));
+        assert!(!is_transient_fs_install_failure(
+            254,
+            "ENOENT: no such file"
+        ));
         assert!(!is_transient_fs_install_failure(
             3,
             "ERR_PNPM_FETCH_404 registry error"

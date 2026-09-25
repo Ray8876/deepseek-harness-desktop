@@ -146,22 +146,24 @@ pub async fn remove(app_handle: &AppHandle, id: &str) -> Result<(), String> {
 
 /// 计算需要自动卸载的弃用插件已安装包名（纯函数，便于单测）。
 ///
-/// 命中条件：id 登记在弃用清单（`resources/deprecated-plugins.json`，见
-/// [`super::super::preset::load_deprecated_ids`]）且当前已安装。返回实际安装包名
-/// ——离线卸载（`uninstall_recovery`）以它为键从 profile 清单与 `node_modules`
-/// 精准移除（scoped 包名与预设 id 不一致时也能正确卸载）。
+/// 命中条件：id 登记在弃用名单（`resources/manifest.jsonc` 的 `plugins.depercated`，
+/// 见 [`super::super::preset::load_deprecated_ids`]）且当前已安装，或插件被当前核心
+/// 淘汰（[`PreinstallPluginInfo::retire_on`]：核心已超出清单声明的版本区间、或已安装
+/// 版本不再落在该核心对应的插件版本区间内）。返回实际安装包名——离线卸载
+/// （`uninstall_recovery`）以它为键从 profile 清单与 `node_modules` 精准移除
+/// （scoped 包名与预设 id 不一致时也能正确卸载）。
 ///
 /// 两条来源缺一不可：
 /// 1. 预设仍声明该 id：以 `installed_name`（实际 npm 包名）为准；内部插件由启动
 ///    自愈强制安装，不适用弃用语义，跳过。
 /// 2. 兜底——预设清单已不存在该 id（被整体删除，如 `dsh-tauri-panel` 并入核心后
-///    从 `internal-plugins.json` 移除）：此时按弃用清单登记的 id 本身核对。少了
+///    从 `plugins.built-in` 移除）：此时按弃用名单登记的 id 本身核对。少了
 ///    这一步，弃用名单对「连预设条目一起删掉」的插件永远无效，其 `link:` 目标还会
 ///    因安装目录残留而躲过失效链接清理，残留 bundle 直接拖垮启动。
 fn deprecated_installed_names(
     presets: &[PreinstallPluginInfo],
     deprecated_ids: &HashSet<String>,
-    unsupported_ids: &HashSet<String>,
+    core_version: Option<&str>,
     installed: impl Fn(&str) -> bool,
     installed_version: impl Fn(&str) -> Option<String>,
 ) -> Vec<String> {
@@ -175,22 +177,7 @@ fn deprecated_installed_names(
             if !p.internal && deprecated_ids.contains(&p.id) {
                 return true;
             }
-            if !unsupported_ids.contains(&p.id) {
-                return false;
-            }
-            let Some(limit) = p.version.as_deref() else {
-                return true;
-            };
-            let Some(actual) = installed_version(name) else {
-                return false;
-            };
-            match (
-                semver::Version::parse(&actual),
-                semver::Version::parse(limit),
-            ) {
-                (Ok(actual), Ok(limit)) => !actual.cmp_precedence(&limit).is_gt(),
-                _ => false,
-            }
+            p.retire_on(core_version, installed_version(name).as_deref())
         })
         .map(|p| installed_name(p).to_string())
         .collect();
@@ -222,17 +209,11 @@ pub(crate) async fn uninstall_deprecated_plugins(app_handle: &AppHandle) -> Resu
     let presets = load_presets(app_handle);
     let core_version = core::active_version(app_handle);
     let deprecated_ids = load_deprecated_ids(app_handle);
-    let mut unsupported_ids: HashSet<String> = HashSet::new();
-    for preset in &presets {
-        if preset.unsupported_on(core_version.as_deref()) {
-            unsupported_ids.insert(preset.id.clone());
-        }
-    }
     let profile = profile_dir(app_handle);
     let names = deprecated_installed_names(
         &presets,
         &deprecated_ids,
-        &unsupported_ids,
+        core_version.as_deref(),
         |name| deprecated_residue_present(app_handle, name),
         |name| installed_package_version(&profile, name),
     );
@@ -427,30 +408,48 @@ async fn run_single_plugin_command(
 #[cfg(test)]
 mod tests {
     use super::*;
-    /// 测试入口：只关心弃用清单时补一个空的 unsupported 集合。
+    use crate::config::manifest::{PluginVersion, VersionPair};
+
+    /// 测试入口：只关心弃用清单时补一个「未知核心版本 + 未知已安装版本」。
     fn deprecated_names(
         presets: &[PreinstallPluginInfo],
         ids: &HashSet<String>,
         installed: impl Fn(&str) -> bool,
     ) -> Vec<String> {
-        deprecated_installed_names(presets, ids, &HashSet::new(), installed, |_| None)
+        deprecated_installed_names(presets, ids, None, installed, |_| None)
     }
 
-    /// 内置插件被核心吸收后同样退役：只靠 `dshSupportedVersion` 判定，弃用清单不参与。
+    /// 内置插件被核心吸收后同样退役：只靠清单声明的版本矩阵（`retire_on`）判定，
+    /// 弃用清单不参与。
     #[test]
     fn unsupported_internal_entry_is_uninstalled() {
-        let internal = preset("dsh-internal", "dsh-tauri@0.2.0", true);
-        let unsupported: HashSet<String> = ["dsh-internal"].into_iter().map(String::from).collect();
+        let mut entry = preset("dsh-internal", "dsh-tauri@0.2.0", true);
+        entry.version = Some(PluginVersion::Matrix(vec![VersionPair {
+            version: "^1.2.3".into(),
+            dsh: "^0.1.5-rc.1".into(),
+        }]));
+
+        // 核心已超出声明区间，且已安装版本仍落在同代区间内 → 退役
         assert_eq!(
             deprecated_installed_names(
-                &[internal],
+                &[entry.clone()],
                 &HashSet::new(),
-                &unsupported,
+                Some("0.2.0"),
                 |name| name == "dsh-internal",
-                |_| None,
+                |_| Some("1.2.3".into()),
             ),
             vec!["dsh-internal".to_string()]
         );
+
+        // 已安装版本比清单声明的更新 → 保留，不误删用户手上的修复版
+        assert!(deprecated_installed_names(
+            &[entry],
+            &HashSet::new(),
+            Some("0.2.0"),
+            |name| name == "dsh-internal",
+            |_| Some("2.0.0".into()),
+        )
+        .is_empty());
     }
 
     fn preset(id: &str, spec: &str, internal: bool) -> PreinstallPluginInfo {
@@ -465,7 +464,6 @@ mod tests {
             fix: false,
             default_checked: false,
             default_unchecked: false,
-            dsh_supported_version: None,
             version: None,
             win_only: false,
             internal,
@@ -473,70 +471,61 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_cleanup_respects_installed_version_cap() {
-        for (cap, actual, remove) in [
-            (Some("1.2.0"), Some("1.1.9"), true),
-            (Some("1.2.0"), Some("1.2.0"), true),
-            (Some("1.2.0"), Some("1.2.1"), false),
-            (Some("1.2.0"), Some("1.10.0"), false),
-            (Some("1.2.0"), Some("1.2.0-rc.2"), true),
-            (Some("1.2.0-rc.2"), Some("1.2.0-rc.10"), false),
-            (Some("1.2.0-rc.2"), Some("1.2.0"), false),
-            (Some("1.2.0"), Some("1.2.0+reinstalled"), true),
-            (Some("1.2.0+original"), Some("1.2.0+rebuilt"), true),
-            (Some("1.2.0"), None, false),
-            (Some("1.2.0"), Some("invalid"), false),
+    fn unsupported_cleanup_respects_declared_version_ranges() {
+        let declared = vec![
+            VersionPair {
+                version: "^1.2.0".into(),
+                dsh: "^0.1.5-rc.1".into(),
+            },
+            VersionPair {
+                version: "^1.4.0".into(),
+                dsh: "^0.1.7-rc.1".into(),
+            },
+        ];
+        for (core, actual, remove) in [
+            (Some("0.1.5-rc.3"), Some("1.2.0"), false),
+            (Some("0.1.6"), Some("1.2.5"), false),
+            (Some("0.1.6"), Some("1.4.0"), false),
+            (Some("0.1.7-rc.2"), Some("1.4.0"), false),
+            (Some("0.1.7-rc.2"), Some("1.2.0"), true),
+            (Some("0.2.0"), Some("1.4.0"), true),
+            (Some("0.2.0"), Some("2.0.0"), false),
+            (Some("0.2.0"), Some("1.0.0"), false),
+            (Some("0.2.0"), None, false),
+            (Some("0.2.0"), Some("invalid"), false),
+            (None, Some("1.2.0"), false),
             (Some("invalid"), Some("1.2.0"), false),
-            (Some(""), Some("1.2.0"), false),
-            (None, Some("9.0.0"), true),
-            (None, None, true),
         ] {
             let mut entry = preset("probe", "@scope/probe", false);
             entry.package = Some("@scope/probe".into());
-            entry.version = cap.map(String::from);
-            entry.dsh_supported_version = Some("0.1.7".into());
-            for core in [
-                None,
-                Some("invalid"),
-                Some("0.1.6"),
-                Some("0.1.7"),
-                Some("0.1.8"),
-            ] {
-                let unsupported = if entry.unsupported_on(core) {
-                    HashSet::from([entry.id.clone()])
-                } else {
-                    HashSet::new()
-                };
-                let names = deprecated_installed_names(
-                    &[entry.clone()],
-                    &HashSet::new(),
-                    &unsupported,
-                    |name| name == "@scope/probe",
-                    |name| {
-                        assert_eq!(name, "@scope/probe");
-                        actual.map(String::from)
-                    },
-                );
-                let expected = if remove && core == Some("0.1.8") {
-                    vec!["@scope/probe".to_string()]
-                } else {
-                    Vec::new()
-                };
-                assert_eq!(
-                    names, expected,
-                    "core={core:?}, cap={cap:?}, actual={actual:?}"
-                );
-            }
+            entry.version = Some(PluginVersion::Matrix(declared.clone()));
+            let names = deprecated_installed_names(
+                &[entry.clone()],
+                &HashSet::new(),
+                core,
+                |name| name == "@scope/probe",
+                |name| {
+                    assert_eq!(name, "@scope/probe");
+                    actual.map(String::from)
+                },
+            );
+            let expected = if remove {
+                vec!["@scope/probe".to_string()]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(names, expected, "core={core:?}, actual={actual:?}");
         }
     }
 
     #[test]
-    fn explicit_deprecation_still_removes_versions_above_cap() {
+    fn explicit_deprecation_removes_regardless_of_installed_version() {
+        // 显式弃用是发布侧决策：与已安装版本、与核心版本都无关，一律卸载
         let mut entry = preset("probe", "probe", false);
-        entry.version = Some("1.2.0".into());
+        entry.version = Some(PluginVersion::Declared("1.2.0".into()));
         let ids = HashSet::from(["probe".to_string()]);
         assert_eq!(
-            deprecated_installed_names(&[entry], &ids, &ids, |_| true, |_| Some("2.0.0".into()),),
+            deprecated_installed_names(&[entry], &ids, None, |_| true, |_| Some("2.0.0".into()),),
             vec!["probe".to_string()]
         );
     }
@@ -553,12 +542,14 @@ mod tests {
         .unwrap();
         let mut entry = preset("probe", "@scope/probe", false);
         entry.package = Some("@scope/probe".into());
-        entry.version = Some("1.2.0".into());
-        let unsupported = HashSet::from(["probe".to_string()]);
+        entry.version = Some(PluginVersion::Matrix(vec![VersionPair {
+            version: "^0.18.0".into(),
+            dsh: "^0.1.5-rc.1".into(),
+        }]));
         let names = deprecated_installed_names(
             &[entry],
             &HashSet::new(),
-            &unsupported,
+            Some("0.2.0"),
             |_| true,
             |name| installed_package_version(&dir, name),
         );
@@ -617,7 +608,7 @@ mod tests {
     #[test]
     fn deprecated_installed_falls_back_when_preset_entry_removed() {
         // 弃用条目已从预设清单整体删除（dsh-tauri-panel 并入核心后从
-        // internal-plugins.json 移除）：预设驱动的循环命中不到，兜底按 id 卸载。
+        // plugins.built-in 移除）：预设驱动的循环命中不到，兜底按 id 卸载。
         let removed: HashSet<String> = ["dsh-tauri-panel"].into_iter().map(String::from).collect();
 
         assert_eq!(

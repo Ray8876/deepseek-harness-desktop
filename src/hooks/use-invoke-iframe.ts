@@ -29,13 +29,19 @@ interface InvokeBridgeRequest {
 
 /**
  * 允许 iframe 桥调用的 Tauri command 白名单（与 dsh-tauri-pet 的
- * client/apis/index.ts 一一对应）。凡新增可经桥调用的 command 必须在此登记，
+ * client/constants/index.ts 中 `CMD_*` 一一对应）。凡新增可经桥调用的 command 必须在此登记，
  * 防止 iframe 内其他插件借道桥执行任意 Tauri command（越权）。
  */
 const ALLOWED_INVOKE_CMDS = new Set([
   // 只读布尔量，供 dsh-tauri-ui 决定是否挂载仅 dev 可见的调试面板。
   'is_dev_build',
+  // dsh-tauri 客户端接管官方登录：账号流进入 waiting-browser 时把授权地址交给系统浏览器
+  // （命令自身只放行 http(s)，见 bridge/system_os.rs）。
+  'open_external_url',
   'get_pet_status',
+  'get_pet_overlay_supported',
+  'get_force_xwayland',
+  'set_force_xwayland',
   'set_pet_enabled',
   'set_active_pet',
   'set_pet_size',

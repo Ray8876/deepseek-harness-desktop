@@ -159,7 +159,7 @@ The prebuilt Harness bundle is published by [deepseek-harness-pkg](https://githu
 
 Remote assets and upstream catalogs that plugins reference at runtime:
 
-- [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) — preset pet media (WebM motions, preview GIFs, `config.jsonc`); `preset-pets.json` pins `e1ff8c1`
+- [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) — preset pet media (WebM motions, preview GIFs, `config.jsonc`); `pets.built-in` in `manifest.jsonc` pins `e1ff8c1`
 - [dsh-tauri/dsh-pet-mov](https://github.com/dsh-tauri/dsh-pet-mov) — macOS HEVC-alpha `.mov` mirror (WKWebView does not support VP9-alpha), pinned to `be0f3bb`
 - [hairyf/dsh-pet-component](https://github.com/hairyf/dsh-pet-component) — pet rendering component (npm `dsh-pet-component`)
 

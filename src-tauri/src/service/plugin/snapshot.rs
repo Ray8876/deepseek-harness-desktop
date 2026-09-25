@@ -16,9 +16,9 @@
 //! 还原为三阶段 + 回滚：
 //! 1. 预检：id 校验 + 快照存在 + 归档完整性 + 操作锁 + 停止服务；
 //! 2. 暂存：同盘解压到 `.staging-*` 并校验（package.json 可解析、无逃逸、
-//!   拒绝符号链接——复用 `archive::extract_archive_gzip`）；
+//!    拒绝符号链接——复用 `archive::extract_archive_gzip`）；
 //! 3. 切换：真实目录 → `.backup-*` rename，暂存包体 → 真实目录 rename，
-//!   校验后清理备份；任一步失败则反转已做步骤（备份还原回原位）。
+//!    校验后清理备份；任一步失败则反转已做步骤（备份还原回原位）。
 //!
 //! 还原范围：仅 `is_actionable_plugin_ref`（第三方插件）；`@deepseek-ai/*`
 //! 核心/官方包拒绝还原（快照仍允许创建）。
@@ -165,8 +165,7 @@ fn resolve_real_target(node_modules: &Path, id: &str) -> Result<PathBuf, String>
             entry.display()
         ));
     }
-    let real = dunce::canonicalize(&entry)
-        .map_err(|e| format!("SNAPSHOT_RESOLVE_TARGET: {e}"))?;
+    let real = dunce::canonicalize(&entry).map_err(|e| format!("SNAPSHOT_RESOLVE_TARGET: {e}"))?;
     if !real.is_dir() {
         return Err(format!(
             "SNAPSHOT_NOT_DIR: {id} 的安装目标 {} 不是目录",
@@ -212,8 +211,7 @@ fn append_package_tree(
     for entry in fs::read_dir(dir).map_err(|e| format!("SNAPSHOT_READDIR: {e}"))? {
         let entry = entry.map_err(|e| format!("SNAPSHOT_ENTRY: {e}"))?;
         let path = entry.path();
-        let meta =
-            fs::symlink_metadata(&path).map_err(|e| format!("SNAPSHOT_METADATA: {e}"))?;
+        let meta = fs::symlink_metadata(&path).map_err(|e| format!("SNAPSHOT_METADATA: {e}"))?;
         // 跳过符号链接（含指向目录的链接）：不归档链接本身，也不递归进入
         if meta.file_type().is_symlink() {
             continue;
@@ -244,7 +242,10 @@ fn append_package_tree(
 }
 
 /// 创建快照归档：写入临时文件 → fsync → rename 到目标（同盘原子替换）。
-fn write_archive_atomic(dest: &Path, write_fn: impl FnOnce(&Path) -> Result<(), String>) -> Result<(), String> {
+fn write_archive_atomic(
+    dest: &Path,
+    write_fn: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), String> {
     let tmp = dest.with_extension("tmp");
     let _ = fs::remove_file(&tmp);
     write_fn(&tmp)?;
@@ -256,7 +257,8 @@ fn write_archive_atomic(dest: &Path, write_fn: impl FnOnce(&Path) -> Result<(), 
         .write(true)
         .open(&tmp)
         .map_err(|e| format!("SNAPSHOT_OPEN_TMP: {e}"))?;
-    file.sync_all().map_err(|e| format!("SNAPSHOT_FSYNC: {e}"))?;
+    file.sync_all()
+        .map_err(|e| format!("SNAPSHOT_FSYNC: {e}"))?;
     fs::rename(&tmp, dest).map_err(|e| format!("SNAPSHOT_RENAME: {e}"))?;
     Ok(())
 }
@@ -527,7 +529,10 @@ fn write_back_manifest_refs_at(manifest_path: &Path, id: &str, spec: &str) {
             .get_mut("dependencies")
             .and_then(|d| d.as_object_mut())
         {
-            deps.insert(id.to_string(), serde_json::Value::String(version.to_string()));
+            deps.insert(
+                id.to_string(),
+                serde_json::Value::String(version.to_string()),
+            );
             modified = true;
         } else {
             value["dependencies"] = serde_json::json!({ id: version });
@@ -706,14 +711,8 @@ mod tests {
 
     #[test]
     fn filename_sanitizes_scoped_and_rejects_traversal() {
-        assert_eq!(
-            snapshot_filename("dsh-market").unwrap(),
-            "dsh-market.tgz"
-        );
-        assert_eq!(
-            snapshot_filename("@scope/pkg").unwrap(),
-            "_scope_pkg.tgz"
-        );
+        assert_eq!(snapshot_filename("dsh-market").unwrap(), "dsh-market.tgz");
+        assert_eq!(snapshot_filename("@scope/pkg").unwrap(), "_scope_pkg.tgz");
         assert!(snapshot_filename("..").is_err());
         assert!(snapshot_filename("").is_err());
         assert!(snapshot_filename("../x").is_err());
@@ -763,7 +762,9 @@ mod tests {
             header.set_size(bytes.len() as u64);
             header.set_mode(0o644);
             header.set_cksum();
-            builder.append_data(&mut header, MANIFEST_NAME, &bytes[..]).unwrap();
+            builder
+                .append_data(&mut header, MANIFEST_NAME, &bytes[..])
+                .unwrap();
             append_package_tree(&mut builder, &real, Path::new(PACKAGE_PREFIX)).unwrap();
             builder.finish().unwrap();
             Ok(())
@@ -805,7 +806,9 @@ mod tests {
             header.set_size(bytes.len() as u64);
             header.set_mode(0o644);
             header.set_cksum();
-            builder.append_data(&mut header, MANIFEST_NAME, &bytes[..]).unwrap();
+            builder
+                .append_data(&mut header, MANIFEST_NAME, &bytes[..])
+                .unwrap();
             append_package_tree(&mut builder, &real, Path::new(PACKAGE_PREFIX)).unwrap();
             builder.finish().unwrap();
             Ok(())
@@ -863,7 +866,10 @@ mod tests {
         let content = fs::read_to_string(&manifest_path).unwrap();
         let value: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert_eq!(value["dependencies"].as_object().unwrap().len(), 1);
-        assert_eq!(value["dsh"]["profile"]["bundles"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            value["dsh"]["profile"]["bundles"].as_array().unwrap().len(),
+            1
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -52,14 +52,8 @@ pub async fn install(
         .get_webview_window("main")
         .ok_or("Failed to get main window")?;
     log::debug!("Main window obtained");
-    // 仅 Windows 会继续 push MinGit 任务（见下方 `#[cfg(windows)]`），
-    // 异平台的 `mut` 因此多余，按平台放行。
-    #[cfg_attr(not(windows), allow(unused_mut))]
-    let mut tasks: Vec<Box<dyn download::Installable>> = vec![
-        Box::new(download::Nodejs),
-        Box::new(download::Dsh),
-        Box::new(download::Pnpm),
-    ];
+    // 依赖任务清单的唯一构造点在下载层，安装流程与映射回写共用同一组任务。
+    let tasks = download::tasks();
     // 必须在下载前解析 release 元数据：下载地址和摘要必须属于同一固定 tag。
     // 若先下载 latest、再因 API 限流从 Atom/HTML 解析 tag，latest 在两次请求间
     // 发生切换就会把另一份资产拿来匹配摘要，最终触发 INTEGRITY_CHECK_FAILED。
@@ -97,8 +91,6 @@ pub async fn install(
     }
     // Windows Sandbox 等空白环境没有 Git；仅 Windows 加入第 4 项，若系统 Git
     // 可真实执行则 Installable 会跳过，不重复下载也不修改系统 PATH。
-    #[cfg(windows)]
-    tasks.push(Box::new(download::Git));
     // 每项均有下载/解压两个阶段，按实际平台任务数计算，避免进度提前到 100%。
     let mut tracker = download::ProgressTracker::new(&window, tasks.len() * 2);
     log::info!("Task list created, {} tasks total", tasks.len());
@@ -147,6 +139,8 @@ pub async fn install(
                 "Task {} already installed and up to date, skipping",
                 index + 1
             );
+            // 已就绪也要落映射：系统环境满足记 `null`，托管版记安装根。
+            task.record_mapping(app_handle);
             tracker.skip_phases(2);
             continue;
         }
@@ -226,6 +220,8 @@ pub async fn install(
         log::debug!("Installation path: {:?}", dest);
         download::ensure_extract(&tracker, name, buffer, dest).await?;
         log::info!("Extraction completed");
+        // 解压落盘即建立该依赖的路径映射（新用户 / 缺少内核的场景）。
+        task.record_mapping(app_handle);
         tracker.end_phase();
 
         // 记录本次安装对应的 release tag 与 commit，供下次启动比对

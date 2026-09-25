@@ -275,7 +275,7 @@ pub(super) fn resolve_recovery_plugins(
             .filter(|root| plugin_declares_loader_entry(&profile, root, entry))
             .collect();
         if owners.len() == 1 {
-            return owners.into_iter().map(|s| s.clone()).collect();
+            return owners.into_iter().cloned().collect();
         }
     }
 
@@ -286,7 +286,7 @@ pub(super) fn resolve_recovery_plugins(
             .filter(|root| plugin_matches_slot(&profile, root, slot))
             .collect();
         if matched.len() == 1 {
-            return matched.into_iter().map(|s| s.clone()).collect();
+            return matched.into_iter().cloned().collect();
         }
         let providers: HashSet<String> = packages_providing_slot(&profile, slot)
             .into_iter()
@@ -297,7 +297,7 @@ pub(super) fn resolve_recovery_plugins(
                 .filter(|root| plugin_references_packages(&profile, root, &providers))
                 .collect();
             if owners.len() == 1 {
-                return owners.into_iter().map(|s| s.clone()).collect();
+                return owners.into_iter().cloned().collect();
             }
         }
     }

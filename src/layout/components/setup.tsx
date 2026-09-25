@@ -54,6 +54,7 @@ export function Setup() {
     pluginConflictHint,
     inotifyLimitHint,
     patchLayerHint,
+    heapOomHint,
   } = useStore(store.harness)
   const error = status === 'error'
   const installing = status === 'installing'
@@ -61,9 +62,7 @@ export function Setup() {
   const StatusIcon = STATUS_ICONS[status]
   // 安装中展示安装日志；错误态展示启动失败时从 dsh 服务日志读取的真实错误行。
   const logs = installing ? installer.logs : (error && errorLogs.length > 0 ? errorLogs : undefined)
-  // 错误态的针对性提示：插件路由冲突 / Linux inotify 文件监视上限 / 补丁层问题，
-  // 三者互斥（由各自的失败特征识别），优先展示最具体的一条。
-  const hint = error ? (patchLayerHint || pluginConflictHint || inotifyLimitHint) : undefined
+  const hint = error ? (patchLayerHint || pluginConflictHint || inotifyLimitHint || heapOomHint) : undefined
   // 补丁层问题分两种，恢复动作不同：语法错误整层隔离（改名备份），悬空 insert 只
   // 剥离解析不到的条目。两者的提示共用 patchLayerHint，入口按错误特征二选一。
   const patchEntriesUnresolved = error && containsPatchEntryUnresolved(errorMsg)

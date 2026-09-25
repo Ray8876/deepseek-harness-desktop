@@ -3,9 +3,9 @@
 
 use crate::config;
 use std::collections::HashMap;
-#[cfg(windows)]
 use std::ffi::OsString;
 use std::fs;
+use std::path::Path;
 #[cfg(not(windows))]
 use std::io::Read;
 #[cfg(not(windows))]
@@ -45,6 +45,20 @@ type SpawnResult = Result<
 /// 存在短暂滞后（taskkill 返回 ≠ 端口已可复用）。等待窗口内端口回落为空闲则
 /// 复用配置端口；到期仍未释放才按“真占用”逐级递增。
 const PORT_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+fn build_harness_args(dsh_binary: &Path, profile: &str, port: u16, heap_mb: Option<u32>) -> Vec<OsString> {
+    let mut args = Vec::with_capacity(7);
+    args.extend(super::heap::heap_option_arg(heap_mb));
+    args.extend([
+        dsh_binary.as_os_str().to_os_string(),
+        OsString::from("--profile"),
+        OsString::from(profile),
+        OsString::from("--port"),
+        OsString::from(port.to_string()),
+        OsString::from("--no-open"),
+    ]);
+    args
+}
 
 /// 轮询等待配置端口释放为空闲（端口本来就空闲则立即返回）。
 ///
@@ -379,6 +393,13 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     if let Err(e) = crate::service::patch::llm_session::apply(&app_handle) {
         log::warn!("pi-ai session header patch failed: {e}");
     }
+    // Codex 系端点把思维链写在正文里（`<thinking>…</thinking>`），pi-ai 的
+    // openai-completions 适配器只认识结构化推理字段，思考便混进回答正文。补丁在
+    // 消息开头的围栏处把这段文本改道到 thinking 事件，harness 侧按 reasoning 块落库。
+    // 最佳努力且幂等：目标已含标记或锚点缺失时 patch_dsh 安全跳过。
+    if let Err(e) = crate::service::patch::pi_ai_thinking::apply(&app_handle) {
+        log::warn!("pi-ai thinking-as-text patch failed: {e}");
+    }
     // WKWebView 点击 `<button>` 不转移焦点：模型座位的 portal 菜单在 mousedown 阶段收到
     // `relatedTarget` 为 null 的 blur 就直接 close()，菜单在 click 之前卸载，鼠标选择
     // 模型 / 推理等级变成空操作（键盘 Enter 正常、浏览器正常）。补丁放行该 blur，菜单外的
@@ -407,7 +428,7 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     if let Err(e) = crate::service::plugin::ensure_profile_npmrc(&app_handle) {
         log::warn!("ensure profile .npmrc failed: {e}");
     }
-    // 弃用插件自动卸载：`deprecated-plugins.json` 登记的社区插件若已安装，启动时
+    // 弃用插件自动卸载：`manifest.jsonc` 的 `plugins.depercated` 登记的社区插件若已安装，启动时
     // 自动移除（避免残留插件继续在 profile 里加载、甚至导致启动失败）。最佳努力：
     // 失败只告警，不阻断启动。
     if let Err(e) = crate::service::plugin::uninstall_deprecated_plugins(&app_handle).await {
@@ -562,7 +583,16 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
         return Err(e);
     }
 
-    log::info!("Starting Harness process");
+    let node_options = std::env::var("NODE_OPTIONS").ok();
+    let heap_mb = super::heap::resolve_heap_limit_mb(
+        setting.harness_max_heap_mb,
+        node_options.as_deref(),
+        super::heap::physical_memory_mb(),
+    );
+    match heap_mb {
+        Some(mb) => log::info!("Starting Harness process with --max-old-space-size={mb}"),
+        None => log::info!("Starting Harness process with Node default or inherited heap options"),
+    }
 
     // dsh 的 Loader 在插件 dispose 时会把组合后的整棵 entry 树回写进
     // `cordis.yml`（dsh-app-boot：plugin self-disposing persists the current
@@ -597,14 +627,7 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
                 GetExitCodeProcess, WaitForSingleObject, INFINITE,
             };
 
-            let mut args: Vec<OsString> = vec![
-                dsh_binary_path.as_os_str().to_os_string(),
-                OsString::from("--profile"),
-                OsString::from(active_profile.as_str()),
-                OsString::from("--port"),
-                OsString::from(setting.port.to_string()),
-            ];
-            args.push(OsString::from("--no-open"));
+            let args = build_harness_args(&dsh_binary_path, active_profile.as_str(), setting.port, heap_mb);
 
             // 只负责 spawn 并返回管道/PID/句柄：探测与重试期间不登记、不挂
             // 监视线程——只有最终采用的那个进程才登记，否则旧监视线程会通过
@@ -707,12 +730,7 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
         {
             use std::os::unix::process::CommandExt;
             let mut cmd = Command::new(&node_binary_path);
-            cmd.arg(&dsh_binary_path)
-                .arg("--profile")
-                .arg(active_profile.as_str())
-                .arg("--port")
-                .arg(&setting.port.to_string());
-            cmd.arg("--no-open");
+            cmd.args(build_harness_args(&dsh_binary_path, active_profile.as_str(), setting.port, heap_mb));
             cmd.envs(&envs)
                 .current_dir(&core_dir)
                 // 核心修正：提供一个空的 stdin 防止 setRawMode 报错
@@ -748,12 +766,7 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
                                         );
                                         reset_active_profile_root(&app_handle);
                                         cmd = Command::new(&node_binary_path);
-                                        cmd.arg(&dsh_binary_path)
-                                            .arg("--profile")
-                                            .arg(active_profile.as_str())
-                                            .arg("--port")
-                                            .arg(setting.port.to_string());
-                                        cmd.arg("--no-open");
+                                        cmd.args(build_harness_args(&dsh_binary_path, active_profile.as_str(), setting.port, heap_mb));
                                         cmd.envs(&envs)
                                             .current_dir(&core_dir)
                                             .stdin(Stdio::null())

@@ -175,6 +175,14 @@ pub(super) fn on_owned_process_exit(
             "Owned Harness process {} exited with code {code}; resetting status to Stopped",
             owned.pid
         );
+        // SIGABRT：V8 堆耗尽（`JavaScript heap out of memory`）是桌面端最常见的成因
+        // （issue #699），补一条可检索的日志，便于在没有前端时定位。
+        if code == 134 {
+            log::warn!(
+                "HARNESS_HEAP_OOM: Harness aborted (code 134 / SIGABRT); an exhausted V8 heap \
+                 limit is the common cause — raise the service memory limit in Settings"
+            );
+        }
     } else {
         log::warn!(
             "Owned Harness process {} exited (exit code unavailable); resetting status to Stopped",
@@ -322,12 +330,12 @@ fn command_line_has_argument(cmdline: &str, argument: &str) -> bool {
         let before_is_boundary = cmdline[..start]
             .chars()
             .next_back()
-            .map_or(true, char::is_whitespace);
+            .is_none_or(char::is_whitespace);
         let end = start + matched.len();
         let after_is_boundary = cmdline[end..]
             .chars()
             .next()
-            .map_or(true, char::is_whitespace);
+            .is_none_or(char::is_whitespace);
         before_is_boundary && after_is_boundary
     })
 }
@@ -343,7 +351,7 @@ fn command_line_has_argument_after(cmdline: &str, preceding: &str, argument: &st
         let end = start + matched.len();
         let rest = cmdline[end..].trim_start_matches(char::is_whitespace);
         rest.strip_prefix(argument)
-            .is_some_and(|tail| tail.chars().next().map_or(true, char::is_whitespace))
+            .is_some_and(|tail| tail.chars().next().is_none_or(char::is_whitespace))
     })
 }
 

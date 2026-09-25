@@ -14,6 +14,11 @@ export function interceptsSubmit(state: Pick<WorktreeSessionState, 'isGit' | 'mo
   return state.mode === 'pending' && state.isGit === true
 }
 
+// 纯附件发送（无正文）也是核心认的合法发送：只按正文判断会把这类消息放回本地会话。
+export function hasSendableContent(draft: string, attachmentIds: readonly string[]): boolean {
+  return draft.trim() !== '' || attachmentIds.length > 0
+}
+
 export function draftAttachmentIds(state: InputState | undefined): readonly string[] {
   return state?.attachmentIds ?? state?.imageIds ?? NO_DRAFT_ATTACHMENTS
 }

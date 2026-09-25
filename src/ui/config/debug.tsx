@@ -11,6 +11,7 @@ import { Panel } from '@/components/panel'
 import { queryKeys } from '@/config/query-keys'
 import { useListen } from '@/hooks/use-listen'
 import { store } from '@/store'
+import { HARNESS_HEAP_MAX_MB, HARNESS_HEAP_MIN_MB } from '@/store/modules/setting'
 import { ConfigCloseAction } from '@/ui/config/components/close-action'
 import { ConfigLaunchOnLogin } from '@/ui/config/components/launch-on-login'
 import { useCoreBreakingConfirm } from '@/ui/config/hooks/use-core-breaking-confirm'
@@ -47,6 +48,7 @@ export function ConfigDebug() {
   // 端口编辑态：用户尚未输入时为 undefined，展示值始终以 store 中已保存的端口为准。
   // 初值不写入 state（避免渲染期副作用），用户一旦输入即以输入值为准。
   const [portInput, setPortInput] = useState<number>()
+  const [heapInput, setHeapInput] = useState<string>()
 
   const { data: info, refetch: refreshInfo } = useQuery({
     queryKey: queryKeys.info,
@@ -58,8 +60,11 @@ export function ConfigDebug() {
     void refreshInfo()
   })
 
-  const { port: savedPort, zoom_factor: zoomFactor } = useStore(store.setting)
+  const { port: savedPort, zoom_factor: zoomFactor, harness_max_heap_mb: savedHeapMb } = useStore(store.setting)
   const port = portInput ?? savedPort
+  const heapValue = heapInput ?? String(savedHeapMb ?? '')
+  /** 空输入代表自动值（null），其余按数字解析，非法值交给保存前的整数校验拦下 */
+  const parsedHeap = heapValue.trim() === '' ? null : Number(heapValue)
 
   const { data: cliStatus, refetch: refreshCliStatus } = useQuery({
     queryKey: queryKeys.cliStatus,
@@ -138,6 +143,37 @@ export function ConfigDebug() {
       }
       else {
         toast(t('messages.port_save_failed'), { variant: 'danger' })
+      }
+    },
+  })
+
+  const { mutate: onSaveHeap } = useMutation({
+    mutationFn: async (mb: number | null) => {
+      // 空输入 = 交回自动值；Rust 侧把 0 归一化为 None（物理内存一半，见 workflow/heap.rs）
+      if (mb !== null && (!Number.isInteger(mb) || mb < HARNESS_HEAP_MIN_MB || mb > HARNESS_HEAP_MAX_MB)) {
+        throw new Error('HEAP_INVALID')
+      }
+      await store.setting.update({ harnessMaxHeapMb: mb ?? 0 })
+      const key = toast(t('messages.heap_changed'), {
+        variant: 'accent',
+        description: t('messages.heap_restart_hint'),
+        timeout: 10_000,
+        actionProps: {
+          children: t('app.restart'),
+          onPress: () => {
+            store.harness.restart()
+            toast.close(key)
+          },
+        },
+      })
+    },
+    onError: (err: unknown) => {
+      console.error('[ConfigDebug] save heap limit failed:', err)
+      if (String(err).includes('HEAP_INVALID')) {
+        toast(t('messages.heap_invalid'), { variant: 'danger' })
+      }
+      else {
+        toast(t('messages.heap_save_failed'), { variant: 'danger' })
       }
     },
   })
@@ -318,6 +354,28 @@ export function ConfigDebug() {
               variant="primary"
               className="rounded-md h-8"
               onPress={() => onSavePort(port)}
+            >
+              {t('buttons.save')}
+            </Button>
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-medium text-ink">{t('ui.heap_limit')}</span>
+          <div className="flex items-center gap-1.5">
+            <Input
+              type="number"
+              variant="secondary"
+              value={heapValue}
+              placeholder={t('ui.heap_limit_auto')}
+              onChange={e => setHeapInput(e.target.value)}
+              className="w-24 h-8 rounded-md [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              aria-label={t('ui.heap_limit')}
+            />
+            <Button
+              size="sm"
+              variant="primary"
+              className="rounded-md h-8"
+              onPress={() => onSaveHeap(parsedHeap)}
             >
               {t('buttons.save')}
             </Button>

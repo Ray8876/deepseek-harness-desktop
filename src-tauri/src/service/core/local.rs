@@ -118,7 +118,9 @@ fn append_windows_dsh_dirs(dirs: &mut Vec<PathBuf>) {
         append(PathBuf::from(appdata).join("npm"));
     }
     if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-        let fnm_versions = PathBuf::from(&local_app_data).join("fnm").join("node-versions");
+        let fnm_versions = PathBuf::from(&local_app_data)
+            .join("fnm")
+            .join("node-versions");
         if let Ok(entries) = std::fs::read_dir(&fnm_versions) {
             for entry in entries.flatten() {
                 // 版本目录下 `installation` 是 node 实际安装根；npm 全局包位于其
@@ -335,7 +337,7 @@ pub async fn update_local_core(app_handle: AppHandle) -> Result<String, String> 
     };
 
     if !status {
-        let output = tail(stdout.into_iter().chain(stderr.into_iter()).collect());
+        let output = tail(stdout.into_iter().chain(stderr).collect());
         return Err(format!("CORE_UPDATE_FAILED: {output}"));
     }
 
@@ -407,7 +409,10 @@ mod tests {
     fn scan_dir_finds_foreign_dsh_inside_shim_dir() {
         let dir = temp_dir("foreign-in-shim");
         let dsh = write_foreign_dsh(&dir);
-        assert_eq!(scan_dirs_for_user_dsh(&[dir.clone()], &["dsh"]), Some(dsh));
+        assert_eq!(
+            scan_dirs_for_user_dsh(std::slice::from_ref(&dir), &["dsh"]),
+            Some(dsh)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -419,7 +424,10 @@ mod tests {
         let ours = write_our_shim(&shim_dir);
         let theirs = write_foreign_dsh(&bin_dir);
         // 只扫 shim 目录 → 跳过本应用 shim，无命中
-        assert_eq!(scan_dirs_for_user_dsh(&[shim_dir.clone()], &["dsh"]), None);
+        assert_eq!(
+            scan_dirs_for_user_dsh(std::slice::from_ref(&shim_dir), &["dsh"]),
+            None
+        );
         // 同时扫两个目录 → 命中用户 dsh（不是本应用 shim）
         assert_eq!(
             scan_dirs_for_user_dsh(&[shim_dir.clone(), bin_dir.clone()], &["dsh"]),

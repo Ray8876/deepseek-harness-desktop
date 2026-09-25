@@ -72,7 +72,7 @@ pub fn sweep_orphan_harness(app_handle: &tauri::AppHandle) {
 /// 占用指定端口的进程 PID（LISTENING 状态）。
 /// - Windows：`netstat -ano` 解析；
 /// - Unix：`lsof -ti tcp:<port>`，不可用时返回 None。
-/// 返回 None 视为"无法确认"，调用方不会因此杀任何进程。
+///   返回 None 视为"无法确认"，调用方不会因此杀任何进程。
 fn port_owner_pid(port: u16) -> Option<u32> {
     #[cfg(windows)]
     {

@@ -5,10 +5,13 @@ import { defineRegister } from 'dsh-tauri/client'
 import { WorktreeModeSelect } from '../components/mode-select'
 import { INPUT_DOCK_SLOT, MODE_SELECT_ID, MODE_SELECT_ORDER } from '../constants'
 import { locale } from '../locales'
+import { conversationAttachments } from '../service/attachments'
 
 type ModeSelectInjected = Omit<ModeSelectProps, 'useInput' | 'inputActions'>
 
 export const modeSelectFeature = defineRegister<ClientContext>((controller, ctx, adapter) => {
+  // 会话服务在装配期可能尚未激活：解析放在调用期，且在 inject 外保持同一身份，避免发送拦截器反复重挂。
+  const resolveAttachments = () => conversationAttachments(ctx)
   controller.add(ctx.slots.inject(INPUT_DOCK_SLOT as never, () =>
     ctx.slots.register(
       {
@@ -22,6 +25,7 @@ export const modeSelectFeature = defineRegister<ClientContext>((controller, ctx,
               sessionId,
               sessionsRuntime: adapter.sessions as unknown as SessionsRuntime,
               workspacesRuntime: adapter.workspaces as unknown as WorkspacesRuntime,
+              resolveAttachments,
             },
       } as never,
       WorktreeModeSelect,

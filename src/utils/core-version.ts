@@ -35,7 +35,7 @@ export function isCoreBreakingVersion(version: string): boolean {
  * 最低支持的核心版本（与 Rust `MIN_SUPPORTED_CORE_VERSION` 对齐）。低于它的核心缺少
  * 内置插件依赖的平台种子词，随包插件必然加载失败并把应用卡在启动阶段（issue #596）。
  *
- * 这是兼容性的唯一基线：它低于推荐核心版本（`version-recommend.json`，仅用于更新
+ * 这是兼容性的唯一基线：它低于推荐核心版本（`manifest.jsonc` 的 `engines.dsh.recommend`，仅用于更新
  * 提示），两者不可混用——拿推荐版本当基线会把「高于基线、低于推荐版本」的可用核心
  * 误判为不兼容（推荐版本为 0.1.7-alpha.1 时，0.1.5-rc.3 就是这么被挡下的）。
  */

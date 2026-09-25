@@ -58,7 +58,7 @@ function PluginCard({ plugin, checked, toUninstall, disabled, onToggle, onOpenRe
 
   return (
     <Card
-      className={`h-[124px] gap-1 rounded-lg border border-line bg-panel2 p-3 shadow-none transition-colors ${plugin.unsupported ? 'opacity-60' : 'hover:border-line-strong'}`}
+      className={`h-[124px] gap-1 rounded-lg bg-panel2 p-3 shadow-none transition-colors ${plugin.unsupported ? 'opacity-60' : 'hover:border-line-strong'}`}
     >
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="grid size-6 shrink-0 place-items-center rounded-md bg-accent/10 text-accent">

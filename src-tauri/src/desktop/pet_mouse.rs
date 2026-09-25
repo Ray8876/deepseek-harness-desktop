@@ -208,7 +208,7 @@ pub fn start_pet_mouse_stream(window: WebviewWindow, state: State<'_, PetMouseSt
         loop {
             // 每约 500ms 跟随当前接收窗口刷新一次缩放系数：桌宠被拖到另一块缩放
             // 不同的显示器后，命中换算的系数必须同步（issue #523）。
-            if ticks % SCALE_REFRESH_TICKS == 0 {
+            if ticks.is_multiple_of(SCALE_REFRESH_TICKS) {
                 refresh_scale_factor(&emitter, &throttle_scale);
             }
             ticks = ticks.wrapping_add(1);

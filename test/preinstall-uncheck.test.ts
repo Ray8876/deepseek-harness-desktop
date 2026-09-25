@@ -2,6 +2,12 @@ import type { Event } from '@tauri-apps/api/event'
 import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+/** 资源清单是 JSONC（允许行注释）：解析前先剥掉行注释。 */
+function readManifest(): { plugins: { preset: Array<{ id: string, recommended?: boolean, checked?: boolean }> } } {
+  const raw = readFileSync(new URL('../src-tauri/resources/manifest.jsonc', import.meta.url), 'utf8')
+  return JSON.parse(raw.replace(/^\s*\/\/.*$/gm, ''))
+}
+
 // ── Suite A — i18n keys exist (source assertion on JSON) ─────────────────────
 describe('preinstall can-uncheck hint i18n keys', () => {
   it('provides preinstall.can_uncheck_hint in en-US', () => {
@@ -40,9 +46,9 @@ describe('preinstallSetup primary button morph', () => {
   })
 })
 
-// ── Suite B2 — defaultUnchecked suppresses preselection (behavior) ────────────
-// 推荐项仍显示「推荐」chip，但声明 defaultUnchecked 时首次引导不预选。
-describe('defaultUnchecked suppresses first-run preselection', () => {
+// ── Suite B2 — 未预选声明抑制首次预选（behavior） ──────────────────────────────
+// 推荐项仍显示「推荐」chip，但清单声明 `checked: false` 时首次引导不预选。
+describe('unchecked preset suppresses first-run preselection', () => {
   it('is honored by initialCheckedSet and keeps the recommended chip independent', () => {
     const source = readFileSync(new URL('../src/layout/components/setup-preinstall.tsx', import.meta.url), 'utf8')
     expect(source).toContain('p.defaultUnchecked')
@@ -50,14 +56,12 @@ describe('defaultUnchecked suppresses first-run preselection', () => {
     expect(source.indexOf('p.defaultUnchecked')).toBeLessThan(source.indexOf('p.recommended || p.fix'))
   })
 
-  it('declares defaultUnchecked for the DSH IM preset entry', () => {
-    const presets = JSON.parse(
-      readFileSync(new URL('../src-tauri/resources/preset-plugins.json', import.meta.url), 'utf8'),
-    ) as Array<{ id: string, recommended?: boolean, defaultUnchecked?: boolean }>
-    const im = presets.find(p => p.id === '@xmanrui/dsh-im')
+  it('declares the DSH IM preset as recommended but not pre-checked', () => {
+    const im = readManifest().plugins.preset.find(p => p.id === '@xmanrui/dsh-im')
     expect(im).toBeDefined()
-    expect(im?.defaultUnchecked).toBe(true)
     expect(im?.recommended).toBe(true)
+    // 资源清单是唯一真值：Rust 侧据此派生 defaultUnchecked（checked === false）
+    expect(im?.checked).toBe(false)
   })
 })
 

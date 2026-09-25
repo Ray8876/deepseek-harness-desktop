@@ -6,7 +6,7 @@ import { PET_CODEX_ASPECT, PET_DSH_ASPECT } from '../constants'
 import { reportPetIssue } from '../utils/log'
 
 /**
- * `resources/preset-pets.json` 的条目（Rust `list_preset_pets` 原样返回）。
+ * `resources/manifest.jsonc` 的 `pets.built-in`（Rust `list_preset_pets` 原样返回）。
  *
  * 条目字段即 `dsh-pet-component` 的 `<Pet>` props：预设宠物不再下载/安装到本地，
  * 组件直连条目里的远端素材地址播放。

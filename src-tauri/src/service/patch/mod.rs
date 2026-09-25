@@ -12,6 +12,7 @@
 pub(crate) mod composer;
 pub(crate) mod llm_session;
 pub(crate) mod model_selection;
+pub(crate) mod pi_ai_thinking;
 pub(crate) mod renderer;
 pub(crate) mod session;
 pub(crate) mod workspace;
@@ -28,11 +29,13 @@ use std::path::Path;
 /// 单个补丁失败不阻断其余：与启动路径一样是「最佳努力」，但这里把错误汇总返回，
 /// 让编排层能看见哪一条出了问题。
 pub(crate) fn apply_all_at(core_dir: &Path) -> Result<(), String> {
-    let patches: [(&str, fn(&Path) -> Result<(), String>); 7] = [
+    #[allow(clippy::type_complexity)]
+    let patches: [(&str, fn(&Path) -> Result<(), String>); 8] = [
         ("renderer", renderer::apply_at),
         ("composer", composer::apply_at),
         ("session", session::apply_at),
         ("llm_session", llm_session::apply_at),
+        ("pi_ai_thinking", pi_ai_thinking::apply_at),
         ("model_selection", model_selection::apply_at),
         ("workspace", workspace::apply_at),
         ("workspace_view", workspace_view::apply_at),

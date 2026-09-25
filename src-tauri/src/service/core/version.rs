@@ -14,8 +14,12 @@ use super::local::{find_user_dsh_bin, local_core};
 use super::source::{active_source, core_supports_bundled_plugins, CoreSource, HarnessCore};
 
 /// `dependencies` 目录（激活 `dsh` 与历史 `dsh-<tag>` 槽位的共同父级）。
+///
+/// 槽位是桌面端自己下载的产物，恒落在**托管根**之下：即使映射把激活核心指向
+/// `resources/dsh` 或其它任意位置，历史版本仍收在 AppData 里，不会污染安装目录。
 fn dependencies_dir(app_handle: &AppHandle) -> PathBuf {
-    config::get_dsh_install_path(app_handle)
+    let managed = config::dependencies::managed_root(app_handle, config::dependencies::DEP_DSH);
+    managed
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."))
@@ -351,7 +355,8 @@ pub async fn set_active(app_handle: &AppHandle, id: &str) -> Result<HarnessCore,
         };
         // 低于最低支持版本的本地核心无法加载随包插件（issue #596）：显式切换同样
         // 拒绝并给出可操作提示，而不是让用户切过去再撞一次启动失败。
-        if !core_supports_bundled_plugins(&core.version) {
+        let baseline = config::manifest::minimum_dsh_version(app_handle);
+        if !core_supports_bundled_plugins(&core.version, baseline.as_deref()) {
             return Err(format!(
                 "CORE_LOCAL_UNSUPPORTED: local dsh {} is below the minimum supported core; update it (`npm install -g @deepseek-ai/dsh@latest`) or keep a bundled version",
                 core.version,
@@ -361,6 +366,8 @@ pub async fn set_active(app_handle: &AppHandle, id: &str) -> Result<HarnessCore,
         let mut setting = config::get_store_dat_setting(app_handle);
         setting.active_core = Some(CoreSource::Local.as_str().to_string());
         config::set_store_dat_setting(app_handle, setting);
+        // 映射表记录「该依赖由系统环境满足」（`null`），与清单的 `Path | null` 语义一致。
+        config::dependencies::record(app_handle, config::dependencies::DEP_DSH, None);
     } else if id == "app" {
         if !config::get_dsh_binary_path(app_handle).exists() {
             return Err("CORE_APP_NOT_FOUND: bundled core is not installed".to_string());
@@ -369,6 +376,8 @@ pub async fn set_active(app_handle: &AppHandle, id: &str) -> Result<HarnessCore,
         let mut setting = config::get_store_dat_setting(app_handle);
         setting.active_core = Some(CoreSource::App.as_str().to_string());
         config::set_store_dat_setting(app_handle, setting);
+        // 切回预打包核心：托管根重新成为该依赖的安装根。
+        record_managed_core(app_handle);
     } else if let Some(tag) = id.strip_prefix("app-") {
         switch_app_version(app_handle, tag).await?;
     } else {
@@ -378,11 +387,11 @@ pub async fn set_active(app_handle: &AppHandle, id: &str) -> Result<HarnessCore,
     // set_active 返回后通过同一把锁与启动串行化。
     drop(transition_guard);
 
-    Ok(list(app_handle)
+    list(app_handle)
         .await
         .into_iter()
         .find(|c| c.active)
-        .ok_or_else(|| "CORE_NOT_FOUND: active core disappeared after switch".to_string())?)
+        .ok_or_else(|| "CORE_NOT_FOUND: active core disappeared after switch".to_string())
 }
 
 /// 切换到指定 tag 的预打包版本（已下载的历史槽位）。
@@ -398,7 +407,8 @@ async fn switch_app_version(app_handle: &AppHandle, tag: &str) -> Result<(), Str
     // 重叠，也避免 launch 在状态检查后插入并从旧的 dependencies/dsh 加载 DLL。
     let _transition_guard = workflow::acquire_core_transition().await?;
     let deps = dependencies_dir(app_handle);
-    let active_dir = config::get_dsh_install_path(app_handle);
+    // 槽位互换只在托管根内进行（映射可能把激活核心指向安装目录的捆绑副本）。
+    let active_dir = config::dependencies::managed_root(app_handle, config::dependencies::DEP_DSH);
     fs_guard::validate_id(tag)?;
     let cur_tag = config::get_dsh_pkg_tag(app_handle);
 
@@ -489,18 +499,16 @@ async fn switch_app_version(app_handle: &AppHandle, tag: &str) -> Result<(), Str
         ));
     }
 
-    if holding.exists() {
-        if !download::remove_dir_with_retry(&holding).await {
+    if holding.exists() && !download::remove_dir_with_retry(&holding).await {
+        log::warn!(
+            "CORE_SWITCH_WARNING: failed to remove stale backup {} after successful switch",
+            holding.display()
+        );
+        if let Err(e) = download::rename_with_retry(&holding, &stale_backup).await {
             log::warn!(
-                "CORE_SWITCH_WARNING: failed to remove stale backup {} after successful switch",
-                holding.display()
+                "CORE_SWITCH_WARNING: failed to rename stale backup to {}: {e}",
+                stale_backup.display()
             );
-            if let Err(e) = download::rename_with_retry(&holding, &stale_backup).await {
-                log::warn!(
-                    "CORE_SWITCH_WARNING: failed to rename stale backup to {}: {e}",
-                    stale_backup.display()
-                );
-            }
         }
     }
 
@@ -519,7 +527,21 @@ async fn switch_app_version(app_handle: &AppHandle, tag: &str) -> Result<(), Str
         setting.dsh_pkg_commit = Some(c);
     }
     config::set_store_dat_setting(app_handle, setting);
+    // 切换后的激活核心回到托管根；映射表随之写回，界面与解析链路保持一致。
+    record_managed_core(app_handle);
     Ok(())
+}
+
+/// 把 `dsh` 映射写回托管根（预打包核心的激活目录）。
+fn record_managed_core(app_handle: &AppHandle) {
+    config::dependencies::record(
+        app_handle,
+        config::dependencies::DEP_DSH,
+        Some(config::dependencies::managed_root(
+            app_handle,
+            config::dependencies::DEP_DSH,
+        )),
+    );
 }
 
 /// 下载指定 tag 的预打包核心到历史槽位 `dependencies/<tag>`（不激活，切换由

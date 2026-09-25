@@ -489,7 +489,7 @@ function displayVersion(version: HarnessCore): string {
 /**
  * 本地核心是否低于最低支持基线。判据与「不兼容版本」分组完全一致（同一基线，
  * `isUnsupportedCore`），低于基线时随包内置插件无法加载（issue #596），桌面端自动
- * 改用预打包核心。不可与推荐核心版本（`version-recommend.json`）混用——后者只用于
+ * 改用预打包核心。不可与推荐核心版本（`engines.dsh.recommend`）混用——后者只用于
  * 更新提示，拿它当基线会把「高于基线、低于推荐版本」的可用本地核心误判为不兼容
  * （推荐版本为 0.1.7-alpha.1 时，0.1.5-rc.3 就是这么被挡下的）。
  */

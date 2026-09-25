@@ -6,25 +6,34 @@
  * 「路由已注册且 handler 跑起来了」的正向证据。
  *
  * 上半部分只走 HTTP：断言对象是路由注册与 SSE 字节；下半部分是浏览器层用例，
- * 覆盖 Bundle Slot 挂载与侧栏 DOM 补丁。
+ * 覆盖 Bundle Slot 挂载与设置菜单 DOM 补丁。
  */
 
-import type { Browser } from 'playwright'
+import type { Browser, Locator } from 'playwright'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest'
-import { PET_ICON_RETRY_MAX, PET_ICON_RETRY_MS } from '../../../packages/dsh-tauri-pet/src/client/constants/index.ts'
 import {
   expectNoSyntheticFallbacks,
   launchDshBrowser,
   newDshPage,
   openSettings,
-  PET_ICON,
+  openSettingsMenu,
+  PET_MENU_ITEM,
+  PET_MENU_PATCHED,
+  PET_STYLES,
   selectSettingsSection,
   SETTINGS_NAV_ITEM,
   SETTINGS_TRIGGER,
-  SIDEBAR,
 } from '../support/browser'
+
+/** 桌宠条目里承载文案的节点（与插件 `MENU_ITEM_LABEL_SELECTOR` 对齐）。 */
+const MENU_ITEM_LABEL = '[class*="itemLabel"]'
+
+/** 读桌宠条目的文案：用 `textContent`（插件自己写的就是它，不触发布局）。 */
+function readMenuLabel(item: Locator): Promise<string> {
+  return item.locator(MENU_ITEM_LABEL).first().evaluate(element => element.textContent?.trim() ?? '')
+}
 
 /** 与 `packages/dsh-tauri-pet/src/shared/constants.ts` 的 SESSION_STREAM_PATH 对齐。 */
 const SESSION_STREAM_PATH = '/api/desktop/dsh-tauri-pet/session/stream'
@@ -60,16 +69,6 @@ const KEEPALIVE_MS = 15_000
 
 /** 第 2 帧心跳的可接受上界：一个周期 + 2s 抖动余量，不因读慢了就放宽。 */
 const KEEPALIVE_WINDOW_MAX_MS = 17_000
-
-/**
- * 侧栏入口兜底轮询的最长存活窗口，取自插件真实常量：
- * `packages/dsh-tauri-pet/src/client/register/sidebar-icon.ts:110-114` 每 `PET_ICON_RETRY_MS`
- * 走一轮，`tries > PET_ICON_RETRY_MAX` 即停止，因此最长 31 轮。
- */
-const RETRY_WINDOW_MS = PET_ICON_RETRY_MS * (PET_ICON_RETRY_MAX + 1)
-
-/** 观察时长：必须长于轮询窗口，否则「预算耗尽之后」的断言无从谈起。 */
-const RETRY_SETTLE_MS = 18_000
 
 /** 一次读取的结果：累计文本、自建连起的耗时、已消费的响应块数。 */
 interface SseRead {
@@ -239,12 +238,12 @@ describe('L2 客户端', () => {
 
       const slots = await top.frame.evaluate(() => ({
         hasTrigger: document.querySelector('.dshp-settings-trigger') !== null,
-        petIcons: document.querySelectorAll('[data-dsh-tauri-pet-icon]').length,
+        petStyles: document.querySelectorAll('style[cssr-id="dsh-tauri-pet-styles"]').length,
         petSections: document.querySelectorAll('[id="dsh-tauri-pet-settings"]').length,
       }))
 
       expect(slots.hasTrigger, '顶层页面必须真的渲染出设置触发器（否则这条断言是空转）').toBe(true)
-      expect(slots.petIcons, '顶层页面不得被插入桌宠入口（window.parent === window 早退）').toBe(0)
+      expect(slots.petStyles, '顶层页面不得挂载桌宠样式与菜单补丁（window.parent === window 早退）').toBe(0)
       expect(slots.petSections, '顶层页面不得注册桌宠设置分区').toBe(0)
       expectNoSyntheticFallbacks(top)
       expect(top.errors, '早退路径不得产出应用级错误').toEqual([])
@@ -255,7 +254,7 @@ describe('L2 客户端', () => {
   })
 
   it('验证 iframe 内桌宠设置分区正常渲染且无崩溃', async () => {
-    const app = await newDshPage(browser, { ready: PET_ICON })
+    const app = await newDshPage(browser, { ready: PET_STYLES })
     try {
       await openSettings(app.page, app.frame, app.syntheticFallbacks)
 
@@ -301,81 +300,100 @@ describe('L2 客户端', () => {
     }
   })
 
-  it('验证侧栏桌宠入口按钮被插入到设置触发器右侧且状态可读', async () => {
-    const app = await newDshPage(browser, { ready: PET_ICON })
+  it('验证设置菜单里克隆出唯一的桌宠条目且状态可读', async () => {
+    const app = await newDshPage(browser, { ready: PET_STYLES })
     try {
-      const icon = app.frame.locator(PET_ICON).first()
-      await icon.waitFor({ state: 'attached', timeout: 20_000 })
+      await openSettingsMenu(app.page, app.frame, app.syntheticFallbacks)
 
-      expect(await app.frame.locator(PET_ICON).count(), '守卫属性必须防止重复插入').toBe(1)
-      expect(await icon.getAttribute('aria-pressed'), 'aria-pressed 必须显式表达两态').toMatch(/^(true|false)$/)
+      await expect.poll(
+        async () => await app.frame.locator(PET_MENU_ITEM).count(),
+        { timeout: 20_000, message: '设置菜单展开后必须出现桌宠条目（菜单补丁未生效）' },
+      ).toBe(1)
 
-      const geometry = await app.frame.evaluate(() => {
-        const button = document.querySelector('[data-dsh-tauri-pet-icon]')
-        const trigger = document.querySelector('.dshp-settings-trigger')
-        const sidebar = document.querySelector('[data-slot="sidebar"]')
-        if (!button || !trigger || !sidebar)
-          return null
-        const buttonRect = button.getBoundingClientRect()
-        const triggerRect = trigger.getBoundingClientRect()
-        const host = button.parentElement as HTMLElement
-        return {
-          isNextSibling: button.previousElementSibling === trigger,
-          toTheRight: buttonRect.left >= triggerRect.right - 2,
-          verticalOverlap: Math.min(buttonRect.bottom, triggerRect.bottom) - Math.max(buttonRect.top, triggerRect.top),
-          iconCenterInsideTrigger: buttonRect.top + buttonRect.height / 2 >= triggerRect.top
-            && buttonRect.top + buttonRect.height / 2 <= triggerRect.bottom,
-          hostClass: host.className,
-          hostDisplay: getComputedStyle(host).display,
-          hostGap: getComputedStyle(host).gap,
-          hostFlexWrap: getComputedStyle(host).flexWrap,
-          triggerHostIsParent: trigger.parentElement === host,
-          insideSidebar: sidebar.contains(button) && sidebar.contains(trigger),
-        }
-      })
+      const item = app.frame.locator(PET_MENU_ITEM).first()
+      expect(await item.evaluate(element => element.tagName), '克隆体必须沿用菜单项的原生元素').toBe('BUTTON')
+      expect(await item.getAttribute('role'), '克隆体必须仍是规范菜单项').toBe('menuitem')
+      expect(
+        await item.evaluate(element => element.closest('[role="menu"]')?.getAttribute('data-dsh-tauri-pet-menu-patched') ?? null),
+        '桌宠条目所在的菜单必须带补丁标记（幂等守卫）',
+      ).toBe('1')
+      expect(
+        await app.frame.locator(PET_MENU_PATCHED).count(),
+        '本层只有壳层设置菜单一个「设置」菜单，被打补丁的菜单必须恰为一个',
+      ).toBe(1)
 
-      expect(geometry, '侧栏、触发器与桌宠入口必须同时存在').not.toBeNull()
-      expect(geometry!.isNextSibling, '桌宠入口必须是设置触发器的紧邻后继兄弟').toBe(true)
-      expect(geometry!.triggerHostIsParent, '触发器必须与桌宠入口同处一个宿主行').toBe(true)
-      expect(geometry!.toTheRight, '桌宠入口不得落在设置触发器左侧').toBe(true)
-      expect(geometry!.verticalOverlap, '桌宠入口必须与触发器同处一行（垂直区间重叠）').toBeGreaterThan(10)
-      expect(geometry!.iconCenterInsideTrigger, '桌宠入口必须与触发器垂直居中对齐').toBe(true)
-      expect(geometry!.hostClass, '触发器宿主必须被立成桌宠设置行').toContain('dshp-pet__settings-row')
-      expect(geometry!.hostDisplay, '触发器宿主必须被立成 flex 行').toBe('flex')
-      expect(geometry!.hostGap, 'flex 行必须带插件声明的间距').toBe('8px')
-      expect(geometry!.hostFlexWrap, 'flex 行不得换行').toBe('nowrap')
-      expect(geometry!.insideSidebar, '两者都必须在侧栏内').toBe(true)
-      expect(app.errors, '侧栏补丁不得抛出应用级错误').toEqual([])
-      expect(await app.frame.locator(SIDEBAR).count(), '侧栏根必须存在').toBeGreaterThan(0)
+      // 文案随状态变化，属不稳定文案：按 testing.md 用正则限定两种合法取值并校验状态语义。
+      // 本层（浏览器态 iframe，无 Tauri 宿主）`invoke` 必然失败，插件 `enabled()` 读到的
+      // `status` 恒为 null，因此合法取值只有「未开启」一侧；出现另一侧说明状态来源被伪造。
+      const label = await readMenuLabel(item)
+      expect(label, '桌宠条目文案必须是「未开启」一侧（状态不可读时 enabled() === false）').toMatch(/^(启用宠物|Enable pet)$/)
+      expect(
+        await item.locator('[class*="itemIcon"] svg').count(),
+        '克隆体必须换成插件自己的爪子图标，而不是继承「设置」的齿轮',
+      ).toBe(1)
+
+      await item.click()
+
+      // 克隆体不在 React fiber 里，官方 onSelect 不会触发；插件自己补发 pointerdown 收起菜单，
+      // 这是「点击真的进了插件处理器」的正向证据。
+      await expect.poll(
+        async () => await app.frame.locator(SETTINGS_TRIGGER).first().getAttribute('aria-expanded'),
+        { timeout: 15_000, message: '点击桌宠条目后设置菜单必须收起（点击未进插件处理器）' },
+      ).toBe('false')
+
+      await openSettingsMenu(app.page, app.frame, app.syntheticFallbacks)
+      await expect.poll(
+        async () => await app.frame.locator(PET_MENU_ITEM).count(),
+        { timeout: 15_000, message: '重开菜单后桌宠条目必须重新出现且仍为 1 个' },
+      ).toBe(1)
+      expect(
+        await readMenuLabel(app.frame.locator(PET_MENU_ITEM).first()),
+        '宿主未应答时不得乐观翻转本地状态：重开后文案仍必须是「未开启」一侧',
+      ).toMatch(/^(启用宠物|Enable pet)$/)
+
+      expectNoSyntheticFallbacks(app)
+      expect(app.errors, '菜单补丁不得抛出应用级错误').toEqual([])
     }
     finally {
       await app.close()
     }
   })
 
-  it('验证侧栏长时间未就绪时停止轮询且不抛错', async () => {
-    const app = await newDshPage(browser, { ready: SETTINGS_TRIGGER })
+  it('验证设置菜单重开与重复扫描后桌宠条目恒为一个', async () => {
+    const app = await newDshPage(browser, { ready: PET_STYLES })
+    const itemCount = async () => await app.frame.locator(PET_MENU_ITEM).count()
     try {
-      expect(
-        RETRY_WINDOW_MS,
-        `观察窗口 ${RETRY_SETTLE_MS}ms 必须覆盖插件真实轮询预算 ${RETRY_WINDOW_MS}ms（PET_ICON_RETRY_MS×PET_ICON_RETRY_MAX，常量变大时本用例必须失败）`,
-      ).toBeLessThan(RETRY_SETTLE_MS)
+      await openSettingsMenu(app.page, app.frame, app.syntheticFallbacks)
+      await expect.poll(itemCount, { timeout: 20_000, message: '设置菜单展开后必须出现桌宠条目' }).toBe(1)
 
-      await new Promise(resolve => setTimeout(resolve, RETRY_SETTLE_MS))
+      // 每一轮都真实收起再重开：菜单节点被重建、MutationObserver 也再跑一次扫描，
+      // 两处都不得叠加计数（幂等守卫靠菜单上的补丁标记）。
+      for (let round = 1; round <= 3; round += 1) {
+        await app.frame.locator(PET_MENU_ITEM).first().click()
+        await expect.poll(
+          async () => await app.frame.locator(SETTINGS_TRIGGER).first().getAttribute('aria-expanded'),
+          { timeout: 15_000, message: `第 ${round} 轮点击后菜单必须收起，否则重开路径未被验证` },
+        ).toBe('false')
 
-      const state = await app.frame.evaluate(() => {
-        const button = document.querySelector('[data-dsh-tauri-pet-icon]')
-        return {
-          iconCount: document.querySelectorAll('[data-dsh-tauri-pet-icon]').length,
-          stillConnected: button?.isConnected ?? false,
-          previousIsTrigger: button?.previousElementSibling === document.querySelector('.dshp-settings-trigger'),
-        }
-      })
+        await openSettingsMenu(app.page, app.frame, app.syntheticFallbacks)
+        await expect.poll(itemCount, { timeout: 15_000, message: `第 ${round} 次重开菜单后桌宠条目必须仍为 1 个` }).toBe(1)
 
-      expect(state.iconCount, '补丁恰好插入一个入口，观察器重入不得叠加或移除').toBe(1)
-      expect(state.stillConnected, '兜底轮询窗口结束后入口必须留在 DOM 上').toBe(true)
-      expect(state.previousIsTrigger, '看护循环结束后位置必须仍然正确').toBe(true)
-      expect(app.errors, '轮询耗尽预算后必须静默停止，不得抛出应用级错误').toEqual([])
+        // 真实制造 childList 变更（观察器配置为 childList + subtree），逼出一次重新扫描。
+        await app.frame.evaluate(() => {
+          const probe = document.createElement('div')
+          document.body.appendChild(probe)
+          probe.remove()
+        })
+
+        await expect.poll(itemCount, { timeout: 15_000, message: `第 ${round} 次重新扫描后桌宠条目不得被重复插入` }).toBe(1)
+        expect(
+          await app.frame.locator(PET_MENU_PATCHED).count(),
+          `第 ${round} 次重新扫描后被打补丁的菜单仍必须恰为一个`,
+        ).toBe(1)
+      }
+
+      expectNoSyntheticFallbacks(app)
+      expect(app.errors, '重复扫描不得抛出应用级错误').toEqual([])
     }
     finally {
       await app.close()

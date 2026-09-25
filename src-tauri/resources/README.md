@@ -39,29 +39,93 @@ a successful migration, and the one-shot migration is recorded in `.store.dat`
 (`dsh_home_migrated`). Migration failures are non-fatal: legacy data stays in
 place and the migration retries on the next launch.
 
-## Preset plugins — `preset-plugins.json`
+## Resource manifest — `manifest.jsonc`
 
-The first-run wizard / sidebar preset list is driven by `preset-plugins.json`
-(loaded at runtime by `src-tauri/src/service/plugin/mod.rs` — **no Rust code
-change needed to add a preset**). To propose a new preset plugin, open a PR
-that adds one entry to the JSON array:
+Every runtime resource catalog now lives in a single `manifest.jsonc` (JSONC:
+`//` and `/* */` comments plus trailing commas are tolerated). It is parsed at
+runtime by `src-tauri/src/config/manifest.rs` — **no Rust code change is needed
+to add a preset, a built-in plugin, a deprecated id, a pet, or a dependency
+mapping entry**.
 
-> **Note on "new preset" detection**: the file ships with the installer and is
-> force-overwritten on every install, so the app records a fingerprint of its
-> content into the user-data settings after the wizard ends (install or skip)
-> and re-opens the wizard on the next launch when the content differs. No extra
-> action is needed when adding an entry.
+```jsonc
+{
+  "engines": { "dsh": { "recommend": "0.1.5-rc.3", "minimum": "0.1.5-rc.1" } },
+  "dependencies": {
+    "node": {
+      "engine": ">=22.22.0",
+      "entry": { "windows": "node.exe", "default": "bin/node" },
+      "managedRoot": "$AppData/runtime",
+      "overridable": true
+    }
+  },
+  "plugins": { "depercated": [], "built-in": [], "preset": [] },
+  "pets": { "built-in": [] }
+}
+```
+
+`managedRoot` (and every recorded mapping value) accepts three forms:
+
+| Form | Resolves to |
+| ---- | ----------- |
+| `$AppData/...` | the app data directory (its `dev` sibling in debug builds) |
+| `$Resources/...` (legacy spelling: `resources/...`) | the installed app's resource root, falling back to app data when it cannot be probed |
+| absolute path (`C:/anywhere/dsh`, `/opt/dsh`) | used verbatim — how a local bundle build points at a checkout |
+| any other relative path | app data directory |
+
+Prefixes are case-insensitive and require the `/` boundary (`$resourcesfoo` is a plain
+relative path).
+
+| Section | Purpose |
+| ------- | ------- |
+| `engines.dsh.recommend` | Recommended core version (update hints, "above recommended" marks) |
+| `engines.dsh.minimum` | Lowest supported core; older local cores are not preferred |
+| `dependencies` | Dependency mapping spec: entry path per platform, default managed root, whether arbitrary overrides are allowed |
+| `plugins.preset` | Community preset list shown by the first-run wizard / sidebar |
+| `plugins.built-in` | Plugins shipped *with* the installer (auto-installed and auto-healed at startup) |
+| `plugins.depercated` | Ids of presets that are no longer offered and get uninstalled at startup (key spelling is kept for compatibility) |
+| `pets.built-in` | Preset pet catalog |
+
+### Dependency mapping
+
+The manifest only describes **where a dependency's entry lives inside its root**.
+Which root is actually used is recorded per machine in
+`<app-data>/dependencies.json` (debug: `<app-data>/dev/dependencies.json`):
 
 ```json
+{ "node": "C:/Users/you/AppData/Roaming/dsh-tauri/runtime", "pnpm": null, "dsh": "C:/Users/you/AppData/Roaming/dsh-tauri/dependencies/dsh" }
+```
+
+* a path → that root is used (an absolute location anywhere on disk, or a
+  `$AppData/...` / `$Resources/...` token as described above);
+* `null` → the system environment satisfies this dependency; a managed copy is
+  still downloaded into `managedRoot` if one is ever needed (and the mapping is
+  rewritten then);
+* a missing key → fall back to the manifest's `managedRoot` (under app data).
+
+This is what makes a future "bundled core" build a manifest-only change:
+point `managedRoot` (or the recorded root) at `$Resources/dsh` and no path logic
+in `src-tauri` has to move.
+
+### Preset plugins — `plugins.preset`
+
+To propose a new preset plugin, open a PR that adds one entry:
+
+> **Note on "new preset" detection**: the manifest ships with the installer and
+> is force-overwritten on every install, so the app records a fingerprint of the
+> `plugins` section into the user-data settings after the wizard ends (install or
+> skip) and re-opens the wizard on the next launch when that section differs. No
+> extra action is needed when adding an entry.
+
+```jsonc
 {
   "id": "npm-package-name",
   "spec": "npm-package-name | github:owner/repo",
   "name": "Display name",
   "description": "English description. · 中文描述",
-  "repoUrl": "https://github.com/owner/repo",
+  "repo": "https://github.com/owner/repo",
   "recommended": true,
-  "fix": false,
-  "winOnly": false
+  "checked": true,
+  "version": [{ "version": "^0.19.1", "dsh": "^0.1.5-rc.1" }]
 }
 ```
 
@@ -69,43 +133,49 @@ that adds one entry to the JSON array:
 | ------------- | -------- | ----------------------------------------------------------------------- |
 | `id`          | yes      | Unique front-end key; must be a legal npm dependency name               |
 | `spec`        | yes      | Dependency form passed to `dsh plugin add` (npm name or `github:owner/repo`) |
-| `version`     | no       | Inclusive installed-plugin version cap for core-driven automatic removal; not an installation pin |
-| `dshSupportedVersion` | no | Highest supported core version; a newer core disables the preset in the UI and makes it eligible for automatic cleanup |
+| `package`     | no       | Real npm package name when it differs from `id`                          |
 | `name`        | yes      | Display name                                                            |
 | `description` | yes      | Shown in the wizard; bilingual (`en. · 中文`) is encouraged             |
-| `repoUrl`     | yes      | Repository page, opened via the "open repo" button                      |
-| `recommended` | no       | Green "recommended" chip, checked by default (defaults to `false`)      |
+| `repo`        | yes      | Repository page, opened via the "open repo" button                      |
+| `recommended` | no       | Green "recommended" chip (defaults to `false`)                          |
 | `fix`         | no       | Yellow "fix" chip, checked by default — reserved for Windows minimal-mode fixes (defaults to `false`) |
-| `defaultUnchecked` | no  | Listed with the "recommended" chip but **not** pre-checked in the wizard (defaults to `false`) |
+| `checked`     | no       | Pre-checked in the first-run wizard (defaults to `false`)                |
 | `winOnly`     | no       | Only listed on Windows (defaults to `false`)                            |
+| `version`     | no       | Version-range declaration: a plain string (e.g. `"latest"`) or a matrix of `{ "version": <plugin range>, "dsh": <core range> }` pairs |
 
-`id` must be unique across the file. The plugin itself is **not** vendored into
-this repository — it is installed on the user's machine from `spec` at setup
-time, so the PR only needs to add the JSON entry.
+`id` must be unique across the section. The plugin itself is **not** vendored
+into this repository — it is installed on the user's machine from `spec` at
+setup time, so the PR only needs to add the JSON entry.
 
 ### Core-driven automatic removal
 
-When the running core is newer than `dshSupportedVersion`, startup cleanup can
-remove the installed plugin. An optional `version` limits this cleanup to installed
-versions **less than or equal to** that cap, using semantic-version precedence.
-Higher installed versions are kept. If a cap is present but the installed version
-is unknown or invalid, or the cap itself is invalid, core-driven cleanup is skipped.
-Omitting `version` retains the previous uncapped cleanup behavior.
+For a given active core version, the **last** `version` matrix entry whose `dsh`
+range matches the core decides the compatible plugin version range — the matrix is
+an ascending ladder, and older rules usually stay open-ended (`^0.1.5-rc.1` covers
+all of `0.1.x`), so a release core can match several entries at once. That single
+matching entry drives both the UI compatibility mark and core-driven cleanup:
 
-`version` is metadata for automatic removal, **not** an installation pin: installation
-still uses `spec`. It does not change the core-based UI compatibility check or manual
-uninstall. The separate `deprecated-plugins.json` list is unaffected and continues
-to remove listed plugins independently of these version caps.
+* no matrix entry matches the running core → the preset is marked
+  "unsupported by the current core" and installed copies inside any declared
+  plugin range are removed;
+* a matching entry exists but the installed plugin version falls outside its
+  `version` range → the installed copy is removed so it can be reinstalled at a
+  compatible version;
+* a plain string declaration (or no declaration) never triggers removal.
+
+The separate `plugins.depercated` list is unaffected and continues to remove
+listed plugins independently of these ranges.
 
 ### Built-in (internal) plugins
 
 Plugins that must ship *with* the installer and are treated as part of the app
-(auto-installed and auto-healed at startup) live in `internal-plugins.json`,
-separate from the community preset list. Add an extra `package` field when the
-real npm name differs from `id`. The entries are bundled at build time by
-`scripts/build-plugins.ts` (via `pnpm deploy` of the workspace packages listed in
-`packages/dsh-tauri-bundle`) into `resources/node_modules/<name>` (via
-`bundle.resources`) and never appear in the first-run checklist. On startup the
-app removes the legacy `resources/preset-plugins/` directory left by upgrades.
-See the [built-in plugin guide](../../docs/BUILTIN_PLUGINS.md) for the full
-workflow.
+(auto-installed and auto-healed at startup) live in `plugins.built-in`. Add a
+`package` field when the real npm name differs from `id`. The entries are
+bundled at build time by `scripts/build-plugins.ts` (via `pnpm deploy` of the
+workspace packages listed in `packages/dsh-tauri-bundle`) into
+`resources/node_modules/<name>` (via `bundle.resources`) and never appear in the
+first-run checklist. On startup the app removes the legacy
+`resources/preset-plugins/` directory left by upgrades. In debug builds the
+workspace packages under `packages/*` are discovered directly, so a new built-in
+plugin only needs its `dsh` field and a `plugins.built-in` entry for release
+builds.

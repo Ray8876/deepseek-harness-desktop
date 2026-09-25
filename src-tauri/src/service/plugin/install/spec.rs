@@ -30,9 +30,10 @@ pub(super) fn bundled_dir_of(
 pub(super) fn preset_spec_for_install(
     preset: &PreinstallPluginInfo,
     bundled_dir: Option<PathBuf>,
+    core_version: Option<&str>,
 ) -> Result<String, String> {
     if !preset.internal {
-        return Ok(preset.spec.clone());
+        return Ok(pinned_spec(preset, core_version));
     }
     let dir = bundled_dir.ok_or_else(|| {
         format!(
@@ -41,6 +42,38 @@ pub(super) fn preset_spec_for_install(
         )
     })?;
     Ok(bundled_dep_spec(&dir))
+}
+
+/// 非内置插件按「当前核心那一代」的推荐区间钉版本。
+///
+/// 清单矩阵里的 `version` 是发布侧给出的该代推荐插件版本区间，而裸包名会让 pnpm 装
+/// `latest`（未必属于这一代：核心 `^0.1.7-rc.1` 该装 `dsh-better-sidebar@^0.21.1`，
+/// 但 registry 的 `latest` 仍解析到 0.19.x）。没有命中区间（字符串声明、核心超出全部
+/// 区间、版本不可解析）时退回裸 spec，交由 pnpm 自行解析。
+fn pinned_spec(preset: &PreinstallPluginInfo, core_version: Option<&str>) -> String {
+    let Some(req) = preset
+        .version
+        .as_ref()
+        .and_then(|version| version.plugin_req_for_core(core_version))
+    else {
+        return preset.spec.clone();
+    };
+    if !is_bare_package_spec(&preset.spec) {
+        return preset.spec.clone();
+    }
+    format!("{}@{req}", preset.spec)
+}
+
+/// 是否为可直接追加 `@区间` 的裸 npm 包名（含 scope）。
+///
+/// `git+https://…` / `github:owner/repo` / `link:<路径>` 自带来源，`pkg@1.2.3` 已带
+/// 版本，追加都会破坏 spec。
+fn is_bare_package_spec(spec: &str) -> bool {
+    if spec.contains(':') || spec.contains(char::is_whitespace) {
+        return false;
+    }
+    let body = spec.strip_prefix('@').unwrap_or(spec);
+    !body.is_empty() && !body.contains('@')
 }
 
 /// 把 `github:owner/repo[#ref]` 与裸 `git+ssh://git@github.com/...` 一类的
@@ -144,6 +177,7 @@ pub(super) fn spec_argument(spec: &str, core_version: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::manifest::{PluginVersion, VersionPair};
     use std::path::PathBuf;
 
     /// 构造预设条目的测试助手（internal 由各用例显式指定）
@@ -159,7 +193,6 @@ mod tests {
             fix: false,
             default_checked: false,
             default_unchecked: false,
-            dsh_supported_version: None,
             version: None,
             win_only: false,
             internal,
@@ -170,10 +203,96 @@ mod tests {
     fn install_spec_passthrough_for_regular_preset() {
         // 普通插件：spec 原样返回，与捆绑目录无关
         let p = preset("dshmarket", "dshmarket", false);
-        assert_eq!(preset_spec_for_install(&p, None).unwrap(), "dshmarket");
+        assert_eq!(preset_spec_for_install(&p, None, None).unwrap(), "dshmarket");
         assert_eq!(
-            preset_spec_for_install(&p, Some(PathBuf::from("/ignored"))).unwrap(),
+            preset_spec_for_install(&p, Some(PathBuf::from("/ignored")), None).unwrap(),
             "dshmarket"
+        );
+    }
+
+    #[test]
+    fn install_spec_pins_recommended_range_for_current_core() {
+        // 清单矩阵声明的该代推荐区间必须钉进 spec：裸包名会让 pnpm 装 latest
+        // （核心 0.1.7-rc.1 该装 ^0.21.1，registry 的 latest 却还是 0.19.x）
+        let mut p = preset("dsh-better-sidebar", "dsh-better-sidebar", false);
+        p.version = Some(PluginVersion::Matrix(vec![
+            VersionPair {
+                version: "^0.19.1".into(),
+                dsh: "^0.1.5-rc.1".into(),
+            },
+            VersionPair {
+                version: "^0.21.1".into(),
+                dsh: "^0.1.7-rc.1".into(),
+            },
+        ]));
+        assert_eq!(
+            preset_spec_for_install(&p, None, Some("0.1.5-rc.3")).unwrap(),
+            "dsh-better-sidebar@^0.19.1"
+        );
+        assert_eq!(
+            preset_spec_for_install(&p, None, Some("0.1.7-rc.1")).unwrap(),
+            "dsh-better-sidebar@^0.21.1"
+        );
+        // scope 包名同样支持；核心没有任何命中区间时退回裸 spec
+        let mut scoped = preset("@xmanrui/dsh-im", "@xmanrui/dsh-im", false);
+        scoped.version = p.version.clone();
+        assert_eq!(
+            preset_spec_for_install(&scoped, None, Some("0.1.7-rc.2")).unwrap(),
+            "@xmanrui/dsh-im@^0.21.1"
+        );
+        assert_eq!(
+            preset_spec_for_install(&p, None, Some("0.2.0")).unwrap(),
+            "dsh-better-sidebar"
+        );
+        assert_eq!(
+            preset_spec_for_install(&p, None, None).unwrap(),
+            "dsh-better-sidebar"
+        );
+    }
+
+    #[test]
+    fn install_spec_never_pins_non_package_specs() {
+        // 自带来源 / 已带版本的 spec 不能再追加 `@区间`
+        let mut git = preset("probe", "git+https://github.com/o/r.git", false);
+        git.version = Some(PluginVersion::Matrix(vec![VersionPair {
+            version: "^1.2.0".into(),
+            dsh: "^0.1.5-rc.1".into(),
+        }]));
+        assert_eq!(
+            preset_spec_for_install(&git, None, Some("0.1.6")).unwrap(),
+            "git+https://github.com/o/r.git"
+        );
+
+        let mut versioned = preset("probe", "probe@1.0.0", false);
+        versioned.version = git.version.clone();
+        assert_eq!(
+            preset_spec_for_install(&versioned, None, Some("0.1.6")).unwrap(),
+            "probe@1.0.0"
+        );
+
+        let mut link = preset("probe", "link:C:/deps/probe", false);
+        link.version = git.version.clone();
+        assert_eq!(
+            preset_spec_for_install(&link, None, Some("0.1.6")).unwrap(),
+            "link:C:/deps/probe"
+        );
+    }
+
+    #[test]
+    fn install_spec_supports_npm_style_whitespace_ranges() {
+        // 清单按 npm 习惯书写空格分隔的多比较符区间
+        let mut p = preset("probe", "probe", false);
+        p.version = Some(PluginVersion::Matrix(vec![VersionPair {
+            version: "^1.2.0".into(),
+            dsh: ">=0.1.7-rc.1 <0.1.7-rc.5".into(),
+        }]));
+        assert_eq!(
+            preset_spec_for_install(&p, None, Some("0.1.7-rc.3")).unwrap(),
+            "probe@^1.2.0"
+        );
+        assert_eq!(
+            preset_spec_for_install(&p, None, Some("0.1.7-rc.5")).unwrap(),
+            "probe"
         );
     }
 
@@ -184,7 +303,7 @@ mod tests {
         let p = preset("dsh-tauri", "dsh-tauri@0.2.0", true);
         let dir = PathBuf::from("C:\\Apps\\dsh\\resources\\internal-plugins\\dsh-tauri");
         assert_eq!(
-            preset_spec_for_install(&p, Some(dir)).unwrap(),
+            preset_spec_for_install(&p, Some(dir), None).unwrap(),
             "link:C:/Apps/dsh/resources/internal-plugins/dsh-tauri"
         );
     }
@@ -193,7 +312,7 @@ mod tests {
     fn install_spec_errors_when_internal_bundle_missing() {
         // 内置插件捆绑目录缺失：发布缺陷，显式报错而非静默走 npm/git spec
         let p = preset("dsh-tauri", "dsh-tauri@0.2.0", true);
-        let err = preset_spec_for_install(&p, None).unwrap_err();
+        let err = preset_spec_for_install(&p, None, None).unwrap_err();
         assert!(err.starts_with("BUNDLED_PLUGIN_MISSING"));
         assert!(err.contains("dsh-tauri"));
     }

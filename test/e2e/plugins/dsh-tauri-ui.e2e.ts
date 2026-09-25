@@ -20,7 +20,7 @@ import {
   launchDshBrowser,
   newDshPage,
   openSettings,
-  PET_ICON,
+  PET_STYLES,
   SETTINGS_SIDEBAR,
   SETTINGS_TRIGGER,
 } from '../support/browser'
@@ -52,6 +52,42 @@ const OFFICIAL_HERO_WORKSPACE_CHIP = '[class$="heroWorkspaceRow"] button[aria-la
  * 用例先断言它们全都在侧边栏内，确保点到的不是别的控件。
  */
 const SIDEBAR_NEW_SESSION = 'button[aria-label="新建会话"]:visible'
+
+/** 官方 composer 编辑器根（上游 `ComposerContentEditable` 的 `data-composer-input` 锚点）。 */
+const COMPOSER_INPUT = '[data-composer-card] [data-composer-input]'
+
+/**
+ * 折叠粘贴后的引用 chip 宿主：官方 `ReferenceChipNode.createDOM` 写的 `data-composer-chip`，
+ * 其值是本插件注册的引用源名（`packages/dsh-tauri-ui/src/client/constants/index.ts` 的 `PASTE_CHIP_SOURCE`）。
+ */
+const PASTE_CHIP = '[data-composer-chip="dsh-tauri-ui-paste"]'
+
+/** 长粘贴夹具：首行是 chip 标题来源，整体远超 500 字阈值（`register/paste-collapse.utils.ts`）。 */
+const LONG_PASTE = `### 环境信息 app:版本 1.0\n${'日志行'.repeat(200)}`
+
+/** 阈值内夹具：必须原样进入编辑器。 */
+const SHORT_PASTE = '短文本'.repeat(100)
+
+/**
+ * 在 composer 编辑器上派发一次合成粘贴事件。
+ *
+ * 真实剪贴板不可读（Playwright 无剪贴板权限），而官方 paste 命令本身也接受合成事件，
+ * 因此这里按官方 `DataTransfer` + `ClipboardEvent` 的形态构造，只替换事件来源。
+ * @returns 编辑器是否在位（不在位时本用例没有粘贴落点）。
+ */
+async function syntheticPaste(frame: import('playwright').Frame, text: string): Promise<{ editorFound: boolean }> {
+  await frame.locator(COMPOSER_INPUT).click()
+  return await frame.evaluate((payload) => {
+    const editor = document.querySelector(payload.editorSelector)
+    if (!(editor instanceof HTMLElement))
+      return { editorFound: false }
+    editor.focus()
+    const dataTransfer = new DataTransfer()
+    dataTransfer.setData('text/plain', payload.text)
+    editor.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dataTransfer }))
+    return { editorFound: true }
+  }, { editorSelector: COMPOSER_INPUT, text })
+}
 
 function url(): string {
   return `${inject('dshBaseUrl')}${RESUME_PATH}`
@@ -126,7 +162,7 @@ describe('L2 客户端', () => {
   })
 
   it('验证设置侧栏与触发器被注入 dsh 界面', async () => {
-    const app = await newDshPage(browser, { ready: PET_ICON })
+    const app = await newDshPage(browser, { ready: PET_STYLES })
     try {
       const triggerHost = await app.frame.evaluate(() => {
         const trigger = document.querySelector('.dshp-settings-trigger')
@@ -376,6 +412,63 @@ describe('L2 客户端', () => {
 
       expectNoSyntheticFallbacks(app)
       expect(app.errors, '未分组新会话不得抛出应用级错误').toEqual([])
+    }
+    finally {
+      await app.close()
+    }
+  })
+
+  it('验证超过 500 字的粘贴折叠成引用 chip，chip 文案带首行与字数', async () => {
+    const app = await newDshPage(browser, { ready: HERO_WORKSPACE_CHIP })
+    try {
+      await app.frame.locator(SIDEBAR_NEW_SESSION).first().click()
+      await expect.poll(
+        async () => await app.frame.locator(COMPOSER_INPUT).count(),
+        { timeout: 20_000, message: '新建会话后 composer 编辑器必须挂载，否则本用例没有粘贴落点' },
+      ).toBe(1)
+
+      const paste = await syntheticPaste(app.frame, LONG_PASTE)
+      expect(paste.editorFound, '夹具前置：composer 编辑器必须在位').toBe(true)
+
+      await expect.poll(
+        async () => await app.frame.locator(PASTE_CHIP).count(),
+        { timeout: 10_000, message: '超过 500 字的粘贴必须折叠成引用 chip' },
+      ).toBe(1)
+      expect(
+        await app.frame.locator(PASTE_CHIP).first().textContent(),
+        'chip 文案必须是「粘贴内容首行 · 字数」（本插件词典提供，中文语境下为「… 字」）',
+      ).toBe(`### 环境信息 app:版本 1.0 · ${LONG_PASTE.length} 字`)
+      expect(
+        await app.frame.locator(COMPOSER_INPUT).first().textContent(),
+        '原文不得作为一大串文字留在编辑器里',
+      ).not.toContain(LONG_PASTE)
+
+      expect(app.errors, '折叠粘贴不得抛出应用级错误').toEqual([])
+    }
+    finally {
+      await app.close()
+    }
+  })
+
+  it('验证 500 字以内的粘贴不折叠，原样进入编辑器', async () => {
+    const app = await newDshPage(browser, { ready: HERO_WORKSPACE_CHIP })
+    try {
+      await app.frame.locator(SIDEBAR_NEW_SESSION).first().click()
+      await expect.poll(
+        async () => await app.frame.locator(COMPOSER_INPUT).count(),
+        { timeout: 20_000, message: '新建会话后 composer 编辑器必须挂载，否则本用例没有粘贴落点' },
+      ).toBe(1)
+
+      const paste = await syntheticPaste(app.frame, SHORT_PASTE)
+      expect(paste.editorFound, '夹具前置：composer 编辑器必须在位').toBe(true)
+
+      await expect.poll(
+        async () => await app.frame.locator(COMPOSER_INPUT).first().textContent() ?? '',
+        { timeout: 10_000, message: '500 字以内的粘贴必须原样出现在编辑器里' },
+      ).toContain(SHORT_PASTE)
+      expect(await app.frame.locator(PASTE_CHIP).count(), '500 字以内不得出现折叠 chip').toBe(0)
+
+      expect(app.errors, '阈值内的粘贴不得抛出应用级错误').toEqual([])
     }
     finally {
       await app.close()

@@ -1,5 +1,18 @@
 use std::path::{Path, PathBuf};
 
+/// 文件的修改时间戳（纳秒，取不到时为 0）。
+///
+/// 资源清单与依赖映射表都是「进程内可反复读取、但 debug 下可能被编辑」的文件，
+/// 用「路径 + 时间戳」作为解析缓存键即可在两者之间取得平衡。
+pub fn file_stamp(path: &Path) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
 /// Linux inotify 文件监视上限的推荐最小值。
 ///
 /// harness 服务（dsh web）用 chokidar 递归监视 `$DSH_HOME/profiles/*`，node 的

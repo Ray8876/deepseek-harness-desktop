@@ -73,6 +73,19 @@ pub(crate) fn build_plugin_envs(
         }
     }
 
+    // 捆绑 pnpm 的绝对路径也显式下传（shim 优先采用 `DSH_PNPM_BIN`）：shim 内
+    // 烘焙的字面量要经 cmd.exe/PowerShell 的代码页解析，用户名含非 ASCII（如
+    // `C:\Users\小蔡\...`）时会被读成乱码，`if exist "%PNPM_BIN%"` 判定落空 →
+    // shim 走 `:no_pnpm` 以退出码 1 结束，安装只报 `PREINSTALL_FAILED`。
+    // 环境变量块是 UTF-16，不受代码页影响。
+    let bundled_pnpm = config::get_pnpm_binary_path(app_handle);
+    if bundled_pnpm.exists() {
+        envs.insert(
+            "DSH_PNPM_BIN".to_string(),
+            bundled_pnpm.to_string_lossy().into_owned(),
+        );
+    }
+
     // 档案 node_modules 是用哪份 store 装的，是既有事实：pnpm 只在「自己解析出的 store」
     // 与 `node_modules/.modules.yaml` 记录的一致时才继续，否则直接
     // `ERR_PNPM_UNEXPECTED_STORE` 退出（该错误与插件本身无关，用户看到的是「插件安装失败」）。

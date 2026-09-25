@@ -11,6 +11,7 @@ export const setting = defineStore({
   state: () => ({
     installed: false,
     port: 3080,
+    harness_max_heap_mb: null as number | null,
     auto_start: true,
     cli_link_enabled: true,
     zoom_factor: 1,

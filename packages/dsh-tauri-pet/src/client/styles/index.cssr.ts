@@ -59,6 +59,43 @@ export default c([
     lineHeight: '18px',
     color: 'var(--dsw-alias-state-error-primary)',
   }),
+  // 环境能力提示（原生 Wayland 下桌宠无法置顶）：常驻而非一次性报错，用弱化配色。
+  c('.dshp-pet__notice', {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    padding: '10px 12px',
+    fontSize: '12px',
+    lineHeight: '18px',
+    borderRadius: '10px',
+    border: '1px solid var(--dsw-alias-border-weak)',
+    color: 'var(--dsw-alias-label-secondary)',
+  }, [
+    c('p', { margin: '0' }),
+  ]),
+  c('.dshp-pet__notice-actions', {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: '8px',
+  }),
+  // 「重启后生效」与紧随其后的说明文字同处一个灰底提示块内，仅靠字号区分会被读者略过，
+  // 故沿用 dshp-extension__banner[data-kind=info] 的描边加浅底做法。
+  c('.dshp-pet__notice-banner', {
+    margin: '0',
+    padding: '8px 10px',
+    fontSize: '13px',
+    lineHeight: '20px',
+    borderRadius: '8px',
+    border: '1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 35%, transparent)',
+    background: 'color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, transparent)',
+    color: 'var(--dsw-alias-label-primary)',
+  }),
+  c('.dshp-pet__notice-hint', {
+    fontSize: '12px',
+    lineHeight: '18px',
+    color: 'var(--dsw-alias-label-tertiary)',
+  }),
 
   c('.dshp-pet__cards', { display: 'flex', flexDirection: 'column', gap: '12px' }),
   c('.dshp-pet__card-item', {
@@ -137,44 +174,4 @@ export default c([
     alignItems: 'center',
     gap: '6px',
   }),
-
-  // 旧版客户端触发器是通栏块级元素，补丁给宿主加 flex 行，入口按钮才不会被挤到下一行。
-  c('.dshp-pet__settings-row', {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    width: '100%',
-  }),
-  c('.dshp-pet__settings-row > .dshp-settings-trigger:not(.dshp-settings-trigger--rail)', {
-    flex: '1 1 auto',
-    width: 'auto',
-    minWidth: '0',
-  }),
-  c('.dshp-pet__icon-entry', { flex: 'none', marginRight: '2px' }),
-  c('[data-sidebar-collapsed] .dshp-pet__icon-entry', { display: 'none' }),
-  c('.dshp-pet__icon-dot', {
-    display: 'flex',
-    position: 'absolute',
-    top: '3px',
-    right: '3px',
-  }),
-  c('.dshp-pet__icon-entry::after', {
-    content: 'attr(data-tip)',
-    position: 'absolute',
-    bottom: 'calc(100% + 6px)',
-    left: '50%',
-    transform: 'translateX(-50%)',
-    background: 'var(--dsw-alias-label-primary)',
-    color: 'var(--dsw-alias-bg-layer-3)',
-    padding: '4px 8px',
-    borderRadius: '6px',
-    fontSize: '12px',
-    lineHeight: '16px',
-    whiteSpace: 'nowrap',
-    pointerEvents: 'none',
-    opacity: '0',
-    transition: 'opacity 0.15s ease',
-    zIndex: '10',
-  }),
-  c('.dshp-pet__icon-entry:hover::after, .dshp-pet__icon-entry:focus-visible::after', { opacity: '1' }),
 ])

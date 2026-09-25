@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Manager, Runtime};
 
 use super::constants::*;
+use super::dependencies;
 use super::format::get_dsh_service_url;
 use super::utils::search_node_binary;
 use super::{detect_region, Region};
@@ -234,32 +235,26 @@ pub fn set_prefer_bundled_node_runtime(prefer: bool) {
 /// 已安装的捆绑运行时 node 二进制（未安装时返回 None）
 pub fn bundled_node_binary(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
     let runtime_dir = get_node_install_path(app_handle);
-    // 使用 cfg 宏在编译时确定文件名
-    let (rel_path, bin_name) = if cfg!(windows) {
-        ("", "node.exe")
-    } else {
-        ("bin", "node")
-    };
-    let direct_path = runtime_dir.join(rel_path).join(bin_name);
+    let entry = dependencies::entry_relative(app_handle, dependencies::DEP_NODE);
+    let direct_path = runtime_dir.join(&entry);
     if direct_path.exists() {
-        Some(direct_path)
-    } else {
-        // 只有在直接路径不存在时才进行开销较大的递归搜索
-        search_node_binary(&runtime_dir, bin_name)
+        return Some(direct_path);
     }
+    // 只有在直接路径不存在时才进行开销较大的递归搜索（解压可能多套一层目录）
+    let bin_name = entry.file_name()?.to_string_lossy().into_owned();
+    search_node_binary(&runtime_dir, &bin_name)
 }
 
 /// Node.js 二进制路径
 ///
-/// 优先级：ABI 探测要求捆绑运行时（原生模块不匹配时的兜底）> 本地版本兼容的
-/// Node.js 环境 > 已安装的捆绑运行时
+/// 优先级：ABI 探测要求捆绑运行时（原生模块不匹配时的兜底）> 映射表（`null` =
+/// 系统环境 / 路径 = 指定根）> 未记录时沿用「本地版本兼容优先」> 已安装的捆绑运行时。
 pub fn get_node_binary_path(app_handle: &tauri::AppHandle) -> PathBuf {
     let runtime_dir = get_node_install_path(app_handle);
-    let (rel_path, bin_name) = if cfg!(windows) {
-        ("", "node.exe")
-    } else {
-        ("bin", "node")
-    };
+    let target = runtime_dir.join(dependencies::entry_relative(
+        app_handle,
+        dependencies::DEP_NODE,
+    ));
     let bundled = bundled_node_binary(app_handle);
 
     if prefer_bundled_node_runtime() {
@@ -275,40 +270,48 @@ pub fn get_node_binary_path(app_handle: &tauri::AppHandle) -> PathBuf {
         );
     }
 
+    // 映射显式指定了托管根：该根下的运行时优先（缺失时才回落到系统环境）。
+    let pinned_managed = matches!(
+        dependencies::mapped(app_handle, dependencies::DEP_NODE),
+        Some(Some(_))
+    );
+    if pinned_managed {
+        if let Some(bundled) = bundled.clone() {
+            log::debug!("Using mapped Node.js runtime root: {}", bundled.display());
+            return bundled;
+        }
+    }
+
     if let Some(local_node) = get_local_node_path() {
         log::debug!("Using local Node.js: {}", local_node.display());
         return local_node;
     }
 
-    bundled.unwrap_or_else(|| runtime_dir.join(rel_path).join(bin_name))
+    bundled.unwrap_or(target)
 }
 
 pub fn get_node_install_path(app_handle: &tauri::AppHandle) -> PathBuf {
-    get_base_dir(app_handle).join("runtime")
+    dependencies::active_root(app_handle, dependencies::DEP_NODE)
 }
 
 /// Harness 发行版安装目录
 pub fn get_dsh_install_path<R: Runtime>(app_handle: &AppHandle<R>) -> PathBuf {
-    get_base_dir(app_handle)
-        .join("dependencies")
-        .join(DSH_CORE_DIR)
+    dependencies::active_root(app_handle, dependencies::DEP_DSH)
 }
 
 /// dsh CLI 入口
 pub fn get_dsh_binary_path<R: Runtime>(app_handle: &AppHandle<R>) -> PathBuf {
-    get_dsh_install_path(app_handle).join(DSH_ENTRY_RELATIVE)
+    dependencies::binary_path(app_handle, dependencies::DEP_DSH)
 }
 
 /// pnpm 安装目录
 pub fn get_pnpm_install_path<R: Runtime>(app_handle: &AppHandle<R>) -> PathBuf {
-    get_base_dir(app_handle)
-        .join("dependencies")
-        .join(PNPM_CORE_DIR)
+    dependencies::active_root(app_handle, dependencies::DEP_PNPM)
 }
 
 /// 捆绑 pnpm CLI 入口（纯 JS 发行，用 node 运行）
 pub fn get_pnpm_binary_path<R: Runtime>(app_handle: &AppHandle<R>) -> PathBuf {
-    get_pnpm_install_path(app_handle).join(PNPM_ENTRY_RELATIVE)
+    dependencies::binary_path(app_handle, dependencies::DEP_PNPM)
 }
 
 /// pnpm 官方/镜像下载前缀：国内走 npmmirror registry，其他直连 npmjs.org
@@ -331,15 +334,13 @@ pub fn get_pnpm_download_url() -> String {
 /// Windows 免安装 Git 的安装目录。
 #[cfg_attr(not(windows), allow(dead_code))] // 仅 Windows 的 Git 运行时探测使用
 pub fn get_mingit_install_path<R: Runtime>(app_handle: &AppHandle<R>) -> PathBuf {
-    get_base_dir(app_handle)
-        .join("dependencies")
-        .join(MINGIT_CORE_DIR)
+    dependencies::active_root(app_handle, dependencies::DEP_GIT)
 }
 
 /// Windows 免安装 Git 的 CLI 入口。
 #[cfg_attr(not(windows), allow(dead_code))] // 仅 Windows 的 Git 运行时探测使用
 pub fn get_mingit_binary_path<R: Runtime>(app_handle: &AppHandle<R>) -> PathBuf {
-    get_mingit_install_path(app_handle).join(MINGIT_ENTRY_RELATIVE)
+    dependencies::binary_path(app_handle, dependencies::DEP_GIT)
 }
 
 /// Windows MinGit 官方发行包文件名。

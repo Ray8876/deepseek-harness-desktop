@@ -1,3 +1,4 @@
+import type { ConversationAttachments } from '../service/attachments.types'
 import type { InputActions, InputState, SessionsRuntime, WorkspacesRuntime } from '../service/session-switch.types'
 
 export interface ModeSelectProps {
@@ -6,4 +7,5 @@ export interface ModeSelectProps {
   inputActions: InputActions
   sessionsRuntime: SessionsRuntime
   workspacesRuntime: WorkspacesRuntime
+  resolveAttachments: () => ConversationAttachments | undefined
 }

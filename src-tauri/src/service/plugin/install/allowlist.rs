@@ -280,7 +280,7 @@ fn apply_allow_build_keys(content: &str, keys: &[String]) -> Result<String, Stri
         keys.iter()
             .map(|k| dep_path_to_name(k))
             .filter(|name| {
-                existing_only.map_or(true, |seq| !seq.contains(&Value::String(name.clone())))
+                existing_only.is_none_or(|seq| !seq.contains(&Value::String(name.clone())))
             })
             .map(Value::String)
             .collect()
@@ -582,7 +582,7 @@ onlyBuiltDependencies:
         let dep =
             "dsh-better-sidebar@git+ssh://git@github.com/omdsh-dev/DSH-better-sidebar.git#6c89"
                 .to_string();
-        let out = apply_allow_build_keys(base, &[dep.clone()]).unwrap();
+        let out = apply_allow_build_keys(base, std::slice::from_ref(&dep)).unwrap();
         let doc: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
         // pnpm 11：allowBuilds 保留完整 depPath
         assert_eq!(
@@ -620,10 +620,10 @@ onlyBuiltDependencies:
             "dsh-better-sidebar@git+ssh://git@github.com/omdsh-dev/DSH-better-sidebar.git#6c89"
                 .to_string();
         // 空内容也能生成合法配置
-        let out = apply_allow_build_keys("", &[dep.clone()]).unwrap();
+        let out = apply_allow_build_keys("", std::slice::from_ref(&dep)).unwrap();
         let map = allow_builds_map(&out);
         assert_eq!(
-            map.get(&serde_yaml::Value::String(dep)),
+            map.get(serde_yaml::Value::String(dep)),
             Some(&serde_yaml::Value::Bool(true))
         );
         // 库负责正确加引号，键原样（含 @ / : / #）可回读
@@ -693,7 +693,8 @@ onlyBuiltDependencies:
         assert!(doc.get("packages").is_some());
         assert!(doc.get("nodeLinker").is_some());
         assert_eq!(
-            doc.get("autoInstallPeers").and_then(serde_yaml::Value::as_bool),
+            doc.get("autoInstallPeers")
+                .and_then(serde_yaml::Value::as_bool),
             Some(false)
         );
         assert_eq!(
