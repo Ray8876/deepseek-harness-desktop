@@ -116,6 +116,85 @@ def check_runtime_pins():
             raise RuntimeError(f'{name} changed; offline dependency pins need maintenance')
 
 
+def parse_jsonc(source):
+    without_comments = []
+    index = 0
+    in_string = False
+    escaped = False
+    while index < len(source):
+        char = source[index]
+        if in_string:
+            without_comments.append(char)
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+        elif char == '"':
+            in_string = True
+            without_comments.append(char)
+            index += 1
+        elif source.startswith('//', index):
+            end = source.find('\n', index)
+            if end == -1:
+                break
+            without_comments.append('\n')
+            index = end + 1
+        elif source.startswith('/*', index):
+            end = source.find('*/', index + 2)
+            if end == -1:
+                raise ValueError('Unterminated JSONC block comment')
+            without_comments.append(' ')
+            without_comments.extend(char for char in source[index:end + 2] if char in '\r\n')
+            index = end + 2
+        else:
+            without_comments.append(char)
+            index += 1
+
+    source = ''.join(without_comments)
+    without_trailing_commas = []
+    index = 0
+    in_string = False
+    escaped = False
+    while index < len(source):
+        char = source[index]
+        if in_string:
+            without_trailing_commas.append(char)
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+            without_trailing_commas.append(char)
+        elif char == ',':
+            following = index + 1
+            while following < len(source) and source[following].isspace():
+                following += 1
+            if following == len(source) or source[following] not in '}]':
+                without_trailing_commas.append(char)
+        else:
+            without_trailing_commas.append(char)
+        index += 1
+    return json.loads(''.join(without_trailing_commas))
+
+
+def harness_recommendation(resources):
+    legacy = resources / 'version-recommend.json'
+    if legacy.is_file():
+        version = json.loads(legacy.read_text()).get('dsh')
+    else:
+        manifest = parse_jsonc((resources / 'manifest.jsonc').read_text())
+        version = manifest.get('engines', {}).get('dsh', {}).get('recommend')
+    if not isinstance(version, str) or not version.strip():
+        raise RuntimeError('Upstream resources do not define a recommended Harness version')
+    return version.strip()
+
+
 def output(**values):
     with open(os.environ['GITHUB_OUTPUT'], 'a') as file:
         for key, value in values.items():
@@ -190,7 +269,7 @@ def main():
     version = json.loads((ROOT / 'package.json').read_text())['version']
     if tag != f'v{version}':
         raise RuntimeError('Desktop version does not match upstream release tag')
-    recommendation = json.loads((ROOT / 'src-tauri/resources/version-recommend.json').read_text())['dsh']
+    recommendation = harness_recommendation(ROOT / 'src-tauri/resources')
     lock = harness_lock(recommendation, upstream_sha)
     check_runtime_pins()
     (ROOT / 'scripts/offline-harness-lock.json').write_text(json.dumps(lock, indent=2) + '\n')

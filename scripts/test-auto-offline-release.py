@@ -85,6 +85,22 @@ pub use installable::{record_mappings, tasks, Dsh, InstallKind, Installable, Nod
         with self.assertRaisesRegex(RuntimeError, 'Unexpected conflict'):
             sync.merge_download_module('mod core;\n', 'mod core;\n')
 
+    def test_harness_recommendation_reads_legacy_json_layout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            resources = Path(temp)
+            (resources / 'version-recommend.json').write_text('{"dsh":"0.1.5-rc.2"}')
+            self.assertEqual(sync.harness_recommendation(resources), '0.1.5-rc.2')
+
+    def test_harness_recommendation_reads_jsonc_manifest_layout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            resources = Path(temp)
+            (resources / 'manifest.jsonc').write_text('''{
+  // engine recommendation
+  "engines": { "dsh": { "recommend": " 0.1.5-rc.3 ", }, },
+  "url": "https://example.com/a//b",
+}''')
+            self.assertEqual(sync.harness_recommendation(resources), '0.1.5-rc.3')
+
     def test_publication_rejects_wrong_source_corruption_and_extra_files(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
