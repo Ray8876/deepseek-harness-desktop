@@ -147,17 +147,121 @@ async function readJson(path) {
   }
 }
 
+function parseJsonc(source) {
+  let uncommented = ''
+  let index = 0
+  let inString = false
+  let escaped = false
+  while (index < source.length) {
+    const char = source[index]
+    if (inString) {
+      uncommented += char
+      if (escaped) {
+        escaped = false
+      }
+      else if (char === '\\') {
+        escaped = true
+      }
+      else if (char === '"') {
+        inString = false
+      }
+      index += 1
+    }
+    else if (char === '"') {
+      inString = true
+      uncommented += char
+      index += 1
+    }
+    else if (source.startsWith('//', index)) {
+      const end = source.indexOf('\n', index)
+      if (end === -1)
+        break
+      uncommented += '\n'
+      index = end + 1
+    }
+    else if (source.startsWith('/*', index)) {
+      const end = source.indexOf('*/', index + 2)
+      if (end === -1)
+        throw new Error('unterminated block comment')
+      const comment = source.slice(index, end + 2)
+      uncommented += ` ${comment.replace(/[^\r\n]/g, '')}`
+      index = end + 2
+    }
+    else {
+      uncommented += char
+      index += 1
+    }
+  }
+
+  let json = ''
+  index = 0
+  inString = false
+  escaped = false
+  while (index < uncommented.length) {
+    const char = uncommented[index]
+    if (inString) {
+      json += char
+      if (escaped) {
+        escaped = false
+      }
+      else if (char === '\\') {
+        escaped = true
+      }
+      else if (char === '"') {
+        inString = false
+      }
+    }
+    else if (char === '"') {
+      inString = true
+      json += char
+    }
+    else if (char === ',') {
+      let following = index + 1
+      while (following < uncommented.length && /\s/.test(uncommented[following]))
+        following += 1
+      if (following === uncommented.length || !'}]'.includes(uncommented[following]))
+        json += char
+    }
+    else {
+      json += char
+    }
+    index += 1
+  }
+  return JSON.parse(json)
+}
+
+async function readJsonc(path) {
+  try {
+    return parseJsonc(await readFile(path, 'utf8'))
+  }
+  catch (error) {
+    fail(`cannot read JSONC ${path}: ${error.message}`)
+  }
+}
+
+async function getHarnessRecommendation() {
+  const legacyPath = join(resourceDir, 'version-recommend.json')
+  try {
+    await stat(legacyPath)
+    return (await readJson(legacyPath)).dsh
+  }
+  catch (error) {
+    if (error.code !== 'ENOENT')
+      throw error
+  }
+  const manifest = await readJsonc(join(resourceDir, 'manifest.jsonc'))
+  return manifest.engines?.dsh?.recommend
+}
+
 async function getBuildMetadata() {
   const packageJson = await readJson(join(repoRoot, 'package.json'))
-  const recommendation = await readJson(
-    join(resourceDir, 'version-recommend.json'),
-  )
+  const recommendation = await getHarnessRecommendation()
   if (typeof packageJson.version !== 'string' || !packageJson.version.trim()) {
     fail('package.json has no desktop version')
   }
-  if (recommendation.dsh !== fixedHarness.version) {
+  if (recommendation !== fixedHarness.version) {
     fail(
-      `version-recommend.json dsh must remain ${fixedHarness.version}, got ${recommendation.dsh}`,
+      `recommended Harness version must remain ${fixedHarness.version}, got ${recommendation}`,
     )
   }
 
