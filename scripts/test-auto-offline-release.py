@@ -59,6 +59,21 @@ class AutomationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'different commits'):
             sync.select_release(releases[:2], 'v0.17.0-offline-sidecar')
 
+    def test_published_release_is_never_rebuilt(self):
+        release = dict(draft=False, target_commitish='a' * 40)
+        self.assertEqual(sync.release_action(release, False), 'published')
+        self.assertEqual(sync.release_action(release, True), 'published')
+
+    def test_draft_release_resumes_publication_even_when_tag_exists(self):
+        release = dict(draft=True, target_commitish='a' * 40)
+        self.assertEqual(sync.release_action(release, True), 'resume')
+
+    def test_existing_tag_without_release_metadata_skips_duplicate_build(self):
+        self.assertEqual(sync.release_action(None, True), 'tag-only')
+
+    def test_new_release_without_release_or_tag_is_built(self):
+        self.assertEqual(sync.release_action(None, False), 'build')
+
     def test_runtime_pins_match(self):
         sync.check_runtime_pins()
 

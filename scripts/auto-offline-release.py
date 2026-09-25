@@ -74,6 +74,12 @@ def select_release(releases, tag):
     return min(matches, key=lambda release: release['created_at']) if matches else None
 
 
+def release_action(existing_release, tag_exists):
+    if existing_release:
+        return 'published' if not existing_release['draft'] else 'resume'
+    return 'tag-only' if tag_exists else 'build'
+
+
 def get_release(repo, tag):
     releases = json.loads(run('gh', 'api', f'repos/{repo}/releases?per_page=100'))
     return select_release(releases, tag)
@@ -223,7 +229,10 @@ def main():
         raise RuntimeError(f'Unexpected stable release tag: {tag}')
     release_tag = f'{tag}-offline-sidecar'
     existing_release = get_release(repo, release_tag)
-    if existing_release and not existing_release['draft']:
+    tag_exists = bool(run('git', 'tag', '--list', release_tag))
+    action = release_action(existing_release, tag_exists)
+    print(f'Latest upstream release: {tag}; offline release state: {action}')
+    if action == 'published':
         target = existing_release['target_commitish']
         if re.fullmatch(r'[0-9a-f]{40}', target):
             output(should_build='false', already_published='true', source_ref=target, tag=release_tag)
@@ -231,7 +240,14 @@ def main():
             output(should_build='false')
         print(f'{release_tag} already published')
         return
-    if existing_release:
+    if action == 'tag-only':
+        # A published GitHub Release always has a tag. If the release-list API
+        # temporarily omits its metadata, never rebuild or overwrite that tag.
+        # Leave cleanup disabled; the next scheduled check can reconcile it.
+        print(f'{release_tag} tag exists but its Release metadata is unavailable; skipping duplicate packaging')
+        output(should_build='false')
+        return
+    if action == 'resume':
         match = re.search(r'/actions/runs/(\d+)', existing_release.get('body') or '')
         if not match or not re.fullmatch(r'[0-9a-f]{40}', existing_release['target_commitish']):
             raise RuntimeError('Draft release is missing its source run or target commit')
