@@ -27,6 +27,7 @@ def run(*args, **kwargs):
 def merge_download_module(ours, theirs):
     offline_module = 'mod offline;'
     offline_exports = 'pub use offline::{load_offline_manifest, read_offline_asset, OfflineAsset, OfflineManifest};'
+    git_export = 'pub use installable::Git;'
     upstream_exports = next(
         (line for line in theirs.splitlines() if 'pub use installable::{record_mappings, tasks,' in line),
         None,
@@ -40,21 +41,232 @@ def merge_download_module(ours, theirs):
         if anchor not in merged:
             raise RuntimeError('Cannot locate installable module declaration while resolving upstream conflict')
         merged = merged.replace(anchor, anchor + offline_module + '\n', 1)
+    additions = []
+    if git_export in ours and git_export not in merged:
+        additions.append(git_export)
     if offline_exports not in merged:
-        merged = merged.replace(upstream_exports, upstream_exports + '\n' + offline_exports, 1)
+        additions.append(offline_exports)
+    if additions:
+        merged = merged.replace(upstream_exports, upstream_exports + '\n' + '\n'.join(additions), 1)
     return merged
 
 
-def resolve_download_module_conflict():
-    path = 'src-tauri/src/service/download/mod.rs'
+def merge_runtime_conflict(ours, theirs):
+    offline_build = 'pub fn offline_build() -> bool {\n    option_env!("DSH_OFFLINE_BUILD").is_some()\n}'
+    bundled_git = '''#[cfg(windows)]
+pub fn bundled_git_runtime_ready<R: Runtime>(app_handle: &AppHandle<R>) -> bool {
+    git_binary_works(&get_mingit_binary_path(app_handle))
+}'''
+    if offline_build not in ours or bundled_git not in ours:
+        raise RuntimeError('Unexpected offline runtime changes in src-tauri/src/config/runtime.rs')
+
+    merged = theirs
+    import_anchor = 'use super::{detect_region, Region};\n'
+    if offline_build not in merged:
+        if import_anchor not in merged:
+            raise RuntimeError('Cannot locate runtime imports while resolving upstream conflict')
+        merged = merged.replace(import_anchor, import_anchor + '\n' + offline_build + '\n', 1)
+
+    default_preference = '''pub fn prefer_bundled_node_runtime() -> bool {
+    PREFER_BUNDLED_NODE_RUNTIME.load(Ordering::Relaxed)
+}'''
+    offline_preference = '''pub fn prefer_bundled_node_runtime() -> bool {
+    offline_build() || PREFER_BUNDLED_NODE_RUNTIME.load(Ordering::Relaxed)
+}'''
+    if default_preference in merged:
+        merged = merged.replace(default_preference, offline_preference, 1)
+    elif offline_preference not in merged:
+        raise RuntimeError('Cannot locate bundled Node preference while resolving upstream conflict')
+
+    git_cmd_signature = 'pub fn get_git_cmd_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Option<PathBuf> {\n'
+    offline_git_cmd = '''    if offline_build() {
+        let bundled = get_mingit_binary_path(app_handle);
+        return if git_binary_works(&bundled) {
+            bundled.parent().map(Path::to_path_buf)
+        } else {
+            None
+        };
+    }
+'''
+    if offline_git_cmd.strip() not in merged:
+        if git_cmd_signature not in merged:
+            raise RuntimeError('Cannot locate Windows Git command-path selector while resolving upstream conflict')
+        merged = merged.replace(git_cmd_signature, git_cmd_signature + offline_git_cmd, 1)
+
+    git_ready_pattern = re.compile(
+        r'(pub fn git_runtime_ready<R: Runtime>\(app_handle: &AppHandle<R>\) -> bool \{\n)(.*?)(\n\})',
+        re.S,
+    )
+    match = git_ready_pattern.search(merged)
+    if not match:
+        raise RuntimeError('Cannot locate Git readiness check while resolving upstream conflict')
+    body = match.group(2)
+    if 'dependencies::bundled_core_dir(app_handle).is_some()' not in body and 'offline_build()' not in body:
+        raise RuntimeError('Unexpected upstream Git readiness check while resolving offline conflict')
+    offline_git_ready = '''    if offline_build() {
+        return bundled_git_runtime_ready(app_handle);
+    }
+'''
+    if 'if offline_build()' not in body:
+        merged = merged[:match.start(2)] + offline_git_ready + body + merged[match.end(2):]
+    if bundled_git not in merged:
+        # `match` offsets are stale after the body insertion; use the stable closing context.
+        function = git_ready_pattern.search(merged)
+        if not function:
+            raise RuntimeError('Cannot re-locate Git readiness check after merging offline mode')
+        merged = merged[:function.end()] + '\n\n' + bundled_git + merged[function.end():]
+    return merged
+
+
+def merge_core_version_conflict(ours, theirs):
+    if 'if config::offline_build() {' not in ours:
+        raise RuntimeError('Unexpected offline core-version changes in src-tauri/src/service/core/version.rs')
+    signature = 'async fn fetch_release_catalog() -> (Vec<download::DshPkgReleaseMeta>, bool) {\n'
+    offline_guard = '''    if config::offline_build() {
+        return (Vec::new(), false);
+    }
+'''
+    if offline_guard.strip() in theirs:
+        return theirs
+    if signature not in theirs or 'match download::fetch_dsh_pkg_releases().await {' not in theirs:
+        raise RuntimeError('Cannot locate upstream release catalog while resolving offline conflict')
+    return theirs.replace(signature, signature + offline_guard, 1)
+
+
+def merge_install_workflow_conflict(ours, theirs):
+    required_offline_code = [
+        'let offline_manifest = download::load_offline_manifest(app_handle)?;',
+        'download::read_offline_asset(&tracker, manifest, key).await?',
+        'asset.release_commit.clone().unwrap_or_default()',
+    ]
+    if any(code not in ours for code in required_offline_code):
+        raise RuntimeError('Unexpected offline installer changes in src-tauri/src/service/workflow/install.rs')
+
+    merged = theirs
+    install_log = '    log::info!("Starting installation process");\n'
+    manifest_setup = '''    let offline_manifest = download::load_offline_manifest(app_handle)?;
+    if config::offline_build() {
+        dsh_latest = None;
+        log::info!("Offline build selected; dependency installation is local-only");
+    }
+'''
+    if 'let offline_manifest = download::load_offline_manifest(app_handle)?;' not in merged:
+        if install_log not in merged:
+            raise RuntimeError('Cannot locate installer entry point while resolving offline conflict')
+        merged = merged.replace(install_log, install_log + manifest_setup, 1)
+
+    online_lookup = 'if dsh_latest.is_none() && dsh_missing {'
+    if online_lookup in merged:
+        merged = merged.replace(online_lookup, 'if !config::offline_build() && dsh_latest.is_none() && dsh_missing {', 1)
+    elif 'if !config::offline_build() && dsh_latest.is_none() && dsh_missing {' not in merged:
+        raise RuntimeError('Cannot locate Harness metadata lookup while resolving offline conflict')
+
+    outdated_start = merged.find('        let outdated = kind == download::InstallKind::Dsh\n')
+    outdated_end = merged.find('\n        if task.check_installed(app_handle) && !outdated {', outdated_start)
+    if outdated_start < 0 or outdated_end < 0:
+        raise RuntimeError('Cannot locate installer version check while resolving offline conflict')
+    old_outdated = merged[outdated_start:outdated_end]
+    if 'if config::offline_build()' not in old_outdated:
+        prefix = '        let outdated = kind == download::InstallKind::Dsh\n            && '
+        if not old_outdated.startswith(prefix) or not old_outdated.endswith(';'):
+            raise RuntimeError('Unexpected Harness version check while resolving offline conflict')
+        online_expression = old_outdated[len(prefix):-1].splitlines()
+        if not online_expression:
+            raise RuntimeError('Empty Harness version check while resolving offline conflict')
+        online_expression = '\n'.join(
+            ['                ' + online_expression[0].lstrip()]
+            + [('    ' + line) if line else '' for line in online_expression[1:]]
+        )
+        offline_outdated = '''        let outdated = kind == download::InstallKind::Dsh
+            && if config::offline_build() {
+                offline_manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.asset("harness").ok())
+                    .is_some_and(|asset| {
+                        config::get_dsh_version(app_handle).as_deref()
+                            != Some(asset.version.trim())
+                    })
+            } else {
+''' + online_expression + '''
+            };
+'''
+        merged = merged[:outdated_start] + offline_outdated + merged[outdated_end:]
+
+    download_start = merged.find('        let (urls, name) = if kind == download::InstallKind::Dsh {')
+    verify_start = merged.find('        download::verify_sha256(&buffer, &expected_digest)?;', download_start)
+    if download_start < 0 or verify_start < 0:
+        if 'let (name, buffer, expected_digest) = if let Some(manifest) = offline_manifest.as_ref() {' in merged:
+            download_start = -1
+        else:
+            raise RuntimeError('Cannot locate installer download block while resolving offline conflict')
+    if download_start >= 0:
+        online_download = merged[download_start:verify_start].rstrip()
+        online_download = '\n'.join(('    ' + line) if line else '' for line in online_download.splitlines())
+        offline_download = '''        let (name, buffer, expected_digest) = if let Some(manifest) = offline_manifest.as_ref() {
+            let key = match kind {
+                download::InstallKind::Node => "node",
+                download::InstallKind::Dsh => "harness",
+                download::InstallKind::Pnpm => "pnpm",
+                download::InstallKind::Git => "mingit",
+            };
+            let (name, buffer) = download::read_offline_asset(&tracker, manifest, key).await?;
+            let digest = manifest.asset(key)?.sha256.clone();
+            (name, buffer, digest)
+        } else {
+''' + online_download + '''
+            (name, buffer, expected_digest)
+        };
+'''
+        merged = merged[:download_start] + offline_download + merged[verify_start:]
+
+    release_record = '''            if let Some(info) = &dsh_latest {
+                config::set_dsh_pkg_commit(app_handle, info.commit.clone());
+                config::set_dsh_pkg_tag(app_handle, info.tag.clone());
+            }'''
+    offline_release_record = '''            if let Some(manifest) = &offline_manifest {
+                let asset = manifest.asset("harness")?;
+                config::set_dsh_pkg_commit(
+                    app_handle,
+                    asset.release_commit.clone().unwrap_or_default(),
+                );
+                config::set_dsh_pkg_tag(
+                    app_handle,
+                    asset.release_tag.clone().unwrap_or_default(),
+                );
+            } else if let Some(info) = &dsh_latest {
+                config::set_dsh_pkg_commit(app_handle, info.commit.clone());
+                config::set_dsh_pkg_tag(app_handle, info.tag.clone());
+            }'''
+    if release_record in merged:
+        merged = merged.replace(release_record, offline_release_record, 1)
+    elif offline_release_record not in merged:
+        raise RuntimeError('Cannot locate Harness release record while resolving offline conflict')
+    return merged
+
+
+def resolve_known_offline_conflicts():
+    runtime_path = 'src-tauri/src/config/runtime.rs'
+    version_path = 'src-tauri/src/service/core/version.rs'
+    download_path = 'src-tauri/src/service/download/mod.rs'
+    install_path = 'src-tauri/src/service/workflow/install.rs'
+    resolvers = {
+        runtime_path: merge_runtime_conflict,
+        version_path: merge_core_version_conflict,
+        download_path: merge_download_module,
+        install_path: merge_install_workflow_conflict,
+    }
     conflicts = run('git', 'diff', '--name-only', '--diff-filter=U').splitlines()
-    if conflicts != [path]:
+    if not conflicts or any(path not in resolvers for path in conflicts):
         return False
-    ours = run('git', 'show', f':2:{path}', preserve=True)
-    theirs = run('git', 'show', f':3:{path}', preserve=True)
-    (ROOT / path).write_text(merge_download_module(ours, theirs))
-    run('git', 'add', '--', path)
-    print(f'Resolved known offline/upstream export conflict in {path}')
+
+    for path, resolver in resolvers.items():
+        if path not in conflicts:
+            continue
+        ours = run('git', 'show', f':2:{path}', preserve=True)
+        theirs = run('git', 'show', f':3:{path}', preserve=True)
+        (ROOT / path).write_text(resolver(ours, theirs))
+        run('git', 'add', '--', path)
+        print(f'Resolved known offline/upstream conflict in {path}')
     return True
 
 
@@ -280,7 +492,7 @@ def main():
         try:
             run('git', 'apply', '--3way', '--index', input=patch)
         except subprocess.CalledProcessError:
-            if not resolve_download_module_conflict():
+            if not resolve_known_offline_conflicts():
                 raise
     version = json.loads((ROOT / 'package.json').read_text())['version']
     if tag != f'v{version}':

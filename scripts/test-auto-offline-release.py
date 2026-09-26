@@ -81,6 +81,7 @@ class AutomationTests(unittest.TestCase):
         ours = '''mod core;
 mod installable;
 mod offline;
+pub use installable::Git;
 pub use installable::{Dsh, InstallKind, Installable, Nodejs, Pnpm};
 pub use offline::{load_offline_manifest, read_offline_asset, OfflineAsset, OfflineManifest};
 '''
@@ -92,9 +93,103 @@ pub use installable::{record_mappings, tasks, Dsh, InstallKind, Installable, Nod
         merged = sync.merge_download_module(ours, theirs)
 
         self.assertIn('mod offline;', merged)
+        self.assertIn('pub use installable::Git;', merged)
         self.assertIn('pub use offline::{load_offline_manifest, read_offline_asset, OfflineAsset, OfflineManifest};', merged)
         self.assertIn('pub use installable::{record_mappings, tasks, Dsh, InstallKind, Installable, Nodejs, Pnpm};', merged)
         self.assertEqual(merged.count('mod offline;'), 1)
+
+    def test_upstream_runtime_merge_preserves_offline_rules_and_new_core_fallback(self):
+        ours = '''pub fn offline_build() -> bool {
+    option_env!("DSH_OFFLINE_BUILD").is_some()
+}
+#[cfg(windows)]
+pub fn bundled_git_runtime_ready<R: Runtime>(app_handle: &AppHandle<R>) -> bool {
+    git_binary_works(&get_mingit_binary_path(app_handle))
+}'''
+        theirs = '''use super::{detect_region, Region};
+pub fn prefer_bundled_node_runtime() -> bool {
+    PREFER_BUNDLED_NODE_RUNTIME.load(Ordering::Relaxed)
+}
+#[cfg(windows)]
+pub fn get_git_cmd_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Option<PathBuf> {
+    if let Some(system_git) = find_system_git_binary() {
+        return system_git.parent().map(Path::to_path_buf);
+    }
+    None
+}
+#[cfg(windows)]
+pub fn git_runtime_ready<R: Runtime>(app_handle: &AppHandle<R>) -> bool {
+    find_system_git_binary().is_some()
+        || git_binary_works(&get_mingit_binary_path(app_handle))
+        || dependencies::bundled_core_dir(app_handle).is_some()
+}'''
+
+        merged = sync.merge_runtime_conflict(ours, theirs)
+
+        self.assertIn('pub fn offline_build() -> bool', merged)
+        self.assertIn('offline_build() || PREFER_BUNDLED_NODE_RUNTIME.load(Ordering::Relaxed)', merged)
+        self.assertIn('if offline_build() {\n        let bundled = get_mingit_binary_path(app_handle);', merged)
+        self.assertIn('return bundled_git_runtime_ready(app_handle);', merged)
+        self.assertIn('dependencies::bundled_core_dir(app_handle).is_some()', merged)
+        self.assertEqual(merged.count('pub fn bundled_git_runtime_ready'), 1)
+
+    def test_upstream_core_catalog_merge_disables_network_in_offline_build(self):
+        ours = 'let (release_metas, remote_catalog_available) = if config::offline_build() {\n'
+        theirs = '''async fn fetch_release_catalog() -> (Vec<download::DshPkgReleaseMeta>, bool) {
+    match download::fetch_dsh_pkg_releases().await {
+        Ok(metas) => (metas, true),
+        Err(_) => (Vec::new(), false),
+    }
+}'''
+
+        merged = sync.merge_core_version_conflict(ours, theirs)
+
+        self.assertIn('if config::offline_build() {\n        return (Vec::new(), false);\n    }', merged)
+        self.assertLess(merged.index('return (Vec::new(), false);'), merged.index('match download::fetch_dsh_pkg_releases().await'))
+
+    def test_upstream_install_merge_keeps_offline_assets_and_dependency_mapping(self):
+        ours = '''let offline_manifest = download::load_offline_manifest(app_handle)?;
+download::read_offline_asset(&tracker, manifest, key).await?;
+asset.release_commit.clone().unwrap_or_default()'''
+        theirs = '''    log::info!("Starting installation process");
+    if dsh_latest.is_none() && dsh_missing {
+        fetch_metadata().await?;
+    }
+        let outdated = kind == download::InstallKind::Dsh
+            && dsh_latest.as_ref().is_some_and(|info| {
+                config::get_dsh_version(app_handle).as_deref() != Some(info.tag.as_str())
+            });
+        if task.check_installed(app_handle) && !outdated {
+            task.record_mapping(app_handle);
+            continue;
+        }
+        let (urls, name) = if kind == download::InstallKind::Dsh {
+            (vec!["https://example.test/harness.zip".to_string()], "harness.zip".to_string())
+        } else {
+            (vec![task.get_download_url()?], "dependency.zip".to_string())
+        };
+        let buffer = download::download_file_from_sources(&tracker, urls).await?;
+        let expected_digest = match kind {
+            download::InstallKind::Dsh => dsh_latest.as_ref().unwrap().digest.clone().unwrap(),
+            _ => "digest".to_string(),
+        };
+        download::verify_sha256(&buffer, &expected_digest)?;
+        if kind == download::InstallKind::Dsh {
+            if let Some(info) = &dsh_latest {
+                config::set_dsh_pkg_commit(app_handle, info.commit.clone());
+                config::set_dsh_pkg_tag(app_handle, info.tag.clone());
+            }
+        }'''
+
+        merged = sync.merge_install_workflow_conflict(ours, theirs)
+
+        self.assertIn('let offline_manifest = download::load_offline_manifest(app_handle)?;', merged)
+        self.assertIn('if !config::offline_build() && dsh_latest.is_none() && dsh_missing {', merged)
+        self.assertIn('manifest.asset("harness").ok()', merged)
+        self.assertIn('download::read_offline_asset(&tracker, manifest, key).await?', merged)
+        self.assertIn('task.record_mapping(app_handle);', merged)
+        self.assertIn('asset.release_commit.clone().unwrap_or_default()', merged)
+        self.assertIn('download::verify_sha256(&buffer, &expected_digest)?;', merged)
 
     def test_upstream_download_merge_rejects_unexpected_conflict_shape(self):
         with self.assertRaisesRegex(RuntimeError, 'Unexpected conflict'):
