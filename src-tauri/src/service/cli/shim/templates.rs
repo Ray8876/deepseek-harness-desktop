@@ -1,7 +1,10 @@
 //! shim 共享脚本片段（纯文本常量，作为 format! 的参数嵌入各构建函数）。
 //!
 //! shim 文本必须全英文：cmd/ps1 按系统代码页解析，中文注释会乱码成命令执行。
-//! 变量约定：cmd 用 `%APP_DIR%`，ps1 用 `$appDir`，sh 用 `$APP_DIR`；
+//! 变量约定：cmd 用 `%NODE_BIN%` / `%NODE_DIR%` / `%GIT_DIR%` / `%DSH_BIN%` /
+//! `%PNPM_BIN%`，ps1 用 `$nodeBin` / `$nodeDir` / `$gitDir` / `$dshBin` /
+//! `$pnpmBin`，sh 用同名大写下划线形式。路径全部由桌面端在生成 shim 时按
+//! 依赖映射表解析后写死（不再假设 `<AppData>/dependencies/<name>` 布局）；
 //! 这些常量里的 `{`/`}` 是字面量（由 format! 的参数占位符区分）。
 
 // ---------------------------------------------------------------------------
@@ -49,9 +52,9 @@ set "NODE=%DSH_NODE%"
 goto :launch
 
 :use_bundled
-if not exist "%APP_DIR%\runtime\node.exe" goto :no_node
-set "NODE=%APP_DIR%\runtime\node.exe"
-set "PATH=%APP_DIR%\runtime;%PATH%"
+if not exist "%NODE_BIN%" goto :no_node
+set "NODE=%NODE_BIN%"
+set "PATH=%NODE_DIR%;%PATH%"
 "#;
 
 pub(super) const PS1_NODE_RESOLVE: &str = r#"
@@ -82,10 +85,9 @@ if (-not $node) {
     }
 }
 if (-not $node) {
-    $bundled = Join-Path $appDir 'runtime\node.exe'
-    if (Test-Path -LiteralPath $bundled) {
-        $node = $bundled
-        $env:PATH = (Split-Path -Parent $bundled) + ';' + $env:PATH
+    if (Test-Path -LiteralPath $nodeBin) {
+        $node = $nodeBin
+        $env:PATH = $nodeDir + ';' + $env:PATH
     }
 }
 if (-not $node) {
@@ -114,9 +116,9 @@ if [ -z "$NODE" ] && command -v node >/dev/null 2>&1; then
   fi
 fi
 if [ -z "$NODE" ]; then
-  if [ -x "$APP_DIR/runtime/bin/node" ]; then
-    NODE="$APP_DIR/runtime/bin/node"
-    export PATH="$APP_DIR/runtime/bin:$PATH"
+  if [ -x "$NODE_BIN" ]; then
+    NODE="$NODE_BIN"
+    export PATH="$NODE_DIR:$PATH"
   fi
 fi
 if [ -z "$NODE" ]; then
@@ -177,8 +179,7 @@ if ($userDsh) {
 }
 "#;
 
-#[cfg_attr(windows, allow(dead_code))] // 仅 Unix shim 使用
-#[cfg_attr(debug_assertions, allow(dead_code))]
+#[cfg_attr(any(windows, debug_assertions), allow(dead_code))] // 仅 Unix shim 使用
 pub(super) const SH_USER_DSH_PRECEDENCE: &str = r#"
 # Prefer a user-installed dsh on PATH (skip our own shim dir), fall back to bundled.
 # This preserves your own dsh binary and its $DSH_HOME config; nothing is overwritten.

@@ -8,6 +8,7 @@
  * 一律用稳定的 aria-label 属性选择器，不用生成的 CSS module 类名：CSS 规则天然覆盖
  * React 后续重渲染，卸载时按同一个 style id 移除。
  */
+import { PLUGIN_ID } from '../../shared/constants'
 import { NEW_SESSION_SELECTOR } from '../constants'
 import { CssRender } from '../modules/css-render'
 import { reportPluginError } from '../utils/error'
@@ -26,7 +27,9 @@ export const sidebarTweaksFeature = defineRegister((controller) => {
       c(COLLAPSE_SIDEBAR_SELECTOR, { display: 'none !important' }),
       c(NEW_SESSION_SELECTOR, { justifyContent: 'center !important' }),
     ])
-    style.mount({ id: SIDEBAR_TWEAKS_STYLE_ID, head: true })
+    // 必须自报归属：宿主的客户端模块系统会把没有 `data-plugin` 的 <style> 认领给下一个
+    // 物化的插件，并在它重载时一并删除（issue #655）。
+    style.mount({ id: SIDEBAR_TWEAKS_STYLE_ID, head: true }).setAttribute('data-plugin', PLUGIN_ID)
     controller.add(() => style.unmount({ id: SIDEBAR_TWEAKS_STYLE_ID }))
   }
   catch (error) {

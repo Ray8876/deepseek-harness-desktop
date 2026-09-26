@@ -16,6 +16,7 @@ import { queryKeys } from '@/config/query-keys'
 import { useInvalidateOnSettingUpdated } from '@/hooks/use-invalidate-on-setting-updated'
 import { store } from '@/store'
 import { useCoreBreakingConfirm } from '@/ui/config/hooks/use-core-breaking-confirm'
+import { useCoreProfileSwitch } from '@/ui/config/hooks/use-core-profile-switch'
 import { DownloadCoreDialog } from '@/ui/dialog/update-core'
 import { compareVersions, isCoreUnsupported, MIN_SUPPORTED_CORE_VERSION } from '@/utils/core-version'
 import { silence } from '@/utils/silence'
@@ -31,7 +32,8 @@ import { toast } from '@/utils/toast'
  *   降级为 git tags / 磁盘扫描，仅显示已下载版本）。预览版（Pre-release label
  *   或 tag 命名）照常列出、可下载安装，但带「预览版」标签、不参与更新提示。
  * - 切换核心：持久化后**自动重启**服务（需求 5），重启走 harness store 的
- *   restart 流程（停止 → 重新启动 → 健康检查）。
+ *   restart 流程（停止 → 重新启动 → 健康检查）。升级到更新的版本时先弹「破坏性更改」
+ *   警告，确认后把当前档案换成与目标版本配套的版本档案（缺失则新建），再切核心并重启。
  * - 下载版本：拉指定 tag 的发布资产到历史槽位（不激活），随后可切换；
  *   卸载仅允许非激活的已下载版本。
  * - 本地核心更新：通过用户包管理器 CLI（npm install -g @latest / pnpm add -g @latest）。
@@ -41,6 +43,7 @@ import { toast } from '@/utils/toast'
 export function ConfigCore() {
   const [dialogHolder, openDialog] = useOverlay(Modal, { type: 'holder' })
   const [downloadDialogHolder, openDownloadDialog] = useOverlay(DownloadCoreDialog, { type: 'holder' })
+  const { holder: upgradeDialogHolder, guardCoreUpgrade } = useCoreProfileSwitch()
   const { holder: coreBreakingHolder, confirmCoreBreaking } = useCoreBreakingConfirm()
 
   const { t } = useTranslation()
@@ -90,10 +93,12 @@ export function ConfigCore() {
 
   // 本地核心未检测到时不渲染 local 行（保留 local_missing_hint 提示）
   // 后端列表在部分缓存/旧版本返回路径中可能仍保持远程顺序，前端统一按版本从高到低排序。
-  // 本地核心固定放在版本列表前，预打包核心按 SemVer 排序。
+  // 随包内核（离线包）固定置顶并标记「本地」，其后是本地核心与预打包核心。
   const rows = cores
     .filter(core => !(core.source === 'local' && !core.present))
     .sort((a, b) => {
+      if (a.bundled !== b.bundled)
+        return a.bundled ? -1 : 1
       if (a.source !== b.source)
         return a.source === 'local' ? -1 : 1
       if (a.source === 'local')
@@ -147,26 +152,35 @@ export function ConfigCore() {
       })
       return
     }
-    try {
-      const isRiskyVersion = core.recommendedVersion !== null
-        && (core.aboveRecommended || compareVersions(core.version, core.recommendedVersion) > 0)
-      await openDialog({
-        status: isRiskyVersion ? 'danger' : 'warning',
-        title: isRiskyVersion ? t('core.recommended_warning_title') : t('core.switch_confirm_title'),
-        description: (
-          <p>
-            <If
-              cond={isRiskyVersion}
-              then={t('core.recommended_warning_desc', { version: core.recommendedVersion ?? '' })}
-              else={t('core.switch_confirm_desc', { version: displayVersion(core) })}
-            />
-          </p>
-        ),
-      })
-    }
-    catch (e) {
-      silence(e, 'core switch: dialog cancelled')
+    // 升级到更新的 dsh 版本 = 破坏性更改：先把当前档案换成配套档案，档案名默认取目标
+    // 版本的 x.x。该弹窗自带「切换」语义，命中时不再叠加一次普通的切换确认。
+    // 版本比对只用列表里已加载的在用核心，不为此联网重拉核心列表。
+    const activeCore = cores.find(c => c.active)
+    const guard = await guardCoreUpgrade(coreVersionKey(core), activeCore ? coreVersionKey(activeCore) : '')
+    if (!guard)
       return
+    if (!guard.handled) {
+      try {
+        const isRiskyVersion = core.recommendedVersion !== null
+          && (core.aboveRecommended || compareVersions(core.version, core.recommendedVersion) > 0)
+        await openDialog({
+          status: isRiskyVersion ? 'danger' : 'warning',
+          title: isRiskyVersion ? t('core.recommended_warning_title') : t('core.switch_confirm_title'),
+          description: (
+            <p>
+              <If
+                cond={isRiskyVersion}
+                then={t('core.recommended_warning_desc', { version: core.recommendedVersion ?? '' })}
+                else={t('core.switch_confirm_desc', { version: displayVersion(core) })}
+              />
+            </p>
+          ),
+        })
+      }
+      catch (e) {
+        silence(e, 'core switch: dialog cancelled')
+        return
+      }
     }
     try {
       // 激活后由 restart 完成时统一失效核心查询；这里不等待联网列表重拉，
@@ -190,6 +204,9 @@ export function ConfigCore() {
     catch (err) {
       console.error('[ConfigCore] switch failed:', err)
       toast(t('core.switch_failed'), {})
+      // 核心没切成就把档案切回去：否则下次启动会跑在「旧核心 + 新档案」上，
+      // 用户会看到自己的插件与设置「凭空消失」。
+      await guard.rollback?.()
     }
   }
 
@@ -355,7 +372,8 @@ export function ConfigCore() {
                     <Label className="min-w-0 truncate font-mono text-sm font-medium text-ink">
                       {displayVersion(core)}
                     </Label>
-                    <If cond={core.source === 'local'}>
+                    {/* 随包内核（离线包）与用户 CLI 安装的本地核心都标记「本地」 */}
+                    <If cond={core.source === 'local' || core.bundled}>
                       <Chip size="sm" variant="soft" color="accent" className="shrink-0 font-medium">
                         {t('core.local')}
                       </Chip>
@@ -434,8 +452,8 @@ export function ConfigCore() {
                         {t('core.download')}
                       </Button>
                     </If>
-                    {/* 已下载且非激活（app 版本）：卸载入口 */}
-                    <If cond={core.present && !core.active && core.source === 'app'}>
+                    {/* 已下载且非激活（app 版本）：卸载入口。随包内核不可卸载（随应用分发） */}
+                    <If cond={core.present && !core.active && core.source === 'app' && !core.bundled}>
                       <Button
                         size="sm"
                         variant="tertiary"
@@ -476,6 +494,7 @@ export function ConfigCore() {
 
       {dialogHolder}
       {downloadDialogHolder}
+      {upgradeDialogHolder}
       {coreBreakingHolder}
     </div>
   )
@@ -486,10 +505,15 @@ function displayVersion(version: HarnessCore): string {
   return version.version || (version.source === 'local' ? 'local' : 'app')
 }
 
+/** 版本判定用的版本串：版本号缺失时回落到 release tag（列表排序同款兜底） */
+function coreVersionKey(core: HarnessCore): string {
+  return core.version || core.tag
+}
+
 /**
  * 本地核心是否低于最低支持基线。判据与「不兼容版本」分组完全一致（同一基线，
  * `isUnsupportedCore`），低于基线时随包内置插件无法加载（issue #596），桌面端自动
- * 改用预打包核心。不可与推荐核心版本（`version-recommend.json`）混用——后者只用于
+ * 改用预打包核心。不可与推荐核心版本（`engines.dsh.recommend`）混用——后者只用于
  * 更新提示，拿它当基线会把「高于基线、低于推荐版本」的可用本地核心误判为不兼容
  * （推荐版本为 0.1.7-alpha.1 时，0.1.5-rc.3 就是这么被挡下的）。
  */

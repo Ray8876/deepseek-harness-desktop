@@ -4,6 +4,7 @@ import { CircleTree, Icon, mountStyle } from 'dsh-tauri-ui/client'
 import { defineRegister, findKey } from 'dsh-tauri/client'
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
+import { PLUGIN_ID } from '../../shared/constants'
 import {
   SESSION_ICON_ATTRIBUTE,
   SESSION_ICON_STYLE_ID,
@@ -23,7 +24,7 @@ function removeIcon(icon: Element): void {
 export const sessionIconsFeature = defineRegister<ClientContext>((controller) => {
   if (typeof document === 'undefined')
     return
-  controller.add(mountStyle(sessionIconStyle, SESSION_ICON_STYLE_ID))
+  controller.add(mountStyle(sessionIconStyle, SESSION_ICON_STYLE_ID, PLUGIN_ID))
 
   function reactKey(element: Element, prefix: 'session-' | ''): string | undefined {
     const fiberName = findKey(element, (_value, key) => key.startsWith('__reactFiber$'))

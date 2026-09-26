@@ -1,4 +1,4 @@
-// 引用源 @deepseek-ai/dsh-client-ui-primitives · packages/client/ui-primitives/src/StateDot.module.css · 版本 0.1.7-alpha.1（≥0.1.7-alpha.1）· hash dot=_dot_1i3xo_2
+// 引用源 @deepseek-ai/dsh-client-ui-primitives · packages/client/ui-primitives/src/StateDot.module.css · 版本 0.1.7-rc.2（≥0.1.7-alpha.1）· hash dot=_dot_1i3xo_2
 import type { ReactElement } from 'react'
 import { compact } from 'dsh-tauri/client'
 import { useMountStyle } from '../hooks/use-mount-style'

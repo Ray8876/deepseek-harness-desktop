@@ -8,6 +8,7 @@ import type { RunningChangesChipProps } from './running-changes-chip.types'
  * 后提示条自行消失。
  */
 import { useMountStyle } from 'dsh-tauri-ui/client'
+import { PLUGIN_ID } from '../../shared/constants'
 import { RUNNING_CHANGES_CHIP_STYLE_ID, RUNNING_CHANGES_COUNTS_STYLE_ID } from '../constants'
 import { useLiveChanges } from '../hooks/use-live-changes'
 import { locale } from '../locales'
@@ -16,8 +17,8 @@ import { ChangeCounts } from './change-counts'
 import chipStyle from './running-changes-chip.cssr'
 
 export function RunningChangesChip(props: RunningChangesChipProps): ReactElement | null {
-  useMountStyle(chipStyle, RUNNING_CHANGES_CHIP_STYLE_ID)
-  useMountStyle(countsStyle, RUNNING_CHANGES_COUNTS_STYLE_ID)
+  useMountStyle(chipStyle, RUNNING_CHANGES_CHIP_STYLE_ID, PLUGIN_ID)
+  useMountStyle(countsStyle, RUNNING_CHANGES_COUNTS_STYLE_ID, PLUGIN_ID)
   locale.useLocale()
   const sessionId = props.sessionId
   // owner 份额（InputZone.session）明确说「没在跑」时连轮询都不开；

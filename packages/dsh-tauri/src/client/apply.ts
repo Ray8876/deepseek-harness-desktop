@@ -11,7 +11,9 @@
  * 收敛到插件客户端；插件缺席时宿主控件只会空转，没有任何降级路径。
  */
 import type { ClientContext } from './types'
+import { accountSignInFeature } from './register/account'
 import { navigationFeature } from './register/navigation'
+import { shortcutsFeature } from './register/shortcuts'
 import { sidebarFeature } from './register/sidebar'
 import { sidebarTweaksFeature } from './register/sidebar-tweaks'
 import { registerStyle } from './register/style'
@@ -23,7 +25,9 @@ const NAVIGATION_EFFECT = 'dsh-tauri: navigation (new session, add workspace)'
 const ZOOM_SHORTCUT_EFFECT = 'dsh-tauri: zoom shortcuts (ctrl/cmd +/-/0)'
 const SIDEBAR_TWEAKS_EFFECT = 'dsh-tauri: sidebar tweaks (hide collapse toggle, center brand)'
 const STYLE_EFFECT = 'dsh-tauri: style (sidebar background)'
-/** 插件体：注册侧边栏桥、导航命令、缩放快捷键与侧边栏 UI 微调。 */
+const ACCOUNT_SIGN_IN_EFFECT = 'dsh-tauri: account sign-in (auto-open the authorize url)'
+const SHORTCUTS_EFFECT = 'dsh-tauri: shortcuts (catalog report + edit commands)'
+/** 插件体：注册侧边栏桥、导航命令、缩放快捷键、账号登录接管与侧边栏 UI 微调。 */
 export function apply(ctx: ClientContext): void {
   // issue #573：独立浏览器没有桌面宿主，保留原生侧栏控件与缩放快捷键。
   if (typeof window === 'undefined' || typeof document === 'undefined' || window.parent === window)
@@ -34,4 +38,6 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(navigationFeature, NAVIGATION_EFFECT)
   ctx.effect(zoomShortcutFeature, ZOOM_SHORTCUT_EFFECT)
   ctx.effect(sidebarTweaksFeature, SIDEBAR_TWEAKS_EFFECT)
+  ctx.effect(accountSignInFeature, ACCOUNT_SIGN_IN_EFFECT)
+  ctx.effect(shortcutsFeature, SHORTCUTS_EFFECT)
 }

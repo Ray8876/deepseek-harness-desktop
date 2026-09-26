@@ -19,7 +19,7 @@
   <img src="https://img.shields.io/github/stars/dsh-tauri/deepseek-harness-desktop?style=flat-square&label=stars&color=4D6BFE" alt="Stars" />
   <img src="https://img.shields.io/github/license/dsh-tauri/deepseek-harness-desktop?style=flat-square&label=license&color=4D6BFE" alt="MIT License" />
   <img src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-black?style=flat-square" alt="Windows | macOS | Linux" />
-  <img src="https://img.shields.io/badge/dsh-0.1.7--alpha.1-4D6BFE?style=flat-square" alt="dsh 0.1.7-alpha.1" />
+  <img src="https://img.shields.io/badge/dsh-0.1.7--rc.2-4D6BFE?style=flat-square" alt="dsh 0.1.7-rc.2" />
 </p>
 
 <p align="center">
@@ -91,6 +91,8 @@ The first run downloads the Node runtime and Harness core (if `dsh` is already i
 
 **System requirements:** Windows 10+ · macOS 10.15+ · Linux (AppImage / .deb) · network on first launch · Harness core **0.1.5-rc.1** or later
 
+**Offline bundle (Windows / macOS / Linux):** Releases also ship `Deepseek.Harness.Desktop_Bundle_<version>.<ext>` — the Node runtime and Harness core are bundled in, so the **first launch needs no network**. Built for air-gapped / whitelisted machines (preset and community plugins still need network, and git-backed features such as worktree need a system Git). The Linux bundle ships inside the `.deb`, whose `/usr/lib` resources are read-only, so the bundled core's directory permissions have to be fixed after a root install.
+
 > **Linux Wayland note (PikaOS / GNOME Wayland / Ubuntu 22.04+):** AppImage may crash or render black on Wayland due to WebKitGTK; the app auto-fixes the common case. <details><summary>If it still crashes / renders black:</summary><br>**Prefer `.deb`** (verified on PikaOS 4 Wayland), or manually run `WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 GDK_BACKEND=x11 ./AppImage`. If icons do not appear, copy the app's `hicolor` icons to `~/.local/share/icons` and run `update-desktop-database`.<br></details>
 >
 > **Rolling-release Linux starts and dies at once (Arch / CachyOS / Fedora, …):** older AppImages bundled the build image's (Ubuntu 22.04) display-stack libs such as `libwayland-client`. A newer host Mesa is ABI-incompatible with them, so `WebKitWebProcess` calls `abort()` — the app shows **no window and no logs at all**. The build now strips these libs (see `.github/workflows/build-linux.yml` and `scripts/fix-appimage-host-libs.sh`); use a release built after that change. If you are still affected, use the `.deb`, or `LD_PRELOAD=/usr/lib/libwayland-client.so.0 ./AppImage` (adjust the path for your distro).
@@ -159,7 +161,7 @@ The prebuilt Harness bundle is published by [deepseek-harness-pkg](https://githu
 
 Remote assets and upstream catalogs that plugins reference at runtime:
 
-- [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) — preset pet media (WebM motions, preview GIFs, `config.jsonc`); `preset-pets.json` pins `e1ff8c1`
+- [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) — preset pet media (WebM motions, preview GIFs, `config.jsonc`); `pets.built-in` in `manifest.jsonc` pins `e1ff8c1`
 - [dsh-tauri/dsh-pet-mov](https://github.com/dsh-tauri/dsh-pet-mov) — macOS HEVC-alpha `.mov` mirror (WKWebView does not support VP9-alpha), pinned to `be0f3bb`
 - [hairyf/dsh-pet-component](https://github.com/hairyf/dsh-pet-component) — pet rendering component (npm `dsh-pet-component`)
 

@@ -19,6 +19,7 @@ export const inject = [
   'remote',
   'remote.credentials',
   'remote.llm',
+  'remote.session',
   'remote.settings',
   'settingsSchema',
 ]

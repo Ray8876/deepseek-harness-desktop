@@ -112,10 +112,9 @@ pub(super) fn remove_plugin_dir(profile: &Path, id: &str) {
                     .read_dir()
                     .map(|mut d| d.next().is_none())
                     .unwrap_or(false)
+                && fs_guard::ensure_within(&scope_entry, &node_modules_root).is_ok()
             {
-                if fs_guard::ensure_within(&scope_entry, &node_modules_root).is_ok() {
-                    let _ = remove_plugin_entry(&scope_entry);
-                }
+                let _ = remove_plugin_entry(&scope_entry);
             }
         }
     }
@@ -244,8 +243,10 @@ mod tests {
     fn remove_plugin_dir_unlinks_junction_pointing_outside_profile() {
         // 内置插件以 link: 指向应用资源目录（在 profile 之外，如 dsh-tauri-panel）：
         // junction 的 canonicalize 落在 profile 外，仍必须只解链入口、绝不动目标。
-        let root =
-            std::env::temp_dir().join(format!("dsh-plugin-recovery-junction-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "dsh-plugin-recovery-junction-{}",
+            std::process::id()
+        ));
         let profile = root.join("profile");
         let target = root.join("app-resources/dsh-tauri-panel");
         let entry = profile.join("node_modules/dsh-tauri-panel");

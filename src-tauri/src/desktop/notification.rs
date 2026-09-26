@@ -251,6 +251,10 @@ pub fn enable_notification_permissions(
         };
 
         for origin in origins {
+            // 每个 origin 要写 12 种 permission：逐个 INFO 会在一毫秒内刷出二十多行，
+            // 把 desktop.log 真正有用的行挤走。正常路径只留一条 debug 汇总
+            // （`RUST_LOG=debug` 可见），失败仍逐次告警。
+            log::debug!("[permission] resetting persisted permissions for {origin}");
             for kind in permission_kinds() {
                 let origin_str = origin.clone();
                 let hstring = HSTRING::from(origin.as_str());
@@ -264,7 +268,6 @@ pub fn enable_notification_permissions(
                     COREWEBVIEW2_PERMISSION_STATE_ALLOW
                 };
 
-                log::info!("[permission] setting persisted permission for {origin_str}");
                 profile4.SetPermissionState(
                     kind,
                     &hstring,
@@ -323,11 +326,12 @@ pub fn enable_notification_permissions(
 
         let _ = frame3.add_ContentLoading(
             &FrameContentLoadingEventHandler::create(Box::new(move |_, _| {
-                // 通知桥、剪贴板图片桥与 boot 探测桥需要 iframe 上下文执行。
+                // 通知桥、剪贴板图片桥、帧内日志桥与 boot 探测桥需要 iframe 上下文执行。
                 // （导航桥 / 缩放快捷键 / 全局样式已分别由 dsh-tauri、dsh-tauri-ui 插件承担。）
                 for script in [
                     crate::desktop::notification::NOTIFICATION_SHIM_JS,
                     crate::desktop::paste::PASTE_SHIM_JS,
+                    crate::desktop::frame_log::FRAME_LOG_BRIDGE_JS,
                     crate::desktop::plugin_boot::PLUGIN_BOOT_RELOAD_JS,
                 ] {
                     let script = HSTRING::from(script);

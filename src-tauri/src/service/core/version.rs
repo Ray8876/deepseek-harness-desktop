@@ -3,6 +3,10 @@
 //! 磁盘布局：激活版本固定为 `dependencies/dsh`（既有代码全部依赖该路径），
 //! 历史版本存放在 `dependencies/<tag>` 槽位，切换/卸载依赖既有版本行。本地
 //! 核心的探测见 [`super::local`]，来源判定与活动入口见 [`super::source`]。
+//!
+//! 随包资源构建（离线包）不适用上面的目录互换：随包内核必须留在安装目录里
+//! （`$Resources/dsh`，见 [`config::dependencies::bundled_core_dir`]），它在面板里
+//! 作为固定置顶的「本地」行存在，切换只是把 `dsh` 依赖根指向目标槽位或指回随包内核。
 
 use crate::config;
 use crate::service::{download, fs_guard, workflow};
@@ -11,14 +15,20 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
 use super::local::{find_user_dsh_bin, local_core};
-use super::source::{active_source, core_supports_bundled_plugins, CoreSource, HarnessCore};
+use super::source::{
+    active_is_bundled, active_source, core_supports_bundled_plugins, CoreSource, HarnessCore,
+};
 
-/// `dependencies` 目录（激活 `dsh` 与历史 `dsh-<tag>` 槽位的共同父级）。
+/// 随包内核的行 id：面板据此置顶并标记「本地」，[`set_active`] 据此切回随包内核。
+const BUNDLED_CORE_ID: &str = "app-bundled";
+
+/// `dependencies` 目录（下载的核心槽位与普通安装的 `dsh` 激活目录的共同父级）。
+///
+/// 恒落在应用数据目录之下：槽位是桌面端自己下载的产物，即使清单把激活核心托管到安装
+/// 包资源（离线包 `$Resources/dsh`）也不能让下载产物写进安装目录——那里在 macOS `.app`
+/// 上是签名的只读内容、在 Linux deb 里属于 root，且会随应用升级被覆盖。
 fn dependencies_dir(app_handle: &AppHandle) -> PathBuf {
-    config::get_dsh_install_path(app_handle)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
+    config::get_base_dir(app_handle).join("dependencies")
 }
 
 /// 历史版本槽位：`dependencies/<tag>`。release tag 本身以 `dsh-` 开头
@@ -64,6 +74,55 @@ fn read_manifest_dsh_version(dir: &Path) -> Option<String> {
 /// tags（无 label，预览标记按 tag 命名兜底），再失败降级为磁盘扫描，只列出
 /// 本地、激活与已下载的历史版本。
 pub async fn list(app_handle: &AppHandle) -> Vec<HarnessCore> {
+    let (release_metas, remote_catalog_available) = fetch_release_catalog().await;
+    rows_with_release_catalog(app_handle, release_metas, remote_catalog_available)
+}
+
+/// 版本行数据源：GitHub releases → git tags → 空（离线/限流时调用方降级为磁盘扫描）。
+async fn fetch_release_catalog() -> (Vec<download::DshPkgReleaseMeta>, bool) {
+    if config::offline_build() {
+        return (Vec::new(), false);
+    }
+    match download::fetch_dsh_pkg_releases().await {
+        Ok(metas) => (metas, true),
+        Err(e) => {
+            log::warn!(
+                "Failed to fetch dsh pkg releases ({}), falling back to git tags",
+                e
+            );
+            match download::fetch_dsh_pkg_tags().await {
+                Ok(tags) => (
+                    tags.into_iter()
+                        .map(|(tag, _)| download::DshPkgReleaseMeta {
+                            tag,
+                            prerelease: false,
+                        })
+                        .collect(),
+                    true,
+                ),
+                Err(e) => {
+                    log::warn!("Failed to fetch dsh pkg tags: {}", e);
+                    (Vec::new(), false)
+                }
+            }
+        }
+    }
+}
+
+/// 只用本地信息（激活记录 + 磁盘槽位）构造核心列表，不联网。
+///
+/// 核心切换是纯本地操作，回包不该等一轮 GitHub 往返（`fetch_dsh_pkg_releases`
+/// 数秒级，离线更久）；切换后的「新激活行」与离线列表都走这条路。
+fn list_local(app_handle: &AppHandle) -> Vec<HarnessCore> {
+    rows_with_release_catalog(app_handle, Vec::new(), false)
+}
+
+/// 按给定版本行数据源构造核心列表（`release_metas` 为空即离线/本地视图）。
+fn rows_with_release_catalog(
+    app_handle: &AppHandle,
+    release_metas: Vec<download::DshPkgReleaseMeta>,
+    remote_catalog_available: bool,
+) -> Vec<HarnessCore> {
     let source = active_source(app_handle);
     let local = local_core(app_handle);
     let local_bin = local
@@ -91,9 +150,38 @@ pub async fn list(app_handle: &AppHandle) -> Vec<HarnessCore> {
             .as_ref()
             .is_some_and(|c| config::is_dsh_version_above_recommended(app_handle, &c.version)),
         orphaned: false,
+        bundled: false,
         recommended_version: config::recommended_dsh_version(app_handle),
         error: None,
     }];
+
+    // 随包资源构建（离线包）：随包内核独立成一行并置顶（`app-bundled`），用户仍可下载
+    // 其它版本（槽位在 AppData）并切换，也可以切回它。
+    let bundled_dir = config::dependencies::bundled_core_dir(app_handle);
+    let bundled_active = active_is_bundled(app_handle);
+    if let Some(dir) = &bundled_dir {
+        let version = read_manifest_dsh_version(dir).unwrap_or_default();
+        let dir_str = dir.to_string_lossy().into_owned();
+        rows.insert(
+            0,
+            HarnessCore {
+                id: BUNDLED_CORE_ID.to_string(),
+                source: CoreSource::App,
+                above_recommended: config::is_dsh_version_above_recommended(app_handle, &version),
+                version,
+                tag: String::new(),
+                path: dir_str.clone(),
+                dir: dir_str,
+                present: dir.join(config::dependencies::entry_relative(app_handle, config::dependencies::DEP_DSH)).is_file(),
+                active: bundled_active,
+                preview: false,
+                orphaned: false,
+                bundled: true,
+                recommended_version: config::recommended_dsh_version(app_handle),
+                error: None,
+            },
+        );
+    }
 
     // 激活的预打包信息：tag（可空，旧安装无记录）+ 安装目录状态
     let active_tag = config::get_dsh_pkg_tag(app_handle);
@@ -102,7 +190,8 @@ pub async fn list(app_handle: &AppHandle) -> Vec<HarnessCore> {
     // 激活核心按「版本」而非 tag 匹配版本行：pkg 仓库会对同一版本重打包/打
     // 测试 tag，版本行去重后保留的 tag 未必等于本机安装时的记录 tag。按 tag
     // 精确匹配会让激活版本行误标「未下载」并在列表底部多出一条重复激活行。
-    let active_version = if source == CoreSource::App {
+    // 随包内核激活时（`app-bundled` 行已经代表它）不再让版本行认领同一份目录。
+    let active_version = if source == CoreSource::App && !bundled_active {
         active_app_version(&active_tag, config::get_dsh_version(app_handle))
     } else {
         None
@@ -110,43 +199,19 @@ pub async fn list(app_handle: &AppHandle) -> Vec<HarnessCore> {
     // 已安装的预打包版本号（无论当前以哪种来源运行都存在）：用于保证预打包行
     // 始终如实呈现为"已安装"，即便本次以本地核心运行，也不会把它标成"未下载"。
     // 旧记录可能没有版本号，稍后从激活目录 package.json 兜底读取。
-    let installed_version = config::get_dsh_version(app_handle).or_else(|| {
-        (source == CoreSource::App && active_present)
-            .then(|| read_manifest_dsh_version(&active_dir))
-            .flatten()
-    });
+    let installed_version = if bundled_active {
+        None
+    } else {
+        config::get_dsh_version(app_handle).or_else(|| {
+            (source == CoreSource::App && active_present)
+                .then(|| read_manifest_dsh_version(&active_dir))
+                .flatten()
+        })
+    };
 
     // 版本行：GitHub releases（最新在前，含 Pre-release label）→ 按版本去重，
     // 同版本只保留最后一个 tag。releases 拉取失败（离线/限流）时回退 git tags，
     // 预览标记按 tag 命名兜底（见 `download::is_preview_tag`）。
-    let (release_metas, remote_catalog_available) = if config::offline_build() {
-        (Vec::new(), false)
-    } else {
-        match download::fetch_dsh_pkg_releases().await {
-            Ok(metas) => (metas, true),
-            Err(e) => {
-                log::warn!(
-                    "Failed to fetch dsh pkg releases ({}), falling back to git tags",
-                    e
-                );
-                match download::fetch_dsh_pkg_tags().await {
-                    Ok(tags) => (
-                        tags.into_iter()
-                            .map(|(tag, _)| download::DshPkgReleaseMeta {
-                                tag,
-                                prerelease: false,
-                            })
-                            .collect(),
-                        true,
-                    ),
-                    Err(e) => {
-                        log::warn!("Failed to fetch dsh pkg tags: {}", e);
-                        (Vec::new(), false)
-                    }
-                }
-            }
-        }
-    };
     let mut version_tags: Vec<(String, String, bool)> = Vec::new(); // (version, tag, preview)，保持首次出现顺序
     for meta in &release_metas {
         let Some(version) = download::parse_version_from_tag(&meta.tag) else {
@@ -210,6 +275,7 @@ pub async fn list(app_handle: &AppHandle) -> Vec<HarnessCore> {
             preview: *preview,
             above_recommended: config::is_dsh_version_above_recommended(app_handle, version),
             orphaned: false,
+            bundled: false,
             recommended_version: config::recommended_dsh_version(app_handle),
             error: None,
         });
@@ -218,7 +284,9 @@ pub async fn list(app_handle: &AppHandle) -> Vec<HarnessCore> {
     // 已安装的预打包版本未出现在版本列表（离线/限流/tag 被移除/旧版无 tag 记录）：
     // 纳入版本行之后，保持列表不置顶；无论当前是否以本地核心运行都要列出，
     // 避免"本地核心出现后预打包消失"。
-    if !active_rendered && active_present {
+    // 随包内核已独立成行时不再兜底：`active_dir` 就是随包目录，再补一行会把下载版本
+    // 的旧 tag 指向随包目录，出现重复且错误的「当前使用中」。
+    if !active_rendered && active_present && !bundled_active {
         rows.push(HarnessCore {
             id: active_tag
                 .as_ref()
@@ -232,6 +300,7 @@ pub async fn list(app_handle: &AppHandle) -> Vec<HarnessCore> {
             present: true,
             active: source == CoreSource::App,
             orphaned: false,
+            bundled: false,
             // 无远程元数据（离线/限流）：预览标记按 tag 命名兜底
             preview: active_tag.as_deref().is_some_and(download::is_preview_tag),
             above_recommended: installed_version
@@ -292,6 +361,7 @@ pub async fn list(app_handle: &AppHandle) -> Vec<HarnessCore> {
                 preview: download::is_preview_tag(&tag),
                 above_recommended: config::is_dsh_version_above_recommended(app_handle, &version),
                 orphaned,
+                bundled: false,
                 recommended_version: config::recommended_dsh_version(app_handle),
                 error: None,
             });
@@ -338,9 +408,9 @@ async fn stop_harness_for_core_switch(app_handle: &AppHandle) -> Result<(), Stri
 
 /// 切换活动核心（持久化 + 预打包版本目录互换；服务重启由前端负责）。
 ///
-/// `id` 取值：`local` | `app`（无 tag 记录的旧激活行）| `app-<tag>`。
+/// `id` 取值：`local` | `app`（无 tag 记录的旧激活行）| `app-bundled`（随包内核）| `app-<tag>`。
 pub async fn set_active(app_handle: &AppHandle, id: &str) -> Result<HarnessCore, String> {
-    let transition_guard = if id == "app" || id == "local" {
+    let transition_guard = if id == "app" || id == BUNDLED_CORE_ID || id == "local" {
         Some(workflow::acquire_core_transition().await?)
     } else {
         None
@@ -351,7 +421,8 @@ pub async fn set_active(app_handle: &AppHandle, id: &str) -> Result<HarnessCore,
         };
         // 低于最低支持版本的本地核心无法加载随包插件（issue #596）：显式切换同样
         // 拒绝并给出可操作提示，而不是让用户切过去再撞一次启动失败。
-        if !core_supports_bundled_plugins(&core.version) {
+        let baseline = config::manifest::minimum_dsh_version(app_handle);
+        if !core_supports_bundled_plugins(&core.version, baseline.as_deref()) {
             return Err(format!(
                 "CORE_LOCAL_UNSUPPORTED: local dsh {} is below the minimum supported core; update it (`npm install -g @deepseek-ai/dsh@latest`) or keep a bundled version",
                 core.version,
@@ -361,6 +432,26 @@ pub async fn set_active(app_handle: &AppHandle, id: &str) -> Result<HarnessCore,
         let mut setting = config::get_store_dat_setting(app_handle);
         setting.active_core = Some(CoreSource::Local.as_str().to_string());
         config::set_store_dat_setting(app_handle, setting);
+        // 映射表记录「该依赖由系统环境满足」（`null`），与清单的 `Path | null` 语义一致。
+        config::dependencies::record(app_handle, config::dependencies::DEP_DSH, None);
+    } else if id == BUNDLED_CORE_ID {
+        // 切回随包内核：它始终在安装目录里，只需把 dsh 依赖根指回去。
+        let Some(bundled) = config::dependencies::bundled_core_dir(app_handle) else {
+            return Err("CORE_BUNDLED_NOT_FOUND: this install ships no bundled core".to_string());
+        };
+        let entry = config::dependencies::entry_relative(app_handle, config::dependencies::DEP_DSH);
+        if !bundled.join(entry).is_file() {
+            return Err("CORE_BUNDLED_NOT_FOUND: bundled core files are missing".to_string());
+        }
+        stop_harness_for_core_switch(app_handle).await?;
+        let mut setting = config::get_store_dat_setting(app_handle);
+        setting.active_core = Some(CoreSource::App.as_str().to_string());
+        // 随包内核没有 pkg tag/commit：必须清掉下载版本留下的记录，否则版本展示与
+        // 「当前激活」判定仍指着那份已下载的核心。
+        setting.dsh_pkg_tag = None;
+        setting.dsh_pkg_commit = None;
+        config::set_store_dat_setting(app_handle, setting);
+        config::dependencies::record(app_handle, config::dependencies::DEP_DSH, Some(bundled));
     } else if id == "app" {
         if !config::get_dsh_binary_path(app_handle).exists() {
             return Err("CORE_APP_NOT_FOUND: bundled core is not installed".to_string());
@@ -369,20 +460,23 @@ pub async fn set_active(app_handle: &AppHandle, id: &str) -> Result<HarnessCore,
         let mut setting = config::get_store_dat_setting(app_handle);
         setting.active_core = Some(CoreSource::App.as_str().to_string());
         config::set_store_dat_setting(app_handle, setting);
+        // 切回预打包核心：托管根重新成为该依赖的安装根。
+        record_managed_core(app_handle);
     } else if let Some(tag) = id.strip_prefix("app-") {
         switch_app_version(app_handle, tag).await?;
     } else {
         return Err(format!("CORE_INVALID_ID: {id}"));
     }
-    // 查询核心列表可能联网；不要让慢查询继续占用切换锁，重启流程会在
-    // set_active 返回后通过同一把锁与启动串行化。
+    // 先释放切换锁再构造回包：重启流程要拿同一把锁与启动串行化，而回包已是纯本地
+    // 构造（`list_local`），不必也不该在锁内多做一步。
     drop(transition_guard);
 
-    Ok(list(app_handle)
-        .await
+    // 回包只用本地列表构造，不再调用联网的 `list()`：核心切换是本地操作，为拿一个
+    // 返回行等一轮 GitHub 往返会让「切换核心」白等数秒（离线更久）。
+    list_local(app_handle)
         .into_iter()
         .find(|c| c.active)
-        .ok_or_else(|| "CORE_NOT_FOUND: active core disappeared after switch".to_string())?)
+        .ok_or_else(|| "CORE_NOT_FOUND: active core disappeared after switch".to_string())
 }
 
 /// 切换到指定 tag 的预打包版本（已下载的历史槽位）。
@@ -398,7 +492,9 @@ async fn switch_app_version(app_handle: &AppHandle, tag: &str) -> Result<(), Str
     // 重叠，也避免 launch 在状态检查后插入并从旧的 dependencies/dsh 加载 DLL。
     let _transition_guard = workflow::acquire_core_transition().await?;
     let deps = dependencies_dir(app_handle);
-    let active_dir = config::get_dsh_install_path(app_handle);
+    // 槽位互换只在托管根内进行（映射可能把激活核心指向安装目录的捆绑副本）；
+    // 随包资源构建不互换，见下方分支。
+    let active_dir = config::dependencies::managed_root(app_handle, config::dependencies::DEP_DSH);
     fs_guard::validate_id(tag)?;
     let cur_tag = config::get_dsh_pkg_tag(app_handle);
 
@@ -412,6 +508,30 @@ async fn switch_app_version(app_handle: &AppHandle, tag: &str) -> Result<(), Str
     }
     let target_dir = existing_slot_dir(app_handle, tag)
         .ok_or_else(|| format!("CORE_VERSION_NOT_DOWNLOADED: {tag}"))?;
+
+    // 随包资源构建：随包内核必须留在安装目录（`$Resources/dsh`），不能像普通安装那样
+    // 把「激活目录 ↔ 槽位目录」互换——那会把安装包资源搬进 AppData，也会让应用升级
+    // 覆盖掉用户选中的版本。改为把 `dsh` 依赖根指向槽位本身：槽位本就在 AppData 里，
+    // 切回随包内核只是把根指回去（见 `set_active` 的 `app-bundled` 分支）。
+    if config::dependencies::bundled_core_dir(app_handle).is_some() {
+        stop_harness_for_core_switch(app_handle).await?;
+        let commit = match download::fetch_dsh_pkg_tags().await {
+            Ok(tags) => tags.into_iter().find(|(t, _)| t == tag).map(|(_, c)| c),
+            Err(e) => {
+                log::warn!("failed to resolve commit for tag {tag}: {e}");
+                None
+            }
+        };
+        let mut setting = config::get_store_dat_setting(app_handle);
+        setting.active_core = Some(CoreSource::App.as_str().to_string());
+        setting.dsh_pkg_tag = Some(tag.to_string());
+        if let Some(commit) = commit {
+            setting.dsh_pkg_commit = Some(commit);
+        }
+        config::set_store_dat_setting(app_handle, setting);
+        config::dependencies::record(app_handle, config::dependencies::DEP_DSH, Some(target_dir));
+        return Ok(());
+    }
 
     // 切换前停止运行中的服务，避免目录被进程句柄锁定
     if workflow::has_owned_process() {
@@ -489,18 +609,16 @@ async fn switch_app_version(app_handle: &AppHandle, tag: &str) -> Result<(), Str
         ));
     }
 
-    if holding.exists() {
-        if !download::remove_dir_with_retry(&holding).await {
+    if holding.exists() && !download::remove_dir_with_retry(&holding).await {
+        log::warn!(
+            "CORE_SWITCH_WARNING: failed to remove stale backup {} after successful switch",
+            holding.display()
+        );
+        if let Err(e) = download::rename_with_retry(&holding, &stale_backup).await {
             log::warn!(
-                "CORE_SWITCH_WARNING: failed to remove stale backup {} after successful switch",
-                holding.display()
+                "CORE_SWITCH_WARNING: failed to rename stale backup to {}: {e}",
+                stale_backup.display()
             );
-            if let Err(e) = download::rename_with_retry(&holding, &stale_backup).await {
-                log::warn!(
-                    "CORE_SWITCH_WARNING: failed to rename stale backup to {}: {e}",
-                    stale_backup.display()
-                );
-            }
         }
     }
 
@@ -519,7 +637,21 @@ async fn switch_app_version(app_handle: &AppHandle, tag: &str) -> Result<(), Str
         setting.dsh_pkg_commit = Some(c);
     }
     config::set_store_dat_setting(app_handle, setting);
+    // 切换后的激活核心回到托管根；映射表随之写回，界面与解析链路保持一致。
+    record_managed_core(app_handle);
     Ok(())
+}
+
+/// 把 `dsh` 映射写回托管根（预打包核心的激活目录）。
+fn record_managed_core(app_handle: &AppHandle) {
+    config::dependencies::record(
+        app_handle,
+        config::dependencies::DEP_DSH,
+        Some(config::dependencies::managed_root(
+            app_handle,
+            config::dependencies::DEP_DSH,
+        )),
+    );
 }
 
 /// 下载指定 tag 的预打包核心到历史槽位 `dependencies/<tag>`（不激活，切换由
@@ -580,6 +712,13 @@ pub async fn download_version(app_handle: &AppHandle, tag: &str) -> Result<Harne
 /// 卸载，正在跑的核心全挂了」）。只有直接删除因句柄锁定失败时（例如删到上一份激活
 /// 副本、残留进程仍加载着它），才走「停服务 → 重试」的慢路径。
 pub async fn remove_version(app_handle: &AppHandle, id: &str) -> Result<(), String> {
+    // 随包内核随安装包分发，是内网/离线环境唯一的兜底内核：删掉就只能重装应用才能恢复。
+    if id == BUNDLED_CORE_ID {
+        return Err(
+            "CORE_BUNDLED_PROTECTED: the bundled core ships with the app and cannot be removed"
+                .to_string(),
+        );
+    }
     let Some(tag) = id.strip_prefix("app-") else {
         return Err(format!("CORE_INVALID_ID: {id}"));
     };
@@ -652,6 +791,7 @@ fn row_for_tag(app_handle: &AppHandle, tag: &str, dir: &Path) -> HarnessCore {
         above_recommended: download::parse_version_from_tag(tag)
             .is_some_and(|version| config::is_dsh_version_above_recommended(app_handle, &version)),
         orphaned: false,
+        bundled: false,
         recommended_version: config::recommended_dsh_version(app_handle),
         error: None,
     }

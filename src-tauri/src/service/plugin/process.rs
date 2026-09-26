@@ -112,6 +112,45 @@ pub(crate) fn plugin_process_has_exited(pid: u32) -> bool {
     result != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
+/// dsh 侧 `dsh-atomic-write` 的跨进程写锁路径（`<profile>/package.json.lock`）。
+pub(crate) fn plugin_writer_lock_path(profile_dir: &Path) -> std::path::PathBuf {
+    profile_dir.join("package.json.lock")
+}
+
+/// 锁内容（持有者 PID）是否表明持有者已退出：必须是正 PID，且该进程已不在。
+fn orphan_lock_should_clear(recorded: &str, has_exited: impl Fn(u32) -> bool) -> bool {
+    recorded
+        .trim()
+        .parse::<u32>()
+        .is_ok_and(|pid| pid != 0 && has_exited(pid))
+}
+
+/// 清掉由已退出进程留下的孤儿写锁，返回是否真的删除。
+///
+/// `dsh` 用 `wx` 独占创建做锁、等待方只轮询从不删除（库文档明确「孤儿恢复属于运维
+/// 动作」）：安装子进程被强杀（取消 / 页面刷新 / 应用退出）后锁会永久留下，之后每次
+/// 安装都要静默等到 deadline 才报 `atomic-write: timed out waiting for the writer
+/// lock`。这里按 PID 存活做等价恢复——**持有者还活着就绝不碰**，所以并发安装不会互相
+/// 踩；锁内容缺失或无法解析时同样不删（无法证明持有者已退出）。
+pub(crate) fn clear_orphan_plugin_writer_lock(profile_dir: &Path) -> bool {
+    let path = plugin_writer_lock_path(profile_dir);
+    let Ok(recorded) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    if !orphan_lock_should_clear(&recorded, plugin_process_has_exited) {
+        return false;
+    }
+    if std::fs::remove_file(&path).is_err() {
+        return false;
+    }
+    log::warn!(
+        "removed orphan plugin writer lock ({}), holder {} already exited",
+        path.display(),
+        recorded.trim()
+    );
+    true
+}
+
 pub(crate) fn mark_process_cleanup_failed(owner: ProcessOwner, reason: String) {
     cleanup_failure_sender().send_replace(Some((owner, reason)));
 }
@@ -419,5 +458,51 @@ mod tests {
             "clearing a stale owner must not remove another owner's failure"
         );
         clear_process_cleanup_failed(other_owner);
+    }
+
+    #[test]
+    fn orphan_lock_clears_only_for_exited_positive_pid() {
+        let alive = |_: u32| false;
+        let exited = |_: u32| true;
+        assert!(orphan_lock_should_clear("1234\n", exited));
+        assert!(!orphan_lock_should_clear("1234\n", alive));
+        assert!(!orphan_lock_should_clear("", exited));
+        assert!(!orphan_lock_should_clear("   \n", exited));
+        assert!(!orphan_lock_should_clear("not-a-pid", exited));
+        assert!(!orphan_lock_should_clear("-1", exited));
+        assert!(!orphan_lock_should_clear("0", exited));
+    }
+
+    #[test]
+    fn orphan_lock_file_is_removed_for_dead_holder_and_kept_for_live_one() {
+        let dir = std::env::temp_dir().join(format!(
+            "dsh-orphan-lock-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = plugin_writer_lock_path(&dir);
+
+        let live = std::process::id();
+        std::fs::write(&path, format!("{live}\n")).unwrap();
+        assert!(
+            !clear_orphan_plugin_writer_lock(&dir),
+            "live holder must never be touched"
+        );
+        assert!(path.exists());
+
+        std::fs::write(&path, "garbage").unwrap();
+        assert!(!clear_orphan_plugin_writer_lock(&dir));
+        assert!(path.exists());
+
+        std::fs::write(&path, format!("{}\n", u32::MAX - 1)).unwrap();
+        assert!(
+            clear_orphan_plugin_writer_lock(&dir),
+            "unknown/absent pid counts as exited"
+        );
+        assert!(!path.exists());
+
+        assert!(!clear_orphan_plugin_writer_lock(&dir), "no lock, no-op");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

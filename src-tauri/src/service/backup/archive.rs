@@ -70,9 +70,9 @@ fn append_dir_filtered(
     for entry in fs::read_dir(dir).map_err(|e| format!("BACKUP_ARCHIVE_READDIR: {e}"))? {
         let entry = entry.map_err(|e| format!("BACKUP_ARCHIVE_ENTRY: {e}"))?;
         let path = entry.path();
-        let name = path.file_name().ok_or_else(|| {
-            format!("BACKUP_ARCHIVE_NO_NAME: {}", path.display())
-        })?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| format!("BACKUP_ARCHIVE_NO_NAME: {}", path.display()))?;
         let archived = rel.join(name);
         // 根相对路径（用于排除判断）
         let root_rel = path
@@ -81,28 +81,32 @@ fn append_dir_filtered(
         if is_excluded(root_rel, include_credentials) {
             continue;
         }
-        let ty = entry.file_type().map_err(|e| format!("BACKUP_ARCHIVE_TYPE: {e}"))?;
+        let ty = entry
+            .file_type()
+            .map_err(|e| format!("BACKUP_ARCHIVE_TYPE: {e}"))?;
         if ty.is_dir() {
             builder
                 .append_dir(&archived, &path)
                 .map_err(|e| format!("BACKUP_ARCHIVE_APPEND_DIR: {e}"))?;
             append_dir_filtered(builder, &path, source, &archived, include_credentials)?;
-        }
-        else if ty.is_file() {
+        } else if ty.is_file() {
             builder
-                .append_file(&archived, &mut fs::File::open(&path).map_err(|e| {
-                    format!("BACKUP_ARCHIVE_OPEN: {e}")
-                })?)
+                .append_file(
+                    &archived,
+                    &mut fs::File::open(&path).map_err(|e| format!("BACKUP_ARCHIVE_OPEN: {e}"))?,
+                )
                 .map_err(|e| format!("BACKUP_ARCHIVE_APPEND_FILE: {e}"))?;
-        }
-        else if ty.is_symlink() {
+        } else if ty.is_symlink() {
             // 符号链接：读取 target，tar Symlink 存储（GNU header 限制 100 字节）
-            let target = std::fs::read_link(&path)
-                .map_err(|e| format!("BACKUP_ARCHIVE_READLINK: {e}"))?;
+            let target =
+                std::fs::read_link(&path).map_err(|e| format!("BACKUP_ARCHIVE_READLINK: {e}"))?;
             if target.as_os_str().len() > 100 {
-                eprintln!("[backup] 跳过超长符号链接: {} -> {}", path.display(), target.display());
-            }
-            else {
+                eprintln!(
+                    "[backup] 跳过超长符号链接: {} -> {}",
+                    path.display(),
+                    target.display()
+                );
+            } else {
                 let mut header = tar::Header::new_gnu();
                 header.set_entry_type(tar::EntryType::Symlink);
                 header.set_size(0);
@@ -113,8 +117,7 @@ fn append_dir_filtered(
                     .append_link(&mut header, &archived, &target)
                     .map_err(|e| format!("BACKUP_ARCHIVE_APPEND_LINK: {e}"))?;
             }
-        }
-        else {
+        } else {
             // socket/FIFO/设备：runtime 资源，跳过
             eprintln!("[backup] 跳过特殊文件: {} ({:?})", path.display(), ty);
         }
@@ -128,23 +131,25 @@ fn append_dir_filtered(
 /// `.credentials.yaml`。始终排除 `.backups/`、`.harness.pid`、
 /// `node_modules/.modules.yaml`。使用 zstd 多线程压缩（级别 0 = 默认 3，
 /// 启用 multithread 加速）。
-pub fn create_archive(
-    source: &Path,
-    dest: &Path,
-    include_credentials: bool,
-) -> Result<(), String> {
+pub fn create_archive(source: &Path, dest: &Path, include_credentials: bool) -> Result<(), String> {
     let file = fs::File::create(dest).map_err(|e| format!("BACKUP_ARCHIVE_CREATE: {e}"))?;
     // 级别 0 使用 zstd 默认压缩级别（3），在速度与压缩率间取得平衡。
     // 多线程压缩：利用多核 CPU 并行压缩块，速度比单线程快 3-5 倍。
     let workers = std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(1);
-    let mut enc = zstd::stream::Encoder::new(file, 0)
-        .map_err(|e| format!("BACKUP_ARCHIVE_ENCODER: {e}"))?;
+    let mut enc =
+        zstd::stream::Encoder::new(file, 0).map_err(|e| format!("BACKUP_ARCHIVE_ENCODER: {e}"))?;
     enc.multithread(workers)
         .map_err(|e| format!("BACKUP_ARCHIVE_MULTITHREAD: {e}"))?;
     let mut archive = tar::Builder::new(enc);
-    append_dir_filtered(&mut archive, source, source, Path::new("."), include_credentials)?;
+    append_dir_filtered(
+        &mut archive,
+        source,
+        source,
+        Path::new("."),
+        include_credentials,
+    )?;
     archive
         .finish()
         .map_err(|e| format!("BACKUP_ARCHIVE_FINISH: {e}"))?;
@@ -168,8 +173,8 @@ pub fn extract_archive(archive: &Path, dest: &Path) -> Result<(), String> {
     fs::create_dir_all(dest).map_err(|e| format!("BACKUP_EXTRACT_MKDIR: {e}"))?;
     let file = fs::File::open(archive).map_err(|e| format!("BACKUP_EXTRACT_OPEN: {e}"))?;
     // 注意：zstd 解码不支持多线程（每帧必须顺序解码），保持单线程
-    let dec = zstd::stream::Decoder::new(file)
-        .map_err(|e| format!("BACKUP_EXTRACT_DECODER: {e}"))?;
+    let dec =
+        zstd::stream::Decoder::new(file).map_err(|e| format!("BACKUP_EXTRACT_DECODER: {e}"))?;
     let mut archive = tar::Archive::new(dec);
     extract_tar_entries(&mut archive, dest)
 }
@@ -196,9 +201,15 @@ fn extract_tar_entries<R: Read>(archive: &mut tar::Archive<R>, dest: &Path) -> R
     archive.set_preserve_ownerships(false);
 
     // 单次遍历：避免重复调用 archive.entries() 导致 decoder 状态错乱
-    for entry in archive.entries().map_err(|e| format!("BACKUP_EXTRACT_ENTRIES: {e}"))? {
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("BACKUP_EXTRACT_ENTRIES: {e}"))?
+    {
         let mut entry = entry.map_err(|e| format!("BACKUP_EXTRACT_ENTRY: {e}"))?;
-        let path = entry.path().map_err(|e| format!("BACKUP_EXTRACT_PATH: {e}"))?.into_owned();
+        let path = entry
+            .path()
+            .map_err(|e| format!("BACKUP_EXTRACT_PATH: {e}"))?
+            .into_owned();
 
         // 拒绝含 `..` 组件的条目（防路径穿越）
         if path
@@ -228,8 +239,7 @@ fn extract_tar_entries<R: Read>(archive: &mut tar::Archive<R>, dest: &Path) -> R
 
         // 创建父目录
         if let Some(parent) = dest_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("BACKUP_EXTRACT_MKDIR_PARENT: {e}"))?;
+            fs::create_dir_all(parent).map_err(|e| format!("BACKUP_EXTRACT_MKDIR_PARENT: {e}"))?;
         }
 
         // 根据 entry type 分支处理（替代 entry.unpack 避免 macOS tar bug）
@@ -238,8 +248,7 @@ fn extract_tar_entries<R: Read>(archive: &mut tar::Archive<R>, dest: &Path) -> R
             // 目录：直接创建
             fs::create_dir_all(&dest_path)
                 .map_err(|e| format!("BACKUP_EXTRACT_MKDIR: {e} (path={})", path.display()))?;
-        }
-        else if entry_type.is_symlink() {
+        } else if entry_type.is_symlink() {
             // 符号链接：读取 target 并创建链接
             let target = entry
                 .link_name()
@@ -254,12 +263,12 @@ fn extract_tar_entries<R: Read>(archive: &mut tar::Archive<R>, dest: &Path) -> R
                 if e.kind() != std::io::ErrorKind::AlreadyExists {
                     return Err(format!(
                         "BACKUP_EXTRACT_SYMLINK: {e} (target={}, dest={})",
-                        target.display(), dest_path.display()
+                        target.display(),
+                        dest_path.display()
                     ));
                 }
             }
-        }
-        else {
+        } else {
             // 普通文件：先写临时文件，再原子 rename（macOS 上 unlink + write 会被
             // 读锁干扰成 0 字节；temp + rename 是原子的，原文件在成功前保持完好）
             let mut content = Vec::new();
@@ -268,7 +277,10 @@ fn extract_tar_entries<R: Read>(archive: &mut tar::Archive<R>, dest: &Path) -> R
             // 临时文件路径：<dest>.tmp.<pid>.<nanos>
             let tmp_name = format!(
                 "{}.tmp.{}.{}",
-                dest_path.file_name().and_then(|n| n.to_str()).unwrap_or("restore"),
+                dest_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("restore"),
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -276,11 +288,17 @@ fn extract_tar_entries<R: Read>(archive: &mut tar::Archive<R>, dest: &Path) -> R
                     .as_nanos()
             );
             let tmp_path = dest_path.with_file_name(tmp_name);
-            fs::write(&tmp_path, &content)
-                .map_err(|e| format!("BACKUP_EXTRACT_WRITE_TMP: {e} (tmp={})", tmp_path.display()))?;
+            fs::write(&tmp_path, &content).map_err(|e| {
+                format!("BACKUP_EXTRACT_WRITE_TMP: {e} (tmp={})", tmp_path.display())
+            })?;
             // 原子 rename 替换目标文件（macOS 上 rename 不要求目标文件关闭）
-            fs::rename(&tmp_path, &dest_path)
-                .map_err(|e| format!("BACKUP_EXTRACT_RENAME: {e} (tmp={}, dest={})", tmp_path.display(), dest_path.display()))?;
+            fs::rename(&tmp_path, &dest_path).map_err(|e| {
+                format!(
+                    "BACKUP_EXTRACT_RENAME: {e} (tmp={}, dest={})",
+                    tmp_path.display(),
+                    dest_path.display()
+                )
+            })?;
         }
     }
     Ok(())
@@ -290,11 +308,13 @@ fn extract_tar_entries<R: Read>(archive: &mut tar::Archive<R>, dest: &Path) -> R
 #[cfg(test)]
 fn list_archive_entries(archive: &Path) -> Result<Vec<String>, String> {
     let file = fs::File::open(archive).map_err(|e| format!("BACKUP_LIST_OPEN: {e}"))?;
-    let dec = zstd::stream::Decoder::new(file)
-        .map_err(|e| format!("BACKUP_LIST_DECODER: {e}"))?;
+    let dec = zstd::stream::Decoder::new(file).map_err(|e| format!("BACKUP_LIST_DECODER: {e}"))?;
     let mut archive = tar::Archive::new(dec);
     let mut entries = Vec::new();
-    for entry in archive.entries().map_err(|e| format!("BACKUP_LIST_ENTRIES: {e}"))? {
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("BACKUP_LIST_ENTRIES: {e}"))?
+    {
         let entry = entry.map_err(|e| format!("BACKUP_LIST_ENTRY: {e}"))?;
         let path = entry.path().map_err(|e| format!("BACKUP_LIST_PATH: {e}"))?;
         entries.push(path.to_string_lossy().replace('\\', "/"));
@@ -320,10 +340,10 @@ mod tests {
 
     /// 计算与 source 同级的归档目标路径。
     fn archive_dest(source: &Path) -> PathBuf {
-        source
-            .parent()
-            .unwrap()
-            .join(format!("{}.tar.zst", source.file_name().unwrap().to_str().unwrap()))
+        source.parent().unwrap().join(format!(
+            "{}.tar.zst",
+            source.file_name().unwrap().to_str().unwrap()
+        ))
     }
 
     /// 创建临时目录并写入若干文件作为测试夹具。
@@ -382,10 +402,7 @@ mod tests {
 
     #[test]
     fn credentials_excluded_by_default() {
-        let source = setup_source_dir(&[
-            (".credentials.yaml", "key: secret"),
-            ("data.txt", "ok"),
-        ]);
+        let source = setup_source_dir(&[(".credentials.yaml", "key: secret"), ("data.txt", "ok")]);
         let dest = archive_dest(&source);
         create_archive(&source, &dest, false).unwrap();
         let entries = list_archive_entries(&dest).unwrap();
@@ -399,10 +416,7 @@ mod tests {
 
     #[test]
     fn credentials_included_when_opted_in() {
-        let source = setup_source_dir(&[
-            (".credentials.yaml", "key: secret"),
-            ("data.txt", "ok"),
-        ]);
+        let source = setup_source_dir(&[(".credentials.yaml", "key: secret"), ("data.txt", "ok")]);
         let dest = archive_dest(&source);
         create_archive(&source, &dest, true).unwrap();
         let entries = list_archive_entries(&dest).unwrap();
@@ -421,7 +435,8 @@ mod tests {
         create_archive(&source, &dest_zst, false).unwrap();
 
         // 还原到新目录
-        let restore_dir = std::env::temp_dir().join(format!("dsh-backup-restore-{}", unique_suffix()));
+        let restore_dir =
+            std::env::temp_dir().join(format!("dsh-backup-restore-{}", unique_suffix()));
         extract_archive(&dest_zst, &restore_dir).unwrap();
 
         let restored_path = restore_dir.join("config.yaml");
@@ -451,7 +466,8 @@ mod tests {
         let mode = b"0000644\0";
         header[100..108].copy_from_slice(mode);
         // uid/gid 0 (108..124)
-        header[108..124].copy_from_slice(b"0000000\00000000\0");
+        header[108..116].copy_from_slice(b"0000000\0");
+        header[116..124].copy_from_slice(b"0000000\0");
         // size (octal, 124..136)
         let size_str = format!("{:011o}\0", data.len());
         header[124..124 + size_str.len()].copy_from_slice(size_str.as_bytes());
@@ -473,7 +489,9 @@ mod tests {
         // pad to 512 boundary
         let pad = (512 - (data.len() % 512)) % 512;
         if pad > 0 {
-            writer.write_all(&vec![0u8; pad]).map_err(|e| e.to_string())?;
+            writer
+                .write_all(&vec![0u8; pad])
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }
@@ -540,7 +558,10 @@ mod tests {
                 (name, content)
             })
             .collect();
-        let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, c)| (p.as_str(), c.as_str()))
+            .collect();
         let source = setup_source_dir(&refs);
         let dest = archive_dest(&source);
 
@@ -548,7 +569,8 @@ mod tests {
         assert!(dest.exists(), "归档文件应存在");
 
         // 解压到新目录并验证内容
-        let restore_dir = std::env::temp_dir().join(format!("dsh-backup-mt-restore-{}", unique_suffix()));
+        let restore_dir =
+            std::env::temp_dir().join(format!("dsh-backup-mt-restore-{}", unique_suffix()));
         extract_archive(&dest, &restore_dir).unwrap();
 
         for (rel, expected) in &files {
@@ -611,16 +633,24 @@ mod tests {
 
         // 验证归档中包含 link 条目
         let entries = list_archive_entries(&dest).unwrap();
-        assert!(entries.iter().any(|e| e.ends_with("link.txt")), "归档应包含 link.txt");
+        assert!(
+            entries.iter().any(|e| e.ends_with("link.txt")),
+            "归档应包含 link.txt"
+        );
 
         // 还原并验证符号链接
-        let restore_dir = std::env::temp_dir().join(format!("dsh-backup-symlink-{}", unique_suffix()));
+        let restore_dir =
+            std::env::temp_dir().join(format!("dsh-backup-symlink-{}", unique_suffix()));
         extract_archive(&dest, &restore_dir).unwrap();
 
         let link_path = restore_dir.join("link.txt");
         assert!(link_path.is_symlink(), "link.txt 应为符号链接");
         let target = std::fs::read_link(&link_path).unwrap();
-        assert_eq!(target, std::path::PathBuf::from("target.txt"), "链接目标应一致");
+        assert_eq!(
+            target,
+            std::path::PathBuf::from("target.txt"),
+            "链接目标应一致"
+        );
 
         let _ = fs::remove_dir_all(&source);
         let _ = fs::remove_file(&dest);
@@ -657,7 +687,9 @@ mod tests {
         // 创建 FIFO（named pipe）：mkfifo 需要 C string
         unsafe {
             libc::mkfifo(
-                std::ffi::CString::new(fifo_path.to_str().unwrap()).unwrap().as_ptr(),
+                std::ffi::CString::new(fifo_path.to_str().unwrap())
+                    .unwrap()
+                    .as_ptr(),
                 0o644,
             );
         }
@@ -677,10 +709,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn handles_mixed_file_types() {
-        let source = setup_source_dir(&[
-            ("normal.txt", "content"),
-            ("subdir/nested.txt", "nested"),
-        ]);
+        let source =
+            setup_source_dir(&[("normal.txt", "content"), ("subdir/nested.txt", "nested")]);
         // 添加符号链接
         std::os::unix::fs::symlink("normal.txt", source.join("link_to_normal")).unwrap();
         // 添加 socket
@@ -719,7 +749,8 @@ mod tests {
         let dest = archive_dest(&source);
         create_archive(&source, &dest, false).unwrap();
 
-        let restore_dir = std::env::temp_dir().join(format!("dsh-backup-nested-{}", unique_suffix()));
+        let restore_dir =
+            std::env::temp_dir().join(format!("dsh-backup-nested-{}", unique_suffix()));
         extract_archive(&dest, &restore_dir).unwrap();
 
         let link = restore_dir.join("sub").join("up_link");

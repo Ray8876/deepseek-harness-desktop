@@ -31,12 +31,20 @@ export const harnessUpdater = defineStore({
       }
     },
 
-    /** 手动更新：重新下载安装新版并重启服务 */
-    async handleUpdate() {
+    /**
+     * 手动更新：重新下载安装新版并重启服务。
+     *
+     * 返回是否真的发生了安装（新版本已落盘）：false 表示未发生安装（已是最新/无法校验）
+     * 或安装前就失败——调用方据此回滚为本次更新预先切换的版本档案（旧核心不能配新档案）。
+     * 安装已落盘但随后的启动失败仍返回 true：核心已经是新版，把档案切回旧版本只会造出
+     * 反向的不配套（新核心配旧档案），启动失败另有 `harness.fail` 的失败态呈现。
+     */
+    async handleUpdate(): Promise<boolean> {
       if (this.updating)
-        return
+        return false
       this.updating = true
       let unlistenInstall: UnlistenFn | null = null
+      let installed = false
       try {
         unlistenInstall = await harness.listenInstallProgress()
         harness.prepareInstall(i18next.t('status.updating'))
@@ -44,6 +52,7 @@ export const harnessUpdater = defineStore({
         // 限流拿不到可信摘要而保持本地安装）。此时绝不重启页面、也不丢弃
         // “有新版本”提示——否则用户会看到“页面刷新了、版本却没变、提示也没了”。
         const changed = await invoke<boolean>('install_dependencies')
+        installed = changed
         if (!changed) {
           // 回到就绪态（若当前停在安装/更新界面，则恢复到原 iframe 视图）
           harness.status = 'ready'
@@ -59,14 +68,18 @@ export const harnessUpdater = defineStore({
           if (this.updateInfo) {
             toast(i18next.t('update.verify_failed'), { variant: 'danger' })
           }
-          return
+          return false
         }
         await harness.launchAndWait()
         this.updateInfo = null
+        return true
       }
       catch (err) {
         console.error('[Harness] update failed:', err)
         harness.fail(String(err))
+        // 已落盘的安装不能报成「没切换」：调用方会据此把档案切回旧版本，反而造出
+        // 「新核心 + 旧档案」的不配套状态。
+        return installed
       }
       finally {
         unlistenInstall?.()

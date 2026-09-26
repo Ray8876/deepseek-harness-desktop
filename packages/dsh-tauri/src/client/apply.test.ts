@@ -3,7 +3,7 @@
  *
  * `5b3b9534` 重建时 `client/apply.ts` 连同四个注册器被整体删除，宿主侧发送方
  * （`src/layout/components/webview.tsx`、`iframe.tsx`）原地保留，结果「壳的收起侧边栏」
- * 等控件全部空转。这里锁住四条 effect 都被登记，且登记过程确实挂上了父窗口桥监听。
+ * 等控件全部空转。这里锁住每条 effect 都被登记，且登记过程确实挂上了父窗口桥监听。
  */
 import type { ClientContext, ParentMessage } from './types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -16,6 +16,8 @@ const EXPECTED_LABELS = [
   'dsh-tauri: navigation (new session, add workspace)',
   'dsh-tauri: zoom shortcuts (ctrl/cmd +/-/0)',
   'dsh-tauri: sidebar tweaks (hide collapse toggle, center brand)',
+  'dsh-tauri: account sign-in (auto-open the authorize url)',
+  'dsh-tauri: shortcuts (catalog report + edit commands)',
 ]
 
 /** 假 MutationObserver：只保证 controller.observe 可用。 */
@@ -88,7 +90,7 @@ const disposers: (() => void)[] = []
 
 /** 最小客户端 ctx：effect 按 cordis 的 `callback.call(fiber)` 语义绑定 this。 */
 function fakeCtx(labels: string[]): ClientContext {
-  return {
+  const ctx = {
     effect(callback: (this: unknown) => () => void, label?: string) {
       if (label !== undefined)
         labels.push(label)
@@ -97,7 +99,12 @@ function fakeCtx(labels: string[]): ClientContext {
       return dispose
     },
     layout: { toggleSidebar: () => {} },
-  } as unknown as ClientContext
+    // 可选服务读取（`ctx.get`）与属性同源：老核心没有 `shortcuts`，属性面也不存在。
+    get(name: string): unknown {
+      return Reflect.get(ctx, name)
+    },
+  }
+  return ctx as unknown as ClientContext
 }
 
 beforeEach(() => {
@@ -141,7 +148,7 @@ describe('apply', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('内嵌页面保留四条 effect 与侧边栏、导航、缩放桥', async () => {
+  it('内嵌页面保留五条 effect 与侧边栏、导航、缩放桥', async () => {
     const env = stubEnv()
 
     const toggleSidebar = vi.fn()

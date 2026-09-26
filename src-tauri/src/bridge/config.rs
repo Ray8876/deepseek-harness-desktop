@@ -33,9 +33,11 @@ pub fn is_dev_build() -> bool {
 /// 备份字段（backup_retention_count / backup_include_credentials）由前端
 /// 设置页写入，归一化由 `normalize_backup_fields` 统一负责。
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn update_app_config(
     app_handle: AppHandle,
     port: Option<u16>,
+    harness_max_heap_mb: Option<u32>,
     auto_start: Option<bool>,
     cli_link_enabled: Option<bool>,
     close_action: Option<String>,
@@ -62,6 +64,9 @@ pub async fn update_app_config(
             // 记住用户手动选择的端口：自动避让递增后仍能回落回用户值，而不是
             // 一路顶高（issue #91，见 workflow::launch 的端口自愈逻辑）
             setting.manual_port = Some(port);
+        }
+        if let Some(mb) = harness_max_heap_mb {
+            setting.harness_max_heap_mb = (mb != 0).then_some(mb);
         }
         if let Some(auto_start) = auto_start {
             setting.auto_start = auto_start;

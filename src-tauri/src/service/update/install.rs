@@ -517,7 +517,7 @@ mod tests {
         let file = dir.join("installer.part");
         let content = b"deepseek-harness-desktop installer payload";
         std::fs::write(&file, content).unwrap();
-        let real = format!("sha256:{}", format!("{:x}", sha2::Sha256::digest(content)));
+        let real = format!("sha256:{:x}", sha2::Sha256::digest(content));
         // 正确摘要通过
         assert!(verify_installer_sha256(&file, &real).is_ok());
         // 裸 64hex（无 sha256: 前缀）也接受
@@ -539,7 +539,9 @@ mod tests {
         assert!(ensure_within_updates_dir(&root.join("app-setup.exe"), &root).is_ok());
         // 目录外的兄弟路径（前缀相同也不能放过：`updates-evil` 不是 `updates` 的子路径）
         assert!(ensure_within_updates_dir(&root.join("..").join("evil.exe"), &root).is_err());
-        let sibling = std::path::Path::new("root").join("updates-evil").join("x.exe");
+        let sibling = std::path::Path::new("root")
+            .join("updates-evil")
+            .join("x.exe");
         assert!(ensure_within_updates_dir(&sibling, &root).is_err());
     }
 }

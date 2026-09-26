@@ -9,6 +9,8 @@ use tauri_plugin_store::StoreExt;
 pub struct Setting {
     pub installed: bool,
     pub port: u16,
+    #[serde(default)]
+    pub harness_max_heap_mb: Option<u32>,
     pub auto_start: bool,
     pub language: String,
     #[serde(default)]
@@ -23,7 +25,7 @@ pub struct Setting {
     /// 预装插件引导是否已完成（确认安装或跳过都算完成，之后不再弹出）
     #[serde(default)]
     pub preinstall_done: bool,
-    /// 上次引导结束时的 `preset-plugins.json` 内容指纹。资源文件每次安装都会被
+    /// 上次引导结束时的清单 `plugins` 节内容指纹。资源清单每次安装都会被
     /// 强制覆盖、旧文件不复存在，只能把「上次看到的内容」记在这里，每次启动再比对：
     /// 内容有变更 → 重新进入预设引导。`None` = 老用户升级（无基线）→ 弹一次建立基线。
     #[serde(default)]
@@ -79,11 +81,24 @@ pub struct Setting {
     /// 桌宠精灵图的显示宽度（逻辑像素）；`None` = 沿用窗口侧默认值。
     #[serde(default)]
     pub pet_size: Option<f64>,
+    /// 强制以 XWayland 运行（默认关闭，下次启动生效）。
+    ///
+    /// 影响的是整个应用而非只有桌宠：原生 Wayland 下桌宠既不能置顶也不能定位
+    /// （issue #649），把应用拉到 XWayland 是在 GNOME 上恢复这两项能力的唯一办法，
+    /// 代价是主窗口也一并经 XWayland 渲染。默认关闭，由用户显式开启。
+    #[serde(default)]
+    pub force_xwayland: bool,
 }
 
 pub const ZOOM_FACTOR_MIN: f64 = 0.5;
 pub const ZOOM_FACTOR_MAX: f64 = 2.0;
 pub const ZOOM_FACTOR_STEP: f64 = 0.1;
+pub const HARNESS_HEAP_MIN_MB: u32 = 1024;
+pub const HARNESS_HEAP_MAX_MB: u32 = 32768;
+
+pub fn normalize_harness_max_heap_mb(value: Option<u32>) -> Option<u32> {
+    value.filter(|mb| (HARNESS_HEAP_MIN_MB..=HARNESS_HEAP_MAX_MB).contains(mb))
+}
 
 /// 默认档案：桌面端内置的 web 档案
 fn default_active_profile() -> String {
@@ -159,6 +174,7 @@ impl Default for Setting {
         Self {
             installed: false,
             port: default_port(),
+            harness_max_heap_mb: None,
             auto_start: true,
             language: "zh-CN".to_string(),
             dsh_pkg_commit: None,
@@ -178,6 +194,7 @@ impl Default for Setting {
             pet_enabled: false,
             active_pet: None,
             pet_size: None,
+            force_xwayland: false,
         }
     }
 }
@@ -208,6 +225,50 @@ fn resolve_store_dat_file(e2e: bool, debug: bool) -> &'static str {
     } else {
         STORE_DAT_FILE
     }
+}
+
+/// 启动最早期读取 `force_xwayland`，绕过 `tauri_plugin_store` 直接解析 store 文件。
+///
+/// `GDK_BACKEND` 必须在 GTK 初始化之前设置，那时 `AppHandle` 尚不存在，插件的
+/// `StoreExt` 用不了。路径由 `logger::identifier_dir()` 与 `store_dat_file_name()` 拼出，
+/// 与插件的 `BaseDirectory::AppData` + 文件名解析一致，开发 / E2E / 生产三份 store
+/// 不互读。store 靠文件名区分 dev，目录不带 `dev/` 一层，与日志的做法不同。
+/// 文件缺失、JSON 非法、键缺失一律按关闭处理：此处早于 `logger::init()`，
+/// 无处告警，静默回落到默认行为比中断启动合适。
+///
+/// `migrate_app_data_dir` 在 builder 的 setup 阶段才执行，晚于这里。从旧标识符升级
+/// 上来的用户，升级后的首次启动读不到设置，该次不强制，迁移完成后下次启动恢复。
+pub fn force_xwayland_setting() -> bool {
+    crate::logger::identifier_dir()
+        .map(|dir| dir.join(store_dat_file_name()))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .is_some_and(|raw| force_xwayland_in_store_json(&raw))
+}
+
+/// `force_xwayland_setting` 的纯函数内核，便于单测覆盖各种损坏输入。
+fn force_xwayland_in_store_json(raw: &str) -> bool {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return false;
+    };
+    let Some(value) = root.get(STORE_SETTING_KEY) else {
+        return false;
+    };
+    // 与 read_store_dat_setting 同理：值可能是对象，也可能是内含对象的 JSON 字符串。
+    let unwrapped;
+    let object = match value.as_str() {
+        Some(text) => match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(parsed) => {
+                unwrapped = parsed;
+                &unwrapped
+            }
+            Err(_) => return false,
+        },
+        None => value,
+    };
+    object
+        .get("force_xwayland")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn setting_write_lock() -> &'static Mutex<()> {
@@ -255,6 +316,7 @@ fn read_store_dat_setting<R: Runtime>(app_handle: &AppHandle<R>) -> Setting {
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_else(Setting::default);
     setting.zoom_factor = normalize_zoom_factor(setting.zoom_factor);
+    setting.harness_max_heap_mb = normalize_harness_max_heap_mb(setting.harness_max_heap_mb);
     setting.close_action = normalize_close_action(&setting.close_action);
     normalize_backup_fields(&mut setting);
     setting
@@ -278,10 +340,12 @@ fn emit_setting(app_handle: &AppHandle, value: &serde_json::Value) {
 
 fn preserve_persisted_fields(mut replacement: Setting, current: &Setting) -> Setting {
     replacement.zoom_factor = normalize_zoom_factor(current.zoom_factor);
+    replacement.harness_max_heap_mb = normalize_harness_max_heap_mb(current.harness_max_heap_mb);
     replacement.close_action = normalize_close_action(&current.close_action);
     replacement.pet_enabled = current.pet_enabled;
     replacement.active_pet.clone_from(&current.active_pet);
     replacement.pet_size = current.pet_size;
+    replacement.force_xwayland = current.force_xwayland;
     replacement
 }
 
@@ -312,6 +376,7 @@ where
         let mut setting = read_store_dat_setting(app_handle);
         update(&mut setting);
         setting.zoom_factor = normalize_zoom_factor(setting.zoom_factor);
+        setting.harness_max_heap_mb = normalize_harness_max_heap_mb(setting.harness_max_heap_mb);
         // 落盘前的第二道闸：调用方（含前端 invoke）写入的不可信取值不以原始形态进 store
         setting.close_action = normalize_close_action(&setting.close_action);
         normalize_backup_fields(&mut setting);
@@ -358,10 +423,55 @@ pub fn set_dsh_pkg_tag(app_handle: &AppHandle, tag: String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        default_close_action, default_zoom_factor, normalize_close_action, normalize_zoom_factor,
-        preserve_persisted_fields, resolve_store_dat_file, Setting, STORE_DAT_DEV_FILE,
-        STORE_DAT_FILE, STORE_DAT_TEST_FILE, ZOOM_FACTOR_MAX, ZOOM_FACTOR_MIN,
+        default_close_action, default_zoom_factor, force_xwayland_in_store_json,
+        normalize_close_action, normalize_zoom_factor, preserve_persisted_fields,
+        resolve_store_dat_file, Setting, STORE_DAT_DEV_FILE, STORE_DAT_FILE, STORE_DAT_TEST_FILE,
+        STORE_SETTING_KEY, ZOOM_FACTOR_MAX, ZOOM_FACTOR_MIN,
     };
+
+    /// 启动前读取跑在 `logger::init()` 之前，任何损坏输入都只能静默回落到关闭。
+    #[test]
+    fn force_xwayland_falls_back_to_off_on_any_unreadable_store() {
+        // 正常形状：`setting` 的值是对象。
+        assert!(force_xwayland_in_store_json(
+            r#"{"setting":{"force_xwayland":true}}"#
+        ));
+        assert!(!force_xwayland_in_store_json(
+            r#"{"setting":{"force_xwayland":false}}"#
+        ));
+        // 历史形状：`setting` 的值是一个内含对象的 JSON 字符串，read_store_dat_setting
+        // 同样兼容；漏掉这一支会让部分用户的设置被静默读成关闭。
+        assert!(force_xwayland_in_store_json(
+            r#"{"setting":"{\"force_xwayland\":true}"}"#
+        ));
+        // 字段缺失（老版本写下的 store）。
+        assert!(!force_xwayland_in_store_json(r#"{"setting":{"port":3080}}"#));
+        // 键缺失、JSON 非法、空文件。
+        assert!(!force_xwayland_in_store_json(r#"{"window_state":{}}"#));
+        assert!(!force_xwayland_in_store_json("{ not json"));
+        assert!(!force_xwayland_in_store_json(""));
+        // 字符串包裹但内层非法。
+        assert!(!force_xwayland_in_store_json(r#"{"setting":"not json"}"#));
+        // 值不是 bool：不做真值推断，按关闭处理。
+        assert!(!force_xwayland_in_store_json(
+            r#"{"setting":{"force_xwayland":"yes"}}"#
+        ));
+        assert!(!force_xwayland_in_store_json(
+            r#"{"setting":{"force_xwayland":1}}"#
+        ));
+    }
+
+    /// 启动前读取按字符串字面量取字段，与 `Setting` 的序列化形状只靠约定对齐。
+    /// 字段改名不会有编译错误，只会让读取静默失效，这里拿真实序列化结果兜住。
+    #[test]
+    fn force_xwayland_key_matches_the_serialized_setting() {
+        let setting = Setting {
+            force_xwayland: true,
+            ..Setting::default()
+        };
+        let raw = serde_json::json!({ STORE_SETTING_KEY: setting }).to_string();
+        assert!(force_xwayland_in_store_json(&raw));
+    }
 
     #[test]
     fn store_dat_file_name_isolates_the_three_modes() {
@@ -413,19 +523,25 @@ mod tests {
 
     #[test]
     fn legacy_full_setting_write_preserves_latest_fields() {
-        let mut stale = Setting::default();
-        stale.zoom_factor = 0.8;
-        stale.close_action = "quit".to_string();
-        stale.pet_enabled = false;
-        stale.active_pet = Some("chat:stale".to_string());
-        stale.pet_size = Some(80.0);
+        let stale = Setting {
+            zoom_factor: 0.8,
+            close_action: "quit".to_string(),
+            pet_enabled: false,
+            active_pet: Some("chat:stale".to_string()),
+            pet_size: Some(80.0),
+            force_xwayland: false,
+            ..Default::default()
+        };
 
-        let mut current = Setting::default();
-        current.zoom_factor = 1.6;
-        current.close_action = "tray".to_string();
-        current.pet_enabled = true;
-        current.active_pet = Some("codex:latest".to_string());
-        current.pet_size = Some(140.0);
+        let current = Setting {
+            zoom_factor: 1.6,
+            close_action: "tray".to_string(),
+            pet_enabled: true,
+            active_pet: Some("codex:latest".to_string()),
+            pet_size: Some(140.0),
+            force_xwayland: true,
+            ..Default::default()
+        };
 
         let merged = preserve_persisted_fields(stale, &current);
 
@@ -437,6 +553,10 @@ mod tests {
             merged.pet_size,
             Some(140.0),
             "整对象写入不得覆盖最新桌宠字段"
+        );
+        assert!(
+            merged.force_xwayland,
+            "整对象写入不得覆盖最新的 XWayland 开关"
         );
     }
 

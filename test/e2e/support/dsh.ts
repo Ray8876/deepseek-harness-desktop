@@ -312,7 +312,7 @@ const FIXTURE_SKILL_NAME = 'e2e-fixture-skill'
  * npm 安装，漏了补丁就会让 `dsh-tauri-ui` 按设计降级：只打一条 console.warn
  * `<SlotOutlet> unavailable (renderer patch missing)`（**不是 error**，所以诊断里的
  * appErrors 为空），随后所有 `dsh-tauri-*` 的座位注入静默 no-op，症状只剩
- * `.dshp-settings-trigger` / `[data-dsh-tauri-pet-icon]` 就绪锚点超时。
+ * `.dshp-settings-trigger` / `style[cssr-id="dsh-tauri-pet-styles"]` 就绪锚点超时。
  *
  * Windows 本地曾因此「假绿」：那里解析到的是桌面端已就地打过补丁的共享装配核心。
  */

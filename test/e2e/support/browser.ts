@@ -32,7 +32,6 @@ export const IGNORED_APP_ERRORS: readonly string[] = [
 ]
 
 /** 插件自身注入的元素用 `data-dsh-*`（`plugin.client.md` §4）。 */
-export const PET_ICON = '[data-dsh-tauri-pet-icon]'
 export const SCHEDULER_ICON = '[data-dsh-scheduler-icon]'
 export const WORKTREE_ICON = '[data-dsh-worktree-icon]'
 export const WORKTREE_MODE_ANCHOR = '[data-dsh-tauri-worktree-mode-anchor]'
@@ -41,6 +40,19 @@ export const SESSION_ARCHIVE_ITEM = '[data-dsh-tauri-session-archive-item]'
 export const SESSION_ARCHIVE_MENU_PATCHED = '[data-dsh-tauri-session-archive-menu-patched="1"]'
 export const RUNNING_CHANGES = '[data-running-changes]'
 
+/**
+ * `dsh-tauri-pet` 的就绪锚点：插件的样式元素。
+ *
+ * `stylesFeature` 把 `PET_STYLES_ID`（`packages/dsh-tauri-pet/src/client/constants/index.ts`）
+ * 交给 `dsh-tauri-ui` 的 `mountStyle`，由 css-render 落成 `<style cssr-id="...">`——`cssr-id`
+ * 是属性而非 id，`#dsh-tauri-pet-styles` 不存在。插件客户端一跑起来就挂上它。
+ */
+export const PET_STYLES = 'style[cssr-id="dsh-tauri-pet-styles"]'
+
+/** 设置菜单里的桌宠条目与「该菜单已被补丁」标记（同上常量文件）。 */
+export const PET_MENU_ITEM = '[data-dsh-tauri-pet-menu-item="1"]'
+export const PET_MENU_PATCHED = '[data-dsh-tauri-pet-menu-patched="1"]'
+
 /** dsh 内部结构（上游产物）：可用稳定结构性锚点。 */
 export const SIDEBAR = '[data-slot="sidebar"]'
 export const SIDEBAR_PANELLIST = '[data-slot="sidebar.panellist"]'
@@ -48,6 +60,9 @@ export const SETTINGS_TRIGGER = '.dshp-settings-trigger'
 export const SETTINGS_SIDEBAR = '[data-slot-sidebar="dsh-tauri-ui"]'
 export const SETTINGS_SECTION_SLOT = '[data-slot="settings.section"]'
 export const SETTINGS_NAV_ITEM = 'nav[aria-label] button'
+/** 壳层自有设置菜单（浏览器态）的条目：官方 primitives 的 portal Menu 条目。 */
+export const SETTINGS_MENU_ITEM = '[role="menuitem"]'
+export const SETTINGS_MENU_LABEL = /^(设置|Settings)$/
 export const SETTINGS_CONTENT = '[class*="content-inner"]'
 export const SETTINGS_ONBOARDING = '[data-slot="settings.onboarding"]'
 export const COMPOSER_CARD = '[data-composer-card]'
@@ -218,7 +233,7 @@ interface FrameSnapshot {
   loaderKeys: string[]
   loaderMode: string
   loaderPending: number
-  petIcon: boolean
+  petStyles: boolean
   settingsTrigger: boolean
   settingsSidebar: boolean
 }
@@ -271,7 +286,7 @@ async function captureFrameSnapshot(frame: Frame): Promise<FrameSnapshot | strin
       loaderKeys: loader === undefined ? [] : Object.keys(loader),
       loaderMode: String(loader?.mode ?? 'n/a'),
       loaderPending: Array.isArray(loader?.pendingQueue) ? loader.pendingQueue.length : -1,
-      petIcon: doc.querySelector('[data-dsh-tauri-pet-icon]') !== null,
+      petStyles: doc.querySelector('style[cssr-id="dsh-tauri-pet-styles"]') !== null,
       settingsTrigger: doc.querySelector('.dshp-settings-trigger') !== null,
       settingsSidebar: doc.querySelector('[data-slot-sidebar="dsh-tauri-ui"]') !== null,
     }
@@ -315,7 +330,7 @@ export async function describePageState(page: Page, frame: Frame): Promise<strin
     lines.push(`[data-slot] count=${snapshot.slotCount} values=${snapshot.slots.join(',') || '(none)'}`)
     lines.push(`__DSH_BOOT__.modules=${snapshot.bootModules} ids=${snapshot.bootIds.join(',') || '(none)'}`)
     lines.push(`__ModuleLoader__ keys=${snapshot.loaderKeys.join(',') || '(none)'} mode=${snapshot.loaderMode} pendingQueue=${snapshot.loaderPending}`)
-    lines.push(`pluginAnchors petIcon=${snapshot.petIcon} settingsTrigger=${snapshot.settingsTrigger} settingsSidebar=${snapshot.settingsSidebar}`)
+    lines.push(`pluginAnchors petStyles=${snapshot.petStyles} settingsTrigger=${snapshot.settingsTrigger} settingsSidebar=${snapshot.settingsSidebar}`)
     pushList('pluginComboScripts', snapshot.pluginScripts, '(none: 启动 HTML 里没有任何 /plugins/ 脚本)')
     pushList('injectedDataDshAttrs', snapshot.dshAttrs, '(none: 没有任何插件注入的元素)')
   }
@@ -344,10 +359,10 @@ async function failWithDiagnostics(page: Page, frame: Frame, reason: string, cau
  * 在当前 browser 上新建一个内嵌 dsh 页面并等待界面可用。
  *
  * 默认就绪锚点取核心 dsh 的结构性槽位 `SIDEBAR`（`[data-slot="sidebar"]`），不取任何插件
- * 注入的元素：`SETTINGS_TRIGGER` 由 `dsh-tauri-ui` 渲染、`PET_ICON` 由 `dsh-tauri-pet`
- * 插入，在 Ubuntu CI 上都可能迟迟不出现，而它们缺席并不表示 dsh 未就绪——`SIDEBAR` 是
+ * 注入的元素：`SETTINGS_TRIGGER` 由 `dsh-tauri-ui` 渲染、`PET_STYLES` 由 `dsh-tauri-pet`
+ * 挂载，在 Ubuntu CI 上都可能迟迟不出现，而它们缺席并不表示 dsh 未就绪——`SIDEBAR` 是
  * 上游产物，也是各插件自己判定「侧栏就绪」时读取的同一个锚点。需要断言插件产物的用例
- * 必须显式传 `{ ready: PET_ICON }` / `{ ready: SETTINGS_TRIGGER }` 等，不依赖默认值。
+ * 必须显式传 `{ ready: PET_STYLES }` / `{ ready: SETTINGS_TRIGGER }` 等，不依赖默认值。
  */
 export async function newDshPage(
   browser: Browser,
@@ -570,8 +585,13 @@ export async function waitForCredentialModal(
   throw new Error('等待带凭据输入的 API Key 引导弹层超时')
 }
 
-/** 打开设置侧栏，返回触发器的 locator。 */
-export async function openSettings(
+/**
+ * 点开设置入口并把菜单**停在展开态**，返回触发器的 locator。
+ *
+ * 桌宠开关是设置菜单里克隆出来的条目，只有菜单展开时才存在，因此断言它的用例必须在
+ * 这一步停下；`openSettings` 会继续点「设置」条目把菜单收掉。
+ */
+export async function openSettingsMenu(
   page: Page,
   frame: Frame,
   fallbacks?: SyntheticFallback[],
@@ -591,7 +611,7 @@ export async function openSettings(
       trigger,
       'aria-expanded',
       'true',
-      'openSettings',
+      'openSettingsMenu',
       `${SETTINGS_TRIGGER} aria-expanded 未被指针点击改写`,
       fallbacks,
     )
@@ -599,8 +619,27 @@ export async function openSettings(
 
   await expect.poll(
     () => trigger.getAttribute('aria-expanded'),
-    { timeout: 15_000, message: '点击设置触发器后 aria-expanded 必须变为 true' },
+    { timeout: 15_000, message: '点击设置入口后 aria-expanded 必须变为 true（设置菜单未展开）' },
   ).toBe('true')
+
+  return trigger
+}
+
+/** 打开设置侧栏，返回触发器的 locator。 */
+export async function openSettings(
+  page: Page,
+  frame: Frame,
+  fallbacks?: SyntheticFallback[],
+): Promise<Locator> {
+  const trigger = await openSettingsMenu(page, frame, fallbacks)
+
+  // 浏览器态（无桌面账号菜单）下触发器点开的是壳层自有设置菜单，还要再选中「设置」条目；
+  // 桌面载体下官方账号菜单占据该座位，点开即是设置面板，不会有菜单条目。
+  if (await frame.locator(SETTINGS_SECTION_SLOT).count() === 0) {
+    const settingsItem = frame.locator(SETTINGS_MENU_ITEM).filter({ hasText: SETTINGS_MENU_LABEL }).first()
+    if (await settingsItem.count() > 0)
+      await settingsItem.click()
+  }
 
   await frame.locator(SETTINGS_SECTION_SLOT).first().waitFor({ state: 'attached', timeout: 15_000 })
   return trigger

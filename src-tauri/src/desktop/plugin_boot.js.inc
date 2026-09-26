@@ -5,6 +5,11 @@
 
   var stopped = false
   var sawSplash = false
+  // 只有宿主直接内嵌的那一层 frame 参与帧身份握手：dsh 应用内部还会嵌套 iframe
+  // （插件面板等），它们的自报/离开不代表宿主这一层换了文档。
+  var shellFrame = window.parent === window.top
+  var reportedFrame = false
+  var reportedLeaving = false
   var stalledForCurrentSplash = false
   var stalledTimer = null
   var observer = null
@@ -90,6 +95,36 @@
     stalledForCurrentSplash = false
   }
 
+  // 帧身份申报（issue #705）：宿主无法从 iframe 的 load 事件区分「dsh 页面已提交」与
+  // 「浏览器内部错误页已提交」——代理不可达等网络错误页同样触发 load，而错误页里永远
+  // 没有 #root。boot 页的 HTML 自带 #root，所以「子 frame 解析出 #root」是本 frame 正在
+  // 承载 dsh 文档的确证；宿主据此区分「页面真的加载了」与「帧里只有一张浏览器错误页」。
+  function reportFrame() {
+    if (reportedFrame || !shellFrame) return
+    if (!rootNode()) return
+    reportedFrame = true
+    send('dsh://plugin-boot:frame')
+  }
+
+  // 文档离开申报：帧内导航（dsh 页面把整帧跳到远端登录/错误页）不会换掉 iframe 元素，
+  // 宿主只靠「换帧」清确认是抓不到的。自报过的文档一离开就作废旧确认，新文档要么自己
+  // 重新自报，要么被宿主判成「帧里没有 dsh 页面」并给出可重试界面。只申报一次：迟到的
+  // 重复 pagehide 不能把新文档刚立起来的确认再次作废。
+  function reportLeaving() {
+    if (!reportedFrame || reportedLeaving) return
+    reportedLeaving = true
+    send('dsh://plugin-boot:leaving')
+  }
+
+  // bfcache 恢复：文档没有重新执行脚本，宿主已在 leaving 里作废了确认，这里必须替它把
+  // 身份重新申报一次，否则被恢复回来的正常页面会在宽限窗后被判成「帧里没有 dsh 页面」。
+  function reportRestored(event) {
+    if (!event || !event.persisted) return
+    reportedFrame = false
+    reportedLeaving = false
+    reportFrame()
+  }
+
   function stop() {
     if (stopped) return
     stopped = true
@@ -100,6 +135,7 @@
   }
 
   function evaluate() {
+    reportFrame()
     if (stopped) return
     var failure = bootFailureText()
     if (failure !== null) {
@@ -142,6 +178,10 @@
     observer = null
   }
   fallbackTimer = setInterval(evaluate, 1000)
+  // 离开申报独立注册：stop() 会在观察结束后摘掉自己的 pagehide，而「文档后来导航走了」
+  // 恰恰发生在观察结束后（应用 shell 已挂载），那一刻必须还能通知宿主。
+  window.addEventListener('pagehide', reportLeaving)
   window.addEventListener('pagehide', stop)
+  window.addEventListener('pageshow', reportRestored)
   evaluate()
 })()

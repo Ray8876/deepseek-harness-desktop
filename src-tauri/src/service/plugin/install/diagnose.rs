@@ -12,6 +12,29 @@ pub(super) fn diagnostic_suffix(detail: &str) -> String {
     }
 }
 
+/// 命中即视为可展示错误行的标记。除 pnpm/Node 的常规错误外，还覆盖「命令或
+/// shim 不可用」一类失败：cmd.exe 的 `'pnpm' is not recognized…`、shim 的
+/// `[pnpm] pnpm not found…`、批处理跳转失败 `The system cannot find the batch
+/// label…`，以及中文 cmd 文案。这些行不含 `error`/`failed`，一旦被过滤掉，
+/// 用户只会看到 dsh 包装后的 `pnpm failed in profile directory`，真实原因
+/// （shim 不可用）永远不可见。
+const ERROR_MARKERS: [&str; 14] = [
+    "ERR_",
+    "error",
+    "Error",
+    "failed",
+    "✖",
+    "warning",
+    "not recognized",
+    "not found",
+    "No such file",
+    "cannot find",
+    "Cannot find",
+    "找不到",
+    "无法",
+    "不是内部或外部命令",
+];
+
 /// 从 dsh/pnpm 失败输出中提取可展示的错误消息：优先 git 传输层提示；
 /// 否则挑出命中错误标记的行（最多 8 行），没有则取输出尾部，ANSI 清洗后
 /// 截断到 2000 字符。
@@ -26,14 +49,7 @@ pub(super) fn pick_error_message(output: &str, hint: Option<&str>) -> String {
             let trimmed = trimmed.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         })
-        .filter(|line| {
-            line.contains("ERR_")
-                || line.contains("error")
-                || line.contains("Error")
-                || line.contains("failed")
-                || line.contains("✖")
-                || line.contains("warning")
-        })
+        .filter(|line| ERROR_MARKERS.iter().any(|marker| line.contains(marker)))
         .take(8)
         .collect();
     let base = if cleaned.is_empty() {
@@ -93,6 +109,33 @@ pub(super) fn network_error_hint(output: &str) -> Option<&'static str> {
         .iter()
         .any(|signal| lower.contains(signal))
         .then_some("网络连接失败，请检查网络或代理设置后重试。")
+}
+
+/// pnpm 的 lockfile supply-chain 校验（`minimumReleaseAge`）要按 registry 元数据核对
+/// 每个条目的发布时间；元数据拉不到时 pnpm 会把条目**直接判成违规**并以
+/// `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` 中止，输出里唯一的线索只有
+/// `[WARN] GET https://registry.npmjs.org/<pkg> error (unknown)` —— 用户看到的
+/// 「违反供应链策略」其实是网络问题（实测 `undici@7.29.1` 已发布 21 天仍被判违规）。
+/// 命中即说明重跑同一条命令大概率能过，调用方据此重试。
+///
+/// 真·发布时间违规（版本确实太新）不带任何拉取失败信号，绝不命中：那种失败重试无用，
+/// 也不该把供应链信号降级成网络问题。
+///
+/// 传入的必须是**单次尝试**的输出（`run_plugin_with_allow_build_retry` 为此额外返回
+/// 最后一次尝试的输出）：把历次重试拼接起来判断时，早先一次的网络字样会给最终一次的真·
+/// 违规「背书」，正好破坏上面这条边界。
+pub(super) fn policy_verification_network_failure(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    if !lower.contains("err_pnpm_minimum_release_age_violation") {
+        return false;
+    }
+    const FETCH_FAILURES: [&str; 4] = [
+        "error (unknown)",
+        "will retry in",
+        "fetch failed",
+        "failed to fetch",
+    ];
+    FETCH_FAILURES.iter().any(|signal| lower.contains(signal))
 }
 
 pub(super) fn git_transport_hint(output: &str) -> Option<&'static str> {
@@ -216,6 +259,35 @@ mod tests {
 
     // ---- git 传输层错误识别（区别于 allowBuilds 门禁）----
 
+    /// shim 不可用时 cmd.exe / shim 自己的原话，不含 `error`/`failed`：
+    /// 若被过滤掉，用户只剩 dsh 的 `pnpm failed in profile directory`。
+    #[test]
+    fn pick_error_message_keeps_shim_unavailable_lines() {
+        let out = "dsh: pnpm failed in profile directory C:\\Users\\小蔡\\.dsh\\profiles\\safe\n\
+                   [pnpm] pnpm not found. Please run DeepSeek Harness Desktop to install it first.\n";
+        let picked = pick_error_message(out, None);
+        assert!(
+            picked.contains("pnpm not found"),
+            "shim diagnostic must survive: {picked}"
+        );
+
+        let cmd = "'pnpm' is not recognized as an internal or external command,\noperable program or batch file.\n";
+        assert!(pick_error_message(cmd, None).contains("not recognized"));
+
+        let label = "The system cannot find the batch label specified - no_pnpm\n";
+        assert!(pick_error_message(label, None).contains("batch label"));
+    }
+
+    #[test]
+    fn pick_error_message_still_drops_noise() {
+        let out = "Progress: resolved 1, reused 0, downloaded 0\n\
+                   ERR_PNPM_LINKING_FAILED: stale symlink\n\
+                   Done in 2.8s\n";
+        let picked = pick_error_message(out, None);
+        assert!(picked.contains("ERR_PNPM_LINKING_FAILED"));
+        assert!(!picked.contains("Done in"), "progress noise must be dropped: {picked}");
+    }
+
     #[test]
     fn git_transport_hint_detects_host_key_failure() {
         let out = "git ls-remote \"git+ssh://git@github.com/foo.git\" HEAD\nHost key verification failed.\nfatal: Could not read from remote repository.\n";
@@ -245,6 +317,30 @@ mod tests {
         // allowBuilds 场景（prepare 构建被拦）不应误判为传输层错误
         let out = "[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ...\nallowBuilds:\n  node-pty: true\n";
         assert!(git_transport_hint(out).is_none());
+    }
+
+    // ---- lockfile supply-chain 校验因 registry 元数据拉取失败而误判违规 ----
+
+    /// 用户实测（pnpm 11.7.0，`undici@7.29.1` 已发布 21 天）：判定违规的唯一线索是
+    /// registry 元数据请求失败，而不是发布时间。
+    const POLICY_VERIFICATION_FETCH_FAILURE: &str = "✗ Lockfile failed supply-chain policy check (4 entries in 2.7s) [ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION]\n1 lockfile entries failed verification:\n[WARN] GET https://registry.npmjs.org/undici error (unknown). Will retry in 10 seconds. 2 retries left.\n";
+
+    #[test]
+    fn policy_verification_failure_detects_registry_fetch_error() {
+        assert!(policy_verification_network_failure(
+            POLICY_VERIFICATION_FETCH_FAILURE
+        ));
+    }
+
+    #[test]
+    fn policy_verification_failure_ignores_real_release_age_violation() {
+        // 真违规会给出发布时间与阈值、没有拉取失败信号：重试无用，也不该改判成网络问题。
+        let real = "[ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION] undici@7.29.1 was published recently (released 5 minutes ago; minimumReleaseAge is 1440)\n";
+        assert!(!policy_verification_network_failure(real));
+        assert!(!policy_verification_network_failure(
+            "ERR_PNPM_FETCH_404 registry error"
+        ));
+        assert!(!policy_verification_network_failure(""));
     }
 
     // ---- pnpm store 布局不兼容（ERR_PNPM_UNEXPECTED_STORE 一族）----

@@ -118,7 +118,8 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
   const node = useMemo(() => schema.nodeAtPath(root, settingsPath), [root, schema, settingsPath])
   const fallback = schema.getPath(namespace.value, settingsPath)
   const disabled = props.readOnly || busy
-  const layout = layoutOf(namespace.ns)
+  const accountProvider = props.provider === 'deepseek-account'
+  const layout = accountProvider ? 'deepseek' : layoutOf(namespace.ns)
   const keyRef = refFor(schema, namespace, settingsPath, props.provider)
 
   const protocols = useMemo(
@@ -127,6 +128,8 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
   )
 
   useEffect(() => {
+    if (accountProvider)
+      return
     let stale = false
     setKeyState(undefined)
 
@@ -138,7 +141,7 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
     return () => {
       stale = true
     }
-  }, [operations, keyRef])
+  }, [operations, keyRef, accountProvider])
 
   const stringAt = (source: unknown, key: string): string | undefined => {
     const value = schema.getPath(source, [key])
@@ -276,6 +279,15 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
       },
       onReset: () => { setDraft(current => schema.deletePath(current, ['models'])) },
     }
+    if (accountProvider) {
+      return (
+        <DeepSeekModelsEditor
+          {...catalogProps}
+          defaultContextWindow={typeof defaultContextWindow === 'number' ? defaultContextWindow : undefined}
+          defaultMaxTokens={typeof defaultMaxTokens === 'number' ? defaultMaxTokens : undefined}
+        />
+      )
+    }
     return (
       <>
         <div className={styles.field}>
@@ -283,7 +295,7 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
           <input
             className={styles.input}
             type="password"
-            autoComplete="off"
+            autoComplete="new-password"
             value={keyDraft}
             placeholder={keyPlaceholder}
             aria-label={t('keyInput')}

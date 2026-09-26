@@ -21,7 +21,7 @@ export interface PetListItem {
 }
 
 /**
- * 预设宠物清单条目（`resources/preset-pets.json` 的展示层投影）。
+ * 预设宠物清单条目（`resources/manifest.jsonc` 的 `pets.built-in` 展示层投影）。
  *
  * 预设不下载/安装：清单条目本身就是桌宠组件的渲染参数，设置页只需要展示字段，
  * 因此这里只声明投影形状，Rust 返回的其余字段前端原样忽略。

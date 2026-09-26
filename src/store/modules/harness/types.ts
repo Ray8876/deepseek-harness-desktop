@@ -61,6 +61,7 @@ export interface StartupError extends Error {
   pluginConflictHint?: string
   /** Linux inotify 文件监视上限（ENOSPC）导致服务启动即崩溃时的针对性提示 */
   inotifyLimitHint?: string
+  heapOomHint?: string
   /** 补丁层 YAML 语法错误（`cordis.patch.yml` 手写错误）时的针对性提示 */
   patchLayerHint?: string
   phase?: StartupPhase

@@ -40,7 +40,7 @@ const NATIVE_PROBE_MARKER: &str = "__DSH_NATIVE_PROBE__";
 /// 2. 原生包：带 `binding.gyp` 或自带原生产物目录（`build/Release`、`build/Debug`、
 ///    `prebuilds`、`prebuilt`）的包，逐个 require —— 与 dsh 自身的加载方式一致，
 ///    加载失败即为 dsh 启动时同样的失败（fs-ext 这类 node-gyp 包落在 build/Release）。
-/// 崩溃/异常退出时不会有标记行，Rust 侧按"结论未知"处理，不阻断启动。
+///    崩溃/异常退出时不会有标记行，Rust 侧按"结论未知"处理，不阻断启动。
 const NATIVE_PROBE_SCRIPT: &str = r#"
 const { createRequire } = await import('node:module');
 const { existsSync, readdirSync } = await import('node:fs');
@@ -159,7 +159,9 @@ impl NativeProbe {
     }
 
     fn has_platform_import_failure(&self) -> bool {
-        self.failures().iter().any(NativeProbeFailure::is_platform_import)
+        self.failures()
+            .iter()
+            .any(NativeProbeFailure::is_platform_import)
     }
 
     /// ABI 不匹配的包名（去重，保持探测顺序）
@@ -180,7 +182,7 @@ impl NativeProbe {
 /// 缺失时只按核心清单中的 optionalDependencies 动态构造安装参数，避免把某一台
 /// 机器的版本、平台或架构写死在桌面端。失败返回诊断错误，调用方不应继续启动
 /// 一个已知无法加载的 dsh 进程。
- pub(crate) async fn prepare_active_runtime(app_handle: &AppHandle) -> Result<(), String> {
+pub(crate) async fn prepare_active_runtime(app_handle: &AppHandle) -> Result<(), String> {
     if crate::service::core::active_source(app_handle) != CoreSource::App {
         log::debug!("Skipping core runtime repair for user-owned local core");
         return Ok(());
@@ -299,7 +301,11 @@ impl NativeProbe {
 
     // 4) 仍然无法加载：给出精确诊断（模块名 + ABI 差异），而不是让 dsh 在插件树加载
     //    阶段崩溃、前端只显示 HARNESS_NOT_OWNED。
-    Err(native_failure_diagnostic(probe.failures(), &node, &core_root))
+    Err(native_failure_diagnostic(
+        probe.failures(),
+        &node,
+        &core_root,
+    ))
 }
 
 /// 从活动 profile 与应用内置清单收集需要在核心根下解析的包，并逐个建立入口。
@@ -415,7 +421,11 @@ fn ensure_package_link(name: &str, source: &Path, node_modules: &Path) -> Result
     let existing = match std::fs::symlink_metadata(&destination) {
         Ok(metadata) => Some(metadata),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(format!("CORE_PLUGIN_DESTINATION_STAT_FAILED: {destination:?}: {e}")),
+        Err(e) => {
+            return Err(format!(
+                "CORE_PLUGIN_DESTINATION_STAT_FAILED: {destination:?}: {e}"
+            ))
+        }
     };
     if let Some(metadata) = existing {
         if !metadata.file_type().is_symlink() {
@@ -460,7 +470,10 @@ fn ensure_package_link(name: &str, source: &Path, node_modules: &Path) -> Result
 /// 校验并创建 scope 目录；目录本身不能是链接，防止目的地逃逸核心根。
 fn ensure_non_link_directory(path: &Path, root: &Path) -> Result<(), String> {
     if !path.starts_with(root) {
-        return Err(format!("CORE_PLUGIN_DESTINATION_ESCAPE: {}", path.display()));
+        return Err(format!(
+            "CORE_PLUGIN_DESTINATION_ESCAPE: {}",
+            path.display()
+        ));
     }
     let relative = path.strip_prefix(root).unwrap_or(Path::new("."));
     let mut current = root.to_path_buf();
@@ -474,13 +487,26 @@ fn ensure_non_link_directory(path: &Path, root: &Path) -> Result<(), String> {
                 ));
             }
             Ok(metadata) if metadata.is_dir() => {}
-            Ok(_) => return Err(format!("CORE_PLUGIN_DESTINATION_PARENT_INVALID: {}", current.display())),
+            Ok(_) => {
+                return Err(format!(
+                    "CORE_PLUGIN_DESTINATION_PARENT_INVALID: {}",
+                    current.display()
+                ))
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 std::fs::create_dir(&current).map_err(|e| {
-                    format!("CORE_PLUGIN_DESTINATION_PARENT_CREATE_FAILED: {}: {e}", current.display())
+                    format!(
+                        "CORE_PLUGIN_DESTINATION_PARENT_CREATE_FAILED: {}: {e}",
+                        current.display()
+                    )
                 })?;
             }
-            Err(e) => return Err(format!("CORE_PLUGIN_DESTINATION_PARENT_STAT_FAILED: {}: {e}", current.display())),
+            Err(e) => {
+                return Err(format!(
+                    "CORE_PLUGIN_DESTINATION_PARENT_STAT_FAILED: {}: {e}",
+                    current.display()
+                ))
+            }
         }
     }
     Ok(())
@@ -541,9 +567,9 @@ fn create_directory_junction(source: &Path, destination: &Path) -> std::io::Resu
         CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ,
         FILE_SHARE_WRITE, OPEN_EXISTING,
     };
-    use windows_sys::Win32::System::IO::DeviceIoControl;
     use windows_sys::Win32::System::Ioctl::FSCTL_SET_REPARSE_POINT;
     use windows_sys::Win32::System::SystemServices::IO_REPARSE_TAG_MOUNT_POINT;
+    use windows_sys::Win32::System::IO::DeviceIoControl;
 
     // junction 目标必须是 NT 命名空间内的绝对路径：盘符路径映射为
     // `\??\G:\...`，UNC 路径映射为 `\??\UNC\server\share\...`。
@@ -668,7 +694,10 @@ fn is_safe_package_name(name: &str) -> bool {
     if parts.len() == 1 {
         return valid_package_component(parts[0]);
     }
-    parts.len() == 2 && parts[0].starts_with('@') && valid_package_component(parts[0]) && valid_package_component(parts[1])
+    parts.len() == 2
+        && parts[0].starts_with('@')
+        && valid_package_component(parts[0])
+        && valid_package_component(parts[1])
 }
 
 fn valid_package_component(value: &str) -> bool {
@@ -681,19 +710,40 @@ fn valid_package_component(value: &str) -> bool {
 }
 
 fn read_package_name(path: &Path) -> Result<Option<String>, String> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| format!("CORE_PLUGIN_PACKAGE_MANIFEST_READ_FAILED: {}: {e}", path.display()))?;
-    let value = serde_json::from_str::<serde_json::Value>(&raw)
-        .map_err(|e| format!("CORE_PLUGIN_PACKAGE_MANIFEST_INVALID: {}: {e}", path.display()))?;
-    Ok(value.get("name").and_then(|value| value.as_str()).map(str::to_owned))
+    let raw = std::fs::read_to_string(path).map_err(|e| {
+        format!(
+            "CORE_PLUGIN_PACKAGE_MANIFEST_READ_FAILED: {}: {e}",
+            path.display()
+        )
+    })?;
+    let value = serde_json::from_str::<serde_json::Value>(&raw).map_err(|e| {
+        format!(
+            "CORE_PLUGIN_PACKAGE_MANIFEST_INVALID: {}: {e}",
+            path.display()
+        )
+    })?;
+    Ok(value
+        .get("name")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned))
 }
 
 async fn detect_node_target(node: &Path, core_root: &Path) -> Result<NodeTarget, String> {
     let node = node.to_path_buf();
     let core_root = core_root.to_path_buf();
-    let output = tokio::task::spawn_blocking(move || run_command(&node, &["--input-type=module".into(), "-e".into(), NODE_PROBE_SCRIPT.into()], &core_root))
-        .await
-        .map_err(|e| format!("CORE_NODE_PLATFORM_PROBE_FAILED: {e}"))??;
+    let output = tokio::task::spawn_blocking(move || {
+        run_command(
+            &node,
+            &[
+                "--input-type=module".into(),
+                "-e".into(),
+                NODE_PROBE_SCRIPT.into(),
+            ],
+            &core_root,
+        )
+    })
+    .await
+    .map_err(|e| format!("CORE_NODE_PLATFORM_PROBE_FAILED: {e}"))??;
     if !output.status.success() {
         return Err(format!(
             "CORE_NODE_PLATFORM_PROBE_FAILED: {}",
@@ -705,11 +755,17 @@ async fn detect_node_target(node: &Path, core_root: &Path) -> Result<NodeTarget,
         return Err(format!("CORE_NODE_PLATFORM_UNSUPPORTED: {value}"));
     };
     let supported_platform = matches!(platform, "darwin" | "linux" | "win32");
-    let supported_arch = matches!(arch, "x64" | "arm64" | "ia32" | "arm" | "ppc64" | "riscv64" | "s390x" | "loong64");
+    let supported_arch = matches!(
+        arch,
+        "x64" | "arm64" | "ia32" | "arm" | "ppc64" | "riscv64" | "s390x" | "loong64"
+    );
     if !supported_platform || !supported_arch {
         return Err(format!("CORE_NODE_PLATFORM_UNSUPPORTED: {value}"));
     }
-    Ok(NodeTarget { platform: platform.to_string(), arch: arch.to_string() })
+    Ok(NodeTarget {
+        platform: platform.to_string(),
+        arch: arch.to_string(),
+    })
 }
 
 /// 用指定运行时执行原生模块探测脚本，返回结构化结论。
@@ -723,7 +779,13 @@ async fn probe_native_modules(node: &Path, core_root: &Path) -> NativeProbe {
             OsString::from("-e"),
             OsString::from(NATIVE_PROBE_SCRIPT),
         ];
-        run_process_with_timeout(&program, &args, &core_root, NATIVE_PROBE_TIMEOUT, "native probe")
+        run_process_with_timeout(
+            &program,
+            &args,
+            &core_root,
+            NATIVE_PROBE_TIMEOUT,
+            "native probe",
+        )
     })
     .await;
 
@@ -803,7 +865,11 @@ fn is_bundled_runtime_node(node: &Path, app_handle: &AppHandle) -> bool {
 }
 
 /// 生成原生模块加载失败的诊断信息：ABI 不匹配单独给出可读结论，其余按原样列出。
-fn native_failure_diagnostic(failures: &[NativeProbeFailure], node: &Path, core_root: &Path) -> String {
+fn native_failure_diagnostic(
+    failures: &[NativeProbeFailure],
+    node: &Path,
+    core_root: &Path,
+) -> String {
     if failures.is_empty() {
         return format!(
             "CORE_NATIVE_DEPENDENCY_REPAIR_FAILED: native modules could not be verified in {}",
@@ -833,7 +899,11 @@ fn native_failure_diagnostic(failures: &[NativeProbeFailure], node: &Path, core_
         core_root.display(),
         failures
             .iter()
-            .map(|failure| format!("{}: {}", failure.name, collapse_whitespace(&failure.message)))
+            .map(|failure| format!(
+                "{}: {}",
+                failure.name,
+                collapse_whitespace(&failure.message)
+            ))
             .collect::<Vec<_>>()
             .join("; ")
     )
@@ -861,7 +931,13 @@ async fn rebuild_native_packages(
         let (program, mut args) = npm_command(&node);
         args.push(OsString::from("rebuild"));
         args.extend(packages.into_iter().map(OsString::from));
-        run_process_with_timeout(&program, &args, &core_root, NATIVE_REBUILD_TIMEOUT, "npm rebuild")
+        run_process_with_timeout(
+            &program,
+            &args,
+            &core_root,
+            NATIVE_REBUILD_TIMEOUT,
+            "npm rebuild",
+        )
     })
     .await
     .map_err(|e| format!("CORE_NATIVE_REBUILD_FAILED: {e}"))??;
@@ -895,9 +971,21 @@ fn npm_cli_path_for(node: &Path) -> Option<PathBuf> {
     // 官方发行版：<node>/bin/node + <node>/lib/node_modules/npm/bin/npm-cli.js
     // 少数布局把 lib 放在 node 目录之外，再补一个上级 lib 候选。
     let candidates = [
-        dir.join("node_modules").join("npm").join("bin").join("npm-cli.js"),
-        dir.join("lib").join("node_modules").join("npm").join("bin").join("npm-cli.js"),
-        dir.join("..").join("lib").join("node_modules").join("npm").join("bin").join("npm-cli.js"),
+        dir.join("node_modules")
+            .join("npm")
+            .join("bin")
+            .join("npm-cli.js"),
+        dir.join("lib")
+            .join("node_modules")
+            .join("npm")
+            .join("bin")
+            .join("npm-cli.js"),
+        dir.join("..")
+            .join("lib")
+            .join("node_modules")
+            .join("npm")
+            .join("bin")
+            .join("npm-cli.js"),
     ];
     candidates.into_iter().find(|candidate| candidate.is_file())
 }
@@ -963,12 +1051,20 @@ fn read_optional_dependencies(path: &Path) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
-async fn install_native_packages(core_root: &Path, target: &NodeTarget, packages: &[String]) -> Result<(), String> {
+async fn install_native_packages(
+    core_root: &Path,
+    target: &NodeTarget,
+    packages: &[String],
+) -> Result<(), String> {
     let core_root = core_root.to_path_buf();
     let target = target.clone();
     let packages = packages.to_vec();
     let result = tokio::task::spawn_blocking(move || {
-        let program = if cfg!(windows) { OsString::from("npm.cmd") } else { OsString::from("npm") };
+        let program = if cfg!(windows) {
+            OsString::from("npm.cmd")
+        } else {
+            OsString::from("npm")
+        };
         let mut args = vec![
             OsString::from("install"),
             OsString::from("--no-save"),
@@ -978,7 +1074,13 @@ async fn install_native_packages(core_root: &Path, target: &NodeTarget, packages
             OsString::from(format!("--cpu={}", target.arch)),
         ];
         args.extend(packages.into_iter().map(OsString::from));
-        run_process_with_timeout(&program, &args, &core_root, NATIVE_REPAIR_TIMEOUT, "npm install")
+        run_process_with_timeout(
+            &program,
+            &args,
+            &core_root,
+            NATIVE_REPAIR_TIMEOUT,
+            "npm install",
+        )
     })
     .await
     .map_err(|e| format!("CORE_NATIVE_DEPENDENCY_REPAIR_FAILED: {e}"))??;
@@ -992,15 +1094,25 @@ async fn install_native_packages(core_root: &Path, target: &NodeTarget, packages
     Ok(())
 }
 
-fn run_command(program: &Path, args: &[OsString], cwd: &Path) -> Result<std::process::Output, String> {
+fn run_command(
+    program: &Path,
+    args: &[OsString],
+    cwd: &Path,
+) -> Result<std::process::Output, String> {
     let mut command = Command::new(program);
-    command.args(args).current_dir(cwd).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .args(args)
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
-    command.output().map_err(|e| format!("CORE_RUNTIME_COMMAND_FAILED: {}: {e}", program.display()))
+    command
+        .output()
+        .map_err(|e| format!("CORE_RUNTIME_COMMAND_FAILED: {}: {e}", program.display()))
 }
 
 fn run_process_with_timeout(
@@ -1011,7 +1123,11 @@ fn run_process_with_timeout(
     label: &str,
 ) -> Result<std::process::Output, String> {
     let mut command = Command::new(program);
-    command.args(args).current_dir(cwd).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .args(args)
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1034,14 +1150,23 @@ fn run_process_with_timeout(
     });
     let started = Instant::now();
     loop {
-        if let Some(status) = child.try_wait().map_err(|e| format!("CORE_NATIVE_DEPENDENCY_REPAIR_WAIT_FAILED: {e}"))? {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|e| format!("CORE_NATIVE_DEPENDENCY_REPAIR_WAIT_FAILED: {e}"))?
+        {
             let stdout = stdout_thread.join().unwrap_or_default();
             let stderr = stderr_thread.join().unwrap_or_default();
-            return Ok(std::process::Output { status, stdout, stderr });
+            return Ok(std::process::Output {
+                status,
+                stdout,
+                stderr,
+            });
         }
         if started.elapsed() >= timeout {
             let _ = child.kill();
-            let status = child.wait().map_err(|e| format!("CORE_NATIVE_DEPENDENCY_REPAIR_KILL_FAILED: {e}"))?;
+            let status = child
+                .wait()
+                .map_err(|e| format!("CORE_NATIVE_DEPENDENCY_REPAIR_KILL_FAILED: {e}"))?;
             // 排空管道，避免子进程因写满缓冲而挂起；输出在超时路径不作分析。
             let _ = stdout_thread.join().unwrap_or_default();
             let _ = stderr_thread.join().unwrap_or_default();
@@ -1059,7 +1184,15 @@ fn command_output_tail(output: &std::process::Output) -> String {
     if value.trim().is_empty() {
         value = String::from_utf8_lossy(&output.stdout).to_string();
     }
-    value.trim().chars().rev().take(2000).collect::<String>().chars().rev().collect()
+    value
+        .trim()
+        .chars()
+        .rev()
+        .take(2000)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect()
 }
 
 #[cfg(test)]
@@ -1095,13 +1228,19 @@ mod tests {
         .unwrap();
         let plan = native_package_plan(
             &root,
-            &NodeTarget { platform: "darwin".into(), arch: "arm64".into() },
+            &NodeTarget {
+                platform: "darwin".into(),
+                arch: "arm64".into(),
+            },
         );
-        assert_eq!(plan, vec![
-            "@img/sharp-darwin-arm64@0.9.0",
-            "@img/sharp-libvips-darwin-arm64@1.2.0",
-            "@koromix/koffi-darwin-arm64@8.7.0",
-        ]);
+        assert_eq!(
+            plan,
+            vec![
+                "@img/sharp-darwin-arm64@0.9.0",
+                "@img/sharp-libvips-darwin-arm64@1.2.0",
+                "@koromix/koffi-darwin-arm64@8.7.0",
+            ]
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1123,7 +1262,10 @@ mod tests {
             .unwrap_or_else(|e| panic!("link must be created without privileges: {e}"));
 
         let metadata = std::fs::symlink_metadata(&destination).unwrap();
-        assert!(metadata.file_type().is_symlink(), "junction must be treated as a link");
+        assert!(
+            metadata.file_type().is_symlink(),
+            "junction must be treated as a link"
+        );
         let resolved = std::fs::read_link(&destination).unwrap();
         assert_eq!(resolved.canonicalize().unwrap(), canonical_source);
 
@@ -1167,7 +1309,10 @@ mod tests {
             .unwrap_or_else(|e| panic!("junction must be creatable without privileges: {e}"));
 
         let metadata = std::fs::symlink_metadata(&destination).unwrap();
-        assert!(metadata.file_type().is_symlink(), "junction must be treated as a link");
+        assert!(
+            metadata.file_type().is_symlink(),
+            "junction must be treated as a link"
+        );
         assert_eq!(
             std::fs::canonicalize(&destination).unwrap(),
             canonical_source,
@@ -1279,7 +1424,10 @@ mod tests {
         assert!(diagnostic.starts_with("CORE_NATIVE_ABI_MISMATCH:"));
         assert!(diagnostic.contains("fs-ext"));
         assert!(diagnostic.contains("NODE_MODULE_VERSION 137"));
-        assert!(!diagnostic.contains('\n'), "diagnostic must be a single line");
+        assert!(
+            !diagnostic.contains('\n'),
+            "diagnostic must be a single line"
+        );
         assert!(diagnostic.contains("install the Node.js version the core was built with"));
     }
 
@@ -1291,7 +1439,8 @@ mod tests {
             message: "Cannot find module 'sharp'".into(),
             abi: false,
         }];
-        let diagnostic = native_failure_diagnostic(&failures, Path::new("node"), Path::new("C:\\core"));
+        let diagnostic =
+            native_failure_diagnostic(&failures, Path::new("node"), Path::new("C:\\core"));
         assert!(diagnostic.starts_with("CORE_NATIVE_DEPENDENCY_REPAIR_FAILED:"));
         assert!(diagnostic.contains("sharp: Cannot find module 'sharp'"));
     }
@@ -1308,7 +1457,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let bin_dir = root.join("node-v22.22.0-win-x64");
         std::fs::create_dir_all(bin_dir.join("node_modules").join("npm").join("bin")).unwrap();
-        let npm_cli = bin_dir.join("node_modules").join("npm").join("bin").join("npm-cli.js");
+        let npm_cli = bin_dir
+            .join("node_modules")
+            .join("npm")
+            .join("bin")
+            .join("npm-cli.js");
         std::fs::write(&npm_cli, "// npm").unwrap();
         let node = bin_dir.join("node.exe");
 
@@ -1321,7 +1474,7 @@ mod tests {
         let bare = root.join("bare").join("node.exe");
         std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
         let (program, args) = npm_command(&bare);
-        assert!(program == OsString::from("npm.cmd") || program == OsString::from("npm"));
+        assert!(program == "npm.cmd" || program == "npm");
         assert!(args.is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
@@ -1357,7 +1510,8 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         // 空核心目录：sharp/koffi 解析失败但属于非 ABI 失败，必须能结构化解析。
-        let failures = parse_native_probe_failures(&stdout).expect("probe must emit the marker line");
+        let failures =
+            parse_native_probe_failures(&stdout).expect("probe must emit the marker line");
         assert!(failures.iter().all(|failure| !failure.abi));
 
         let _ = std::fs::remove_dir_all(&root);
@@ -1375,7 +1529,11 @@ mod tests {
         let pkg = root.join("node_modules").join("fs-ext");
         std::fs::create_dir_all(pkg.join("build").join("Release")).unwrap();
         std::fs::write(pkg.join("binding.gyp"), "{}").unwrap();
-        std::fs::write(pkg.join("build").join("Release").join("fs_ext.node"), "stub").unwrap();
+        std::fs::write(
+            pkg.join("build").join("Release").join("fs_ext.node"),
+            "stub",
+        )
+        .unwrap();
         std::fs::write(
             pkg.join("package.json"),
             r#"{"name":"fs-ext","main":"index.js"}"#,
@@ -1399,10 +1557,13 @@ mod tests {
             command.creation_flags(0x08000000);
         }
         let output = command.output().expect("node must be runnable");
-        let failures =
-            parse_native_probe_failures(&String::from_utf8_lossy(&output.stdout)).expect("marker line");
+        let failures = parse_native_probe_failures(&String::from_utf8_lossy(&output.stdout))
+            .expect("marker line");
         let probe = NativeProbe::Failed(failures);
-        assert!(probe.has_abi_mismatch(), "fs-ext must be reported as an ABI mismatch");
+        assert!(
+            probe.has_abi_mismatch(),
+            "fs-ext must be reported as an ABI mismatch"
+        );
         assert_eq!(probe.abi_packages(), vec!["fs-ext".to_string()]);
         // 诊断必须点名模块，供前端直接展示（而不是让用户只看到 HARNESS_NOT_OWNED）
         let diagnostic = native_failure_diagnostic(probe.failures(), &node, &root);

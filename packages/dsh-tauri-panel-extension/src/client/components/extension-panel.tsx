@@ -3,6 +3,7 @@ import type { MarketFace } from '../service/market.types'
 import { SegmentedControl } from 'dsh-tauri-ui/client'
 import { useEffect, useId, useState } from 'react'
 import { locale } from '../locales'
+import { resolveActiveTab } from './extension-panel.utils'
 import { MarketTab } from './market-tab'
 import { McpTab } from './mcp-tab'
 import { SkillsTab } from './skills-tab'
@@ -31,8 +32,11 @@ export function ExtensionPanel({ createSkill, market }: ExtensionPanelProps): Re
     { id: 'mcp', label: t('mcpTab'), render: () => <McpTab t={t} /> },
   ]
   const initialId = rows[0]?.id ?? 'skills'
-  const [activeId, setActiveId] = useState(initialId)
+  const [requestedId, setRequestedId] = useState(initialId)
   const [visited, setVisited] = useState<ReadonlySet<string>>(() => new Set([initialId]))
+  const activeId = resolveActiveTab(rows, requestedId)
+  // 市场服务消失时会回落到别的标签页：那也已经「打开过」，同样要留在挂载集里，
+  // 否则市场一回来它就卸载，用户在那一页里的状态被丢掉。
   useEffect(() => setVisited(previous => previous.has(activeId) ? previous : new Set([...previous, activeId])), [activeId])
 
   return (
@@ -44,7 +48,7 @@ export function ExtensionPanel({ createSkill, market }: ExtensionPanelProps): Re
             label={t('extension')}
             value={activeId}
             options={rows.map(row => ({ value: row.id, label: row.label }))}
-            onChange={setActiveId}
+            onChange={setRequestedId}
           />
         </div>
         {rows.filter(row => row.id === activeId || visited.has(row.id)).map((row) => {

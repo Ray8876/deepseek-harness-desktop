@@ -1,4 +1,4 @@
-// 引用源 @deepseek-ai/dsh-client-ui-primitives · packages/client/ui-primitives/src/Checkbox.tsx · 版本 0.1.7-alpha.1（≥0.1.7-alpha.1）· hash default=_checkbox_1jl6j_1
+// 引用源 @deepseek-ai/dsh-client-ui-primitives · packages/client/ui-primitives/src/Checkbox.tsx · 版本 0.1.7-rc.2（≥0.1.7-alpha.1）· hash default=_checkbox_1wz3s_1
 import type { ReactElement, ReactNode } from 'react'
 import { useMountStyle } from '../hooks/use-mount-style'
 import checkboxStyle from './checkbox.cssr'

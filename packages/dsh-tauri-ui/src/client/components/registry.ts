@@ -16,9 +16,9 @@ export interface UiComponentEntry {
 }
 
 const PRIMITIVES = '@deepseek-ai/dsh-client-ui-primitives'
-const VERSION = '0.1.7-alpha.1'
-const AVAILABLE_BOTH = ['0.1.5-rc.1', '0.1.7-alpha.1']
-const AVAILABLE_LATEST = ['0.1.7-alpha.1']
+const VERSION = '0.1.7-rc.2'
+const AVAILABLE_BOTH = ['0.1.5-rc.1', '0.1.7-rc.2']
+const AVAILABLE_LATEST = ['0.1.7-rc.2']
 
 function slug(name: string): string {
   return name.replaceAll('_', '-').replaceAll(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()

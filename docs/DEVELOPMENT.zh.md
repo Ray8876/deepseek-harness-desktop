@@ -35,9 +35,9 @@ cargo check
 cargo test
 ```
 
-macOS 的 Developer ID 签名、公证与 GitHub Actions Secrets 配置见 [macOS 签名与公证](./spec/MACOS_SIGNING.zh.md)。
+macOS 的 Developer ID 签名、公证与 GitHub Actions Secrets 配置见 [`.github/workflows/build-macos.yml`](../.github/workflows/build-macos.yml) 与 [`.github/workflows/release.yml`](../.github/workflows/release.yml)。
 
-若要新增一个随安装包分发、内置在应用里的插件，请参阅 [内置插件（Internal Plugins）](./spec/BUILTIN_PLUGINS.zh.md)。
+若要新增一个随安装包分发、内置在应用里的插件，请参阅 [内置插件（Internal Plugins）](../src-tauri/resources/README.md#built-in-internal-plugins)。
 
 ## 小贴士
 

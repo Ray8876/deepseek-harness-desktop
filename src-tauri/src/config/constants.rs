@@ -73,24 +73,13 @@ pub const LEGACY_APP_IDENTIFIER: &str = "io.github.hairyf.deepseek-harness-deskt
 /// 核心不应与 release 共用，否则开发版更新/切换核心会替换正在运行的生产文件。
 pub const APP_DATA_DEV_DIR_NAME: &str = "dev";
 
-/// 安装目录与 CLI 入口（相对安装目录）
-pub const DSH_CORE_DIR: &str = "dsh";
-pub const DSH_ENTRY_RELATIVE: &str = "node_modules/@deepseek-ai/dsh/lib/bin.js";
+/// Harness 发行版清单文件名（相对安装根）。安装根、入口相对路径由
+/// `resources/manifest.jsonc` 的 `dependencies.dsh` 与 AppData 依赖映射表决定。
 pub const DSH_MANIFEST_RELATIVE: &str = "package.json";
-
-/// pnpm 安装目录与 CLI 入口（相对安装目录）
-pub const PNPM_CORE_DIR: &str = "pnpm";
-pub const PNPM_ENTRY_RELATIVE: &str = "bin/pnpm.cjs";
 
 /// 开发构建的用户级 shim 根目录名，不与 release 的 CLI 集成目录冲突。
 #[cfg_attr(not(windows), allow(dead_code))] // 仅 Windows 的 bin 目录计算使用
-pub const CLI_ROOT_DEV_DIR_NAME: &str = "deepseek-harness-dev";
-
-/// Windows 免安装 Git 的安装目录与 CLI 入口（相对安装目录）。
-#[cfg_attr(not(windows), allow(dead_code))] // 仅 Windows 的 MinGit 安装路径使用
-pub const MINGIT_CORE_DIR: &str = "git";
-#[cfg_attr(not(windows), allow(dead_code))] // 仅 Windows 的 MinGit 安装路径使用
-pub const MINGIT_ENTRY_RELATIVE: &str = "cmd/git.exe";
+pub const CLI_ROOT_DEV_DIR_NAME: &str = "dev-dsh";
 
 /// 旧版数据目录名：迁移前 $DSH_HOME 位于 `{app_data}/data/dsh`，
 /// 现仅用于 legacy 路径识别（见 service::migrate）。新 $DSH_HOME = 官方 `~/.dsh`。

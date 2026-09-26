@@ -1,4 +1,4 @@
-// 引用源 @deepseek-ai/dsh-client-ui-primitives · packages/client/ui-primitives/src/Button.tsx ; @deepseek-ai/dsh-client-ui-sidebar · packages/client/ui-sidebar/src/client/SidebarRoot.module.css ; @deepseek-ai/dsh-client-ui-plugin-manager · packages/client/ui-plugin-manager/src/client/PluginManagerPage.module.css · 版本 0.1.7-alpha.1（≥0.1.5-rc.1）· hash elevated=hHd-Xa_newSession add=X_2TxG_addButton addGhost=X_2TxG_addButton danger=X_2TxG_danger
+// 引用源 @deepseek-ai/dsh-client-ui-primitives · packages/client/ui-primitives/src/Button.tsx ; @deepseek-ai/dsh-client-ui-sidebar · packages/client/ui-sidebar/src/client/SidebarRoot.module.css ; @deepseek-ai/dsh-client-ui-plugin-manager · packages/client/ui-plugin-manager/src/client/PluginManagerPage.module.css · 版本 0.1.7-rc.2（≥0.1.5-rc.1）· hash elevated=hHd-Xa_newSession add=X_2TxG_addButton addGhost=X_2TxG_addButton danger=X_2TxG_danger
 import type { ButtonHTMLAttributes, ReactElement, ReactNode } from 'react'
 import { Button as PrimitiveButton } from '@deepseek-ai/dsh-client-ui-primitives'
 import { compact } from 'dsh-tauri/client'

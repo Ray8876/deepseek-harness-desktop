@@ -2,7 +2,7 @@ import type { CheckoutInfo, OperationResult, PendingHandoff } from '../types'
 import { randomUUID } from 'node:crypto'
 import { defineService } from 'dsh-tauri'
 import { get } from 'lodash-es'
-import { getCurrentHostInstance } from '../config/runtime'
+import { getCurrentHostInstance, pendingWorktreeTitles } from '../config/runtime'
 import { worktreeHandoffText } from '../utils/worktree-facts'
 import { checkoutContext } from './checkout-context'
 import { sessionContext } from './session-context'
@@ -98,6 +98,8 @@ export const handoff = defineService({
       const workspace = await ctx.workspaceRegistry.resolveByPath(binding.projectPath)
       if (workspace)
         await workspace.attachSession(targetSessionId)
+      if (!hasInheritedConversation(seed))
+        pendingWorktreeTitles.add(targetSessionId)
       handle.agent.followup({
         id: `message-${randomUUID()}`,
         role: 'user',
@@ -118,6 +120,26 @@ export const handoff = defineService({
 })
 
 // --- internal ---
+
+/**
+ * 继承前缀里是否已有真实的人类消息：区分「换到工作树接着聊」与「换了位置的全新任务」。
+ *
+ * 内核只对「无父会话 + 第一条人类消息 + 尚无标题」的全新会话自动生成标题，fork 子会话保留继承标题
+ * 且永不自动生成。继承前缀里没有人类消息时（工作树模式发送首条消息即此形态），新工作树任务只会拿到
+ * 首条消息的兜底标题，因此这些会话要在首个请求头落盘时显式补一次模型标题（见 service/title）。
+ */
+function hasInheritedConversation(seed: readonly unknown[]): boolean {
+  return seed.some((value) => {
+    const event = value as { type?: unknown, data?: { source?: { kind?: unknown }, content?: unknown } }
+    if (event?.type !== 'user/message' || event.data?.source?.kind !== 'user')
+      return false
+    return Array.isArray(event.data.content)
+      && event.data.content.some((block) => {
+        const part = block as { type?: unknown, text?: unknown }
+        return part?.type === 'text' && String(part.text ?? '').trim() !== ''
+      })
+  })
+}
 
 async function createInherited(
   sourceSessionId: string,
@@ -163,6 +185,8 @@ async function createInherited(
       }
     }
     await ctx.agents.create(createOptions)
+    if (!hasInheritedConversation(seed))
+      pendingWorktreeTitles.add(targetSessionId)
     if (attach) {
       const workspace = await ctx.workspaceRegistry.resolveByPath(cwd)
       if (workspace)

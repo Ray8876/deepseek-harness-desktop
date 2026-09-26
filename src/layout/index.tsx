@@ -11,6 +11,7 @@ import { useListen } from '@/hooks/use-listen'
 import { useThemeAdaptive } from '@/hooks/use-theme-adaptive'
 import { useWakelockRelease } from '@/hooks/use-wakelock-release'
 import { useCoreBreakingConfirm } from '@/ui/config/hooks/use-core-breaking-confirm'
+import { useCoreProfileSwitch } from '@/ui/config/hooks/use-core-profile-switch'
 import { toast } from '@/utils/toast'
 import { store } from '../store'
 import { Recovery } from '../ui/plugin/recovery'
@@ -41,6 +42,7 @@ export function App() {
   const { status } = useStore(store.harness)
   const { updateInfo, updating } = useStore(store.harnessUpdater)
   const { holder: coreBreakingHolder, confirmCoreBreaking } = useCoreBreakingConfirm()
+  const { holder: coreProfileSwitchHolder, guardCoreUpgrade } = useCoreProfileSwitch()
 
   // issue #469：本应用没有屏幕常亮的正当需求（常驻播放的 <video> 会让系统无法息屏），
   // 唤醒锁一旦生效就立刻释放。
@@ -132,12 +134,19 @@ export function App() {
     store.harnessUpdater.showToast(() => handleUpdate())
   }, { immediate: true })
 
-  /** 点击「立即更新」：目标版本高于 rc.2 时先弹破坏性更改确认，取消则中止更新 */
+  /**
+   * 点击「立即更新」：目标版本高于 rc.2 时先弹破坏性更改确认，取消则中止更新；
+   * 目标版本是升级时先落到配套版本档案，更新失败再把档案切回去。
+   */
   async function handleUpdate() {
     const info = store.harnessUpdater.updateInfo
     if (!info || !(await confirmCoreBreaking(info.tag)))
       return
-    await store.harnessUpdater.handleUpdate()
+    const guard = await guardCoreUpgrade(info.tag)
+    if (!guard)
+      return
+    if (!(await store.harnessUpdater.handleUpdate()))
+      await guard.rollback?.()
   }
 
   return (
@@ -145,6 +154,9 @@ export function App() {
       <Webview />
       <If cond={status === 'ready'}>
         {coreBreakingHolder}
+      </If>
+      <If cond={status === 'ready'}>
+        {coreProfileSwitchHolder}
       </If>
       {/* 运行期插件异常：应用仍在运行，弹醒目对话框（启动崩溃走 webview 的全屏恢复页） */}
       <If cond={status === 'ready'}>

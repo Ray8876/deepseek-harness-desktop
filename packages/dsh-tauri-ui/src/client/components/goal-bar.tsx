@@ -1,4 +1,4 @@
-// 引用源 @deepseek-ai/dsh-client-ui-goal · packages/client/ui-goal/src/client/GoalBar.module.css · 版本 0.1.7-alpha.1（≥0.1.5-rc.1）· hash bar=nLMEza_bar action=nLMEza_iconBtn
+// 引用源 @deepseek-ai/dsh-client-ui-goal · packages/client/ui-goal/src/client/GoalBar.module.css · 版本 0.1.7-rc.2（≥0.1.5-rc.1）· hash bar=nLMEza_bar action=nLMEza_iconBtn
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactElement, ReactNode } from 'react'
 import { compact } from 'dsh-tauri/client'
 import { useMountStyle } from '../hooks/use-mount-style'

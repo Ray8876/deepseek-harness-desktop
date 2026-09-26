@@ -1,36 +1,34 @@
 # Third-party notices
 
-Substantial portions of the scheduled-task panel are adapted from
-[`MichengAI/dsh-automation`](https://github.com/MichengAI/dsh-automation)
-(`@michengai/dsh-automation`) at the adopted baseline commit
-`f1bc91a3437f0b952631a46a8363089587b9ae6a` (`v0.1.32`), plus the DSH `0.1.5-rc.1`
-host-compatibility follow-up from upstream `c426c3d` (`v0.1.35`):
+## MichengAI/dsh-automation
 
-- **Host, unattended execution** — `src/host/service/executor.ts` (aligned
-  line-by-line with upstream `src/executor.ts`, `executeAutomationRun`),
-  `src/host/service/permission-presets.ts`, `src/host/service/options.ts`,
-  `src/host/types/index.ts`.
-- **Client** — `src/client/components/menu.tsx` + `menu.cssr.ts`,
-  `src/client/components/model-picker.tsx` + `model-picker.cssr.ts`,
-  `src/client/components/task-create-dialog.tsx`,
-  `src/client/components/prefill-bridge.tsx`, `src/client/prefill.ts`,
-  `src/client/register/prefill.ts`, `src/client/types/scheduler.ts`,
-  `src/client/types/protocol.ts` (structure, interaction and ARIA copied from the
-  upstream menu / model picker / chat-prefill bridge).
+- Repository: <https://github.com/MichengAI/dsh-automation>
+- Version: `0.1.42`
+- Revision: `e75499e55d0b8bfe85e04ba5a579080b54edff56`
+- Baseline adopted: `f1bc91a3437f0b952631a46a8363089587b9ae6a` (`v0.1.32`)
+- Baseline follow-up: `c426c3d` (`v0.1.35`, DSH `0.1.5-rc.1` host compatibility)
+- Source: `source/dsh-automation`
+- License: Apache-2.0 — Copyright 2026 MichengAI contributors
+- Adapted: the scheduled-task panel; the submodule pointer is independent of the adopted baseline.
 
-Copyright 2026 MichengAI contributors. These portions are used and modified under
-the Apache License, Version 2.0. Adapted files carry an inline attribution
-comment at the top.
+Adapted files:
 
-The full upstream source, license and NOTICE are retained as the Git submodule at
-`source/dsh-automation`. The scope of the adaptation, the deliberately retained
-differences and the verification history are recorded in
-[`docs/sync-log.md`](./docs/sync-log.md).
+- `src/host/service/executor.ts` — upstream `src/executor.ts`, `executeAutomationRun`
+- `src/host/service/permission-presets.ts`
+- `src/host/service/options.ts`
+- `src/host/types/index.ts`
+- `src/client/components/menu.tsx`, `src/client/components/menu.cssr.ts`
+- `src/client/components/model-picker.tsx`, `src/client/components/model-picker.cssr.ts`
+- `src/client/components/task-create-dialog.tsx`
+- `src/client/components/prefill-bridge.tsx`, `src/client/prefill.ts`, `src/client/register/prefill.ts`
+- `src/client/types/scheduler.ts`, `src/client/types/protocol.ts`
+
+Notes:
+
+- Adapted files carry an inline attribution comment at the top.
+- Scope, deliberately retained differences and verification history: [`docs/sync-log.md`](./docs/sync-log.md).
 
 ## Retained upstream NOTICE
-
-Reproduced verbatim from the upstream `NOTICE` file, as required by Apache-2.0
-§4(d):
 
 ```text
 dsh-automation
@@ -42,4 +40,58 @@ Copyright 2026 MichengAI contributors
 - 独立 Session 调度与审计历史 (titanwings/dsh-automation，MIT)
 
 上述参考实现的许可证与版权仍归其原作者所有；本仓库实现为独立编写，不复制其专有代码。
+```
+
+## deepseek-ai/deepseek-harness
+
+- Repository: <https://github.com/deepseek-ai/deepseek-harness>
+- Version: `dsh-v0.1.7-rc.2`
+- Revision: `477b4f420553e8a52c2fbccc464d7561b239c443`
+- Source: `source/deepseek-harness`
+- Catalog pin: `dsh:` → `0.1.7-alpha.1` (`pnpm-workspace.yaml`)
+- License: MIT — Copyright (c) 2026 DeepSeek
+- Not derived: the desktop counterpart of the official Schedule plugin, running on the official Host contracts.
+
+Official packages used:
+
+- `@deepseek-ai/dsh-agent` → `installModelSelection`
+- `@deepseek-ai/dsh-llm` → `createUserMessage`
+- `@deepseek-ai/dsh-user-approval` → `setApprovalPolicy`
+- `@deepseek-ai/dsh-session` → session creation and append for an unattended run
+- `@deepseek-ai/dsh-tools`, `@deepseek-ai/dsh-workspace` → tool registration, workspace resolution
+- The first three are imported dynamically in `src/host/utils/agent-runtime.ts`; the rest are declared dependencies.
+
+Official counterpart (official `@deepseek-ai/dsh-schedule` + `@deepseek-ai/dsh-client-ui-schedule` → this package):
+
+- Tools: official `schedule_create` / `schedule_list` / `schedule_delete` / `schedule_update` → `scheduler_create` / `scheduler_list` / `scheduler_toggle` / `scheduler_delete` / `scheduler_run_now` (`src/host/tools/`), five instead of four.
+- Delivery: official durable Host-wide reminders in the **original** Session → unattended runs, each starting a **fresh** Session (`workspaceId`, `permission`, `provider`, `model`, `reasoningEffort`).
+- Recurrence: official one-shot / fixed-rate / daily / weekly / cron (`createCronScheduleRecord`, `resolveCronOccurrence`, `canonicalizeCronExpression`) → `once` / `hourly` / `daily` / `interval` / `workdays` / `weekly` / `monthly` / `custom` (`SCHEDULE_KINDS` in `src/shared/constants.ts`), evaluated with the `cron-schedule` package or anchored arithmetic; no cron kind.
+- Missed occurrences: official keeps only the latest missed occurrence and restores a cold Session → anchored interval/custom arithmetic plus `runs/recover` reconciliation for interrupted runs.
+- UI: official task list, task detail, delivery history, clock/date pickers and recent time zones → task list, create dialog and run history (`history/{get,delete}`); no delivery history or time-zone data source.
+- Official rows ship `disabled: true` in the `@deepseek-ai/dsh-web-app` bundle (`cordis.patch.yml`: id `schedule`, id `ui-schedule`), so the official Schedule service and this plugin do not share a task store.
+
+## License
+
+```text
+MIT License
+
+Copyright (c) 2026 DeepSeek
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```

@@ -403,7 +403,7 @@ export function ModelListEditor(props: ModelListEditorProps): ReactNode {
                         onChange={() => { toggle(candidate.id) }}
                       />
 
-                      <span className={styles.candidateId}>{candidate.id}</span>
+                      <span className={styles.candidateId} title={candidate.name ?? candidate.id}>{candidate.id}</span>
                     </label>
                   </li>
                 ))}

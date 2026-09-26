@@ -72,7 +72,7 @@ fn current_locale() -> String {
         if len <= 0 {
             return String::new();
         }
-        return String::from_utf16_lossy(&buf[..len as usize - 1]);
+        String::from_utf16_lossy(&buf[..len as usize - 1])
     }
     #[cfg(not(windows))]
     {
@@ -113,7 +113,7 @@ fn is_china_timezone() -> bool {
             .iter()
             .position(|&c| c == 0)
             .unwrap_or(info.TimeZoneKeyName.len());
-        return tz_name_is_china(&String::from_utf16_lossy(&info.TimeZoneKeyName[..len]));
+        tz_name_is_china(&String::from_utf16_lossy(&info.TimeZoneKeyName[..len]))
     }
     #[cfg(not(windows))]
     {

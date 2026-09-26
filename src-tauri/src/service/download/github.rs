@@ -77,7 +77,7 @@ fn parse_release_list_from_html(body: &str) -> Vec<DshPkgReleaseMeta> {
     let mut cursor = 0;
     while let Some(relative) = body[cursor..].find(marker) {
         let start = cursor + relative + marker.len();
-        let Some(end) = body[start..].find(|c: char| c == '"' || c == '\'' || c == '?') else {
+        let Some(end) = body[start..].find(['"', '\'', '?']) else {
             break;
         };
         let tag = &body[start..start + end];
@@ -638,21 +638,21 @@ pub fn resolve_update(
                 .filter(|(_, commit)| Some(commit.as_str()) == record_commit)
                 .collect();
             match matches.as_slice() {
-            // 唯一命中且 tag 与最新 release 同名 → 同一发布（API 限流 commit 兜底
-            // 造成的 tag 差异，承接 #379 的修复场景）。
-            [(tag, _)] if tag.as_str() == latest.tag.as_str() => UpdateCheck::UpToDate,
-            // 唯一命中但 tag 与最新 release 不一致 → 同版本热修或滞后记录。
-            [(tag, _)] => match parse_version_from_tag(tag) {
-                Some(record_version) if record_behind_latest(&record_version) => {
-                    UpdateCheck::HealUpToDate
-                }
-                // 反查到的版本与最新版本相同（或解析失败）→ 视为同版本热修
-                _ => UpdateCheck::UpdateAvailable,
-            },
-            // 多 tag 共指同一 commit → 模糊，按更新提示以免漏报。
-            _ if matches.len() > 1 => UpdateCheck::UpdateAvailable,
-            // 无法考证记录对应的版本 → 以实际安装文件为准，修正记录
-            _ => UpdateCheck::HealUpToDate,
+                // 唯一命中且 tag 与最新 release 同名 → 同一发布（API 限流 commit 兜底
+                // 造成的 tag 差异，承接 #379 的修复场景）。
+                [(tag, _)] if tag.as_str() == latest.tag.as_str() => UpdateCheck::UpToDate,
+                // 唯一命中但 tag 与最新 release 不一致 → 同版本热修或滞后记录。
+                [(tag, _)] => match parse_version_from_tag(tag) {
+                    Some(record_version) if record_behind_latest(&record_version) => {
+                        UpdateCheck::HealUpToDate
+                    }
+                    // 反查到的版本与最新版本相同（或解析失败）→ 视为同版本热修
+                    _ => UpdateCheck::UpdateAvailable,
+                },
+                // 多 tag 共指同一 commit → 模糊，按更新提示以免漏报。
+                _ if matches.len() > 1 => UpdateCheck::UpdateAvailable,
+                // 无法考证记录对应的版本 → 以实际安装文件为准，修正记录
+                _ => UpdateCheck::HealUpToDate,
             }
         }
     }
@@ -824,9 +824,7 @@ mod tests {
     fn parses_digest_from_expanded_assets_html() {
         // 模拟 expanded_assets 片段：资产文件名之后紧跟作者填写的 sha256:<64hex>。
         // 来自真实 rc.8 页面：windows 资产摘要为 4d541676...
-        let html = concat!(
-            "…/deepseek-harness-pkg-windows.zip…<span>sha256:4d5416766eb4a66e81b83532abeea64de7e7e2e0bac69a4f0c0508e1d91936c0</span>",
-        );
+        let html = "…/deepseek-harness-pkg-windows.zip…<span>sha256:4d5416766eb4a66e81b83532abeea64de7e7e2e0bac69a4f0c0508e1d91936c0</span>";
         let got = parse_digest_from_expanded_assets(html, "deepseek-harness-pkg-windows.zip");
         assert_eq!(
             got.as_deref(),
@@ -1221,10 +1219,7 @@ mod tests {
     fn resolve_legacy_tag_older_build_is_still_hotfix_update() {
         // 反向回归：legacy_tags 反查到的是真正的同版本旧 build（不是 latest），
         // 必须仍然报告 UpdateAvailable（hotfix），不能让上面的修复误伤这一支。
-        let latest = latest(
-            "dsh-0.1.2-rc.1-33729514615",
-            "33729514615",
-        );
+        let latest = latest("dsh-0.1.2-rc.1-33729514615", "33729514615");
         let tags = vec![(
             "dsh-0.1.2-rc.1-33600000000".to_string(), // 旧 build，不是 latest
             "11122233344455556666777788899900aaaabbbb".to_string(),
@@ -1242,13 +1237,16 @@ mod tests {
     fn resolve_legacy_tag_match_not_first_in_list_is_up_to_date() {
         // 顺序无关：legacy_tags 把匹配项放在末尾，前面的非匹配项不能让 `.find()`
         // 提前截走、必须仍然识别为同一发布。
-        let latest = latest(
-            "dsh-0.1.2-rc.1-33729514615",
-            "33729514615",
-        );
+        let latest = latest("dsh-0.1.2-rc.1-33729514615", "33729514615");
         let tags = vec![
-            ("unrelated/v0.0.1".to_string(), "fff000fff000fff000fff000fff000fff000f0000".to_string()),
-            ("dsh-0.1.2-rc.1-33729514615".to_string(), "abc123def4567890abcdef1234567890abcdef12".to_string()),
+            (
+                "unrelated/v0.0.1".to_string(),
+                "fff000fff000fff000fff000fff000fff000f0000".to_string(),
+            ),
+            (
+                "dsh-0.1.2-rc.1-33729514615".to_string(),
+                "abc123def4567890abcdef1234567890abcdef12".to_string(),
+            ),
         ];
         let decision = resolve_update(
             Some("abc123def4567890abcdef1234567890abcdef12"),
@@ -1264,13 +1262,16 @@ mod tests {
     fn resolve_legacy_tag_multiple_matches_is_update_available() {
         // 防御：同一 commit 被多个 tag 指向（stable / latest 别名、不同命名规范的
         // 同源 tag），反查不唯一 → 模糊场景，按更新提示以免漏报。
-        let latest = latest(
-            "dsh-0.1.2-rc.1-33729514615",
-            "33729514615",
-        );
+        let latest = latest("dsh-0.1.2-rc.1-33729514615", "33729514615");
         let tags = vec![
-            ("dsh-0.1.2-rc.1-stable".to_string(), "abc123def4567890abcdef1234567890abcdef12".to_string()),
-            ("dsh-0.1.2-rc.1-33729514615".to_string(), "abc123def4567890abcdef1234567890abcdef12".to_string()),
+            (
+                "dsh-0.1.2-rc.1-stable".to_string(),
+                "abc123def4567890abcdef1234567890abcdef12".to_string(),
+            ),
+            (
+                "dsh-0.1.2-rc.1-33729514615".to_string(),
+                "abc123def4567890abcdef1234567890abcdef12".to_string(),
+            ),
         ];
         let decision = resolve_update(
             Some("abc123def4567890abcdef1234567890abcdef12"),

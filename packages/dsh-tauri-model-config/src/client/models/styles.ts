@@ -50,8 +50,9 @@ const MODELS_CSS = `.zGbnIq_section {
 }
 
 .zGbnIq_rowCard {
-  border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: 16px;
+  border: 0.5px solid var(--dsw-alias-settings-card-stroke);
+  background: var(--dsw-alias-settings-card-fill);
+  border-radius: var(--dsw-radius-xl);
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
@@ -82,7 +83,7 @@ const MODELS_CSS = `.zGbnIq_section {
   flex: none;
   padding: 1px 6px;
   border: 0.5px solid var(--dsw-alias-border-l3);
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   font-size: 11px;
   line-height: 16px;
   color: var(--dsw-alias-label-secondary);
@@ -124,7 +125,7 @@ const MODELS_CSS = `.zGbnIq_section {
   height: 36px;
   padding: 0 14px;
   border: none;
-  border-radius: 18px;
+  border-radius: var(--dsw-radius-md);
   font: inherit;
   font-size: 14px;
   line-height: 22px;
@@ -164,7 +165,7 @@ const MODELS_CSS = `.zGbnIq_section {
   height: 36px;
   padding: 0 14px;
   border: none;
-  border-radius: 18px;
+  border-radius: var(--dsw-radius-md);
   background: transparent;
   color: var(--dsw-alias-state-error-primary);
   font: inherit;
@@ -181,7 +182,7 @@ const MODELS_CSS = `.zGbnIq_section {
 .zGbnIq_rowActions .zGbnIq_dangerButton {
   height: 28px;
   padding: 0 10px;
-  border-radius: 14px;
+  border-radius: var(--dsw-radius-sm);
   font-size: 12px;
   line-height: 18px;
 }
@@ -205,11 +206,11 @@ const MODELS_CSS = `.zGbnIq_section {
 .zGbnIq_iconButton:focus-visible,
 .zGbnIq_customizedSummary:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--dsw-alias-border-l3);
+  box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
 }
 
 .zGbnIq_editor {
-  border-radius: 12px;
+  border-radius: var(--dsw-radius-lg);
   background: var(--dsw-alias-bg-module-platform);
   padding: 14px 16px;
   display: flex;
@@ -259,7 +260,7 @@ const MODELS_CSS = `.zGbnIq_section {
   height: 28px;
   padding: 0 10px;
   border: none;
-  border-radius: 14px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   font: inherit;
@@ -303,7 +304,7 @@ const MODELS_CSS = `.zGbnIq_section {
   gap: 6px;
   height: 44px;
   border: 1px dashed var(--dsw-alias-border-l3);
-  border-radius: 16px;
+  border-radius: var(--dsw-radius-lg);
 }
 
 .zGbnIq_addModes {
@@ -325,7 +326,7 @@ const MODELS_CSS = `.zGbnIq_section {
 
 .zGbnIq_addCard,
 .zGbnIq_setupCard {
-  border-radius: 12px;
+  border-radius: var(--dsw-radius-lg);
   background: var(--dsw-alias-bg-module-platform);
   padding: 14px 16px;
   display: flex;
@@ -352,7 +353,7 @@ const MODELS_CSS = `.zGbnIq_section {
   width: fit-content;
   padding: 2px 4px;
   margin-left: -4px;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   cursor: pointer;
   font-size: 12px;
   line-height: 18px;
@@ -434,7 +435,7 @@ const MODELS_CSS = `.zGbnIq_section {
 
 .zGbnIq_modelEntry {
   border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: 10px;
+  border-radius: var(--dsw-radius-lg);
   padding: 6px;
 }
 
@@ -453,7 +454,7 @@ const MODELS_CSS = `.zGbnIq_section {
   width: 28px;
   height: 28px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
@@ -518,7 +519,7 @@ const MODELS_CSS = `.zGbnIq_section {
 .zGbnIq_modelEmpty {
   padding: 12px;
   border: 1px dashed var(--dsw-alias-border-l3);
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-lg);
   text-align: center;
 }
 
@@ -531,7 +532,7 @@ const MODELS_CSS = `.zGbnIq_section {
   height: 28px;
   padding: 0 10px;
   border: 0.5px solid var(--dsw-alias-border-l3);
-  border-radius: 14px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-primary);
   font: inherit;
@@ -550,7 +551,7 @@ const MODELS_CSS = `.zGbnIq_section {
   height: 32px;
   padding: 0 10px;
   border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-md);
   font: inherit;
   font-size: 14px;
   line-height: 22px;
@@ -565,7 +566,7 @@ select.zGbnIq_input {
 
 .zGbnIq_input:focus {
   outline: none;
-  border-color: var(--dsw-alias-brand-primary);
+  border-color: var(--dsw-alias-state-business-primary);
 }
 
 .zGbnIq_input::placeholder {
@@ -581,7 +582,7 @@ select.zGbnIq_input {
   appearance: none;
   padding-right: 32px;
 
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.zGbnIq_w3.zGbnIq_org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 12px center;
   background-size: 12px 12px;
@@ -654,7 +655,7 @@ select.zGbnIq_input {
 }
 
 .zGbnIq_candidate {
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-md);
 }
 
 .zGbnIq_candidateLabel {
@@ -667,9 +668,12 @@ select.zGbnIq_input {
 
 .zGbnIq_candidateId {
   flex: 1 1 auto;
+  min-width: 0;
   font-family: var(--ds-font-family-code);
   font-size: 13px;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .zGbnIq_candidateEmpty {

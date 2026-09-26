@@ -9,10 +9,6 @@ export default c([
     c('[class$="guide"]', {
       gap: '8px',
     }),
-    c('[class$="entry"]:has(> button)', {
-      padding: '0',
-      gap: 0,
-    }),
     c('[class$="entry"]', {
       border: 'none',
       padding: '8px 16px',
@@ -56,9 +52,9 @@ export default c([
     color: 'var(--dsw-alias-label-primary) !important',
     justifyContent: 'center !important',
   }, [
-    // 「右侧按钮」= 官方侧边栏自带的折叠 toggle。桌面壳 navbar 已有自己的
+    // 官方侧边栏自带的折叠 toggle。桌面壳 navbar 已有自己的
     // `dsh-navbar-sidebar-toggle`（`dsh://sidebar:toggle` → `ctx.layout.toggleSidebar`），
-    // 官方这枚是重复入口；隐藏后 logo 独占整行。
+    // 官方这枚在**展开态**是重复入口；折叠态不能隐藏它（见下一条）。
     c('[class$="toggle"], [class*="toggle "]', {
       display: 'none !important',
     }),
@@ -69,6 +65,11 @@ export default c([
       justifyContent: 'center !important',
     }),
   ]),
+  // 折叠轨道（rail）的 logo 就画在这枚 toggle 里（官方 `railMark` 鲸鱼，悬停换成展开图标）：
+  // 上一条隐藏规则若在折叠态也命中，rail 上的 logo 会整块消失。这里按更高特异性把它恢复回来。
+  c('[class*="collapsed"] [class$="logoRow"] [class$="toggle"]', {
+    display: 'inline-flex !important',
+  }),
   // 折叠轨道回到官方左对齐：上一条 `!important` 会盖掉官方 `.collapsed .logoRow`。
   c('[class*="collapsed"] [class$="logoRow"]', {
     justifyContent: 'flex-start !important',
@@ -94,4 +95,20 @@ export default c([
       background: 'var(--dsw-alias-label-primary)',
     }),
   ]),
+
+  c('[class$="sidebarCol"]', {
+    borderRight: 'none !important',
+  }),
+  // 官方的中栏是「别名底色 + 左上 16px 圆角」，声明挂在文档根属性 `[data-windows-titlebar]`
+  // 上（dsh-client-ui-layout），该属性由官方桌面宿主写入；本仓壳层不写，中栏透明就会整块
+  // 露出布局帧的侧栏底色（插件页一并变灰）。故按类名后缀补等价声明。
+  // 不加 `!important`：官方 `[data-platform=darwin] .centerCol` 等更高特异性的声明须继续压过本条。
+  c('[class$="centerCol"]', {
+    background: 'var(--dsw-alias-bg-base)',
+    borderRadius: '16px 0 0 0',
+    cornerShape: 'round',
+  }),
+  c('[data-slot="root"] > div', {
+    background: 'var(--dsw-specific-sidebar-fill)',
+  }),
 ])

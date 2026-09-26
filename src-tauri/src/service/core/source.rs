@@ -67,6 +67,9 @@ pub struct HarnessCore {
     pub above_recommended: bool,
     /// 本地存在但远程 pkg 仓库已不再提供的历史槽位。
     pub orphaned: bool,
+    /// 是否随安装包分发（离线包把内核托管到 `$Resources/dsh`）：核心面板把它置顶并
+    /// 标记「本地」，且不提供卸载——它是内网/离线环境唯一的兜底内核。
+    pub bundled: bool,
     /// 资源清单中的推荐版本，用于切换前风险提示。
     pub recommended_version: Option<String>,
     pub error: Option<String>,
@@ -75,15 +78,8 @@ pub struct HarnessCore {
 /// 基线告警只发一次：`active_source` 在启动、核心列表与插件操作中反复调用。
 static UNSUPPORTED_LOCAL_WARNED: OnceLock<()> = OnceLock::new();
 
-/// 最低支持的核心版本。
-///
-/// 低于该版本的核心不再适配：`@deepseek-ai/dsh-client-store` 首版早于它、而内置插件
-/// 依赖的平台种子词自 0.1.5 起才存在，核心低于该版本时 `resources/node_modules`
-/// 的内置插件必然加载失败并把应用卡在启动阶段（issue #596）。版本号无法解析时按
-/// 「达标」处理，宁可放行也不误判。
-const MIN_SUPPORTED_CORE_VERSION: &str = "0.1.5-rc.1";
-
-/// 版本是否达到最低支持基线；任一版本无法解析时按「达标」处理，宁可放行也不误判。
+/// 版本是否达到最低支持基线（来自 `resources/manifest.jsonc` 的 `engines.dsh.minimum`）；
+/// 基线缺失或任一版本无法解析时按「达标」处理。
 fn meets_baseline(version: &str, baseline: &str) -> bool {
     match (
         semver::Version::parse(version),
@@ -94,19 +90,25 @@ fn meets_baseline(version: &str, baseline: &str) -> bool {
     }
 }
 
-/// 本地核心能否承载随包内置插件（见 [`MIN_SUPPORTED_CORE_VERSION`]）。
-pub(super) fn core_supports_bundled_plugins(version: &str) -> bool {
-    meets_baseline(version, MIN_SUPPORTED_CORE_VERSION)
+/// 本地核心能否承载随包内置插件（基线取自清单 `engines.dsh.minimum`）。
+///
+/// 最低支持版本由随包清单声明；清单缺失（基线与版本都读不到）时不阻断，宁可放行
+/// 也不把可用的本地核心判死——清单损坏的诊断由 `manifest` 模块记录。
+pub(super) fn core_supports_bundled_plugins(version: &str, baseline: Option<&str>) -> bool {
+    match baseline {
+        Some(baseline) => meets_baseline(version, baseline),
+        None => true,
+    }
 }
 
-fn warn_unsupported_local_core(version: &str) {
+fn warn_unsupported_local_core(version: &str, baseline: Option<&str>) {
     if UNSUPPORTED_LOCAL_WARNED.set(()).is_err() {
         return;
     }
     log::warn!(
         "CORE_LOCAL_UNSUPPORTED: local dsh {} is below the minimum supported core {}; using the bundled core instead (issue #596)",
         version,
-        MIN_SUPPORTED_CORE_VERSION,
+        baseline.unwrap_or("<unset>"),
     );
 }
 
@@ -121,15 +123,17 @@ pub fn active_source(app_handle: &AppHandle) -> CoreSource {
         return CoreSource::App;
     }
     let local = local_core(app_handle);
+    let baseline = config::manifest::minimum_dsh_version(app_handle);
     let local_usable = local
         .as_ref()
-        .is_some_and(|core| core_supports_bundled_plugins(&core.version));
+        .is_some_and(|core| core_supports_bundled_plugins(&core.version, baseline.as_deref()));
     if local.is_some() && !local_usable {
         warn_unsupported_local_core(
             local
                 .as_ref()
                 .map(|core| core.version.as_str())
                 .unwrap_or_default(),
+            baseline.as_deref(),
         );
     }
     match setting.active_core.as_deref().and_then(CoreSource::parse) {
@@ -160,14 +164,32 @@ pub fn active_dsh_binary(app_handle: &AppHandle) -> PathBuf {
     }
 }
 
+/// 当前生效的核心是否就是随安装包分发的那份（离线包把内核托管到 `$Resources/dsh`）。
+///
+/// 判定「来源是 App **且** 生效根就是随包内核目录」：切到本地核心时映射被记为系统环境、
+/// 生效根回落到随包目录，此时不能再算作随包内核。
+pub fn active_is_bundled(app_handle: &AppHandle) -> bool {
+    active_source(app_handle) == CoreSource::App
+        && config::dependencies::bundled_core_dir(app_handle).is_some_and(|dir| {
+            config::dependencies::active_root(app_handle, config::dependencies::DEP_DSH) == dir
+        })
+}
+
 /// 当前活动核心的版本号（`--no-open` 等按版本判定的能力以它为准）。
 pub fn active_version(app_handle: &AppHandle) -> Option<String> {
     match active_source(app_handle) {
         CoreSource::Local => local_core(app_handle).map(|c| c.version),
-        CoreSource::App => config::get_dsh_pkg_tag(app_handle)
-            .as_deref()
-            .and_then(parse_version_from_tag)
-            .or_else(|| config::get_dsh_version(app_handle)),
+        CoreSource::App => {
+            // 随包内核没有对应的 pkg tag：store 里的 tag 属于上一次下载的版本，直接采用
+            // 会把随包内核当成那个版本（能力判定、补丁与插件兼容性都会走错分支）。
+            if active_is_bundled(app_handle) {
+                return config::get_dsh_version(app_handle);
+            }
+            config::get_dsh_pkg_tag(app_handle)
+                .as_deref()
+                .and_then(parse_version_from_tag)
+                .or_else(|| config::get_dsh_version(app_handle))
+        }
     }
 }
 
@@ -186,26 +208,38 @@ mod tests {
 
     #[test]
     fn baseline_gate_accepts_equal_or_newer_versions() {
-        assert!(meets_baseline("0.1.5-rc.1", MIN_SUPPORTED_CORE_VERSION));
-        assert!(meets_baseline("0.1.5-rc.2", MIN_SUPPORTED_CORE_VERSION));
-        assert!(meets_baseline("0.1.6-alpha.2", MIN_SUPPORTED_CORE_VERSION));
+        let baseline = "0.1.5-rc.1";
+        assert!(meets_baseline("0.1.5-rc.1", baseline));
+        assert!(meets_baseline("0.1.5-rc.2", baseline));
+        assert!(meets_baseline("0.1.6-alpha.2", baseline));
     }
 
     /// issue #596：更早的核心（0.1.2-rc.1 / 0.1.0-rc.7）早于内置插件依赖的平台
     /// 种子词，内置插件必然加载失败，不再支持。
     #[test]
     fn baseline_gate_rejects_older_versions() {
-        assert!(!meets_baseline("0.1.0-rc.7", MIN_SUPPORTED_CORE_VERSION));
-        assert!(!meets_baseline("0.1.2-rc.1", MIN_SUPPORTED_CORE_VERSION));
-        assert!(!meets_baseline("0.1.5-alpha.2", MIN_SUPPORTED_CORE_VERSION));
+        let baseline = "0.1.5-rc.1";
+        assert!(!meets_baseline("0.1.0-rc.7", baseline));
+        assert!(!meets_baseline("0.1.2-rc.1", baseline));
+        assert!(!meets_baseline("0.1.5-alpha.2", baseline));
     }
 
     /// 版本不可解析（旧安装记录/异常清单）时不阻断：漏放行只是回到修复前的行为，
     /// 误拦截会把可用的本地核心判死。
     #[test]
     fn baseline_gate_passes_unparsable_versions() {
-        assert!(meets_baseline("", MIN_SUPPORTED_CORE_VERSION));
-        assert!(meets_baseline("not-a-version", MIN_SUPPORTED_CORE_VERSION));
+        assert!(meets_baseline("", "0.1.5-rc.1"));
+        assert!(meets_baseline("not-a-version", "0.1.5-rc.1"));
         assert!(meets_baseline("0.1.0-rc.7", ""));
+    }
+
+    /// 清单缺失（读不到最低支持基线）时同样放行，避免资源损坏阻断本地核心。
+    #[test]
+    fn missing_baseline_keeps_local_core_usable() {
+        assert!(core_supports_bundled_plugins("0.1.0-rc.7", None));
+        assert!(!core_supports_bundled_plugins(
+            "0.1.0-rc.7",
+            Some("0.1.5-rc.1")
+        ));
     }
 }

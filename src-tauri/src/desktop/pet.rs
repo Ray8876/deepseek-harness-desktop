@@ -17,6 +17,10 @@
 //!   时回退为非透明窗口继续工作。
 //! - `always_on_top` 在 Windows 上 Tauri 原生 API 即可保持置顶（BongoCat 为
 //!   额外稳定性用 SetWindowPos 循环轮询，本项目暂不做该平台特定加固）。
+//! - 原生 Wayland 会话下 `always_on_top` 与 `set_position` 都不生效，桌宠被主窗口
+//!   遮挡（issue #649，上游 tauri-apps/tao#1134 已按「Wayland 不支持」补文档结案）。
+//!   同一后端下 `outer_position()` 恒为 `{x:0,y:0}`，几何持久化因此一并跳过。
+//!   判定见 `crate::pet_overlay_supported`，前端据此提示用户。
 
 use crate::config::{store_dat_file_name, STORE_PET_WINDOW_STATE_KEY};
 use serde::{Deserialize, Serialize};
@@ -76,7 +80,14 @@ pub fn get_pet_window_position<R: Runtime>(app: &AppHandle<R>) -> PetWindowPosit
 }
 
 /// 保存桌宠窗口位置（用户拖动后由 Moved 事件调用）。
+///
+/// 原生 Wayland 下跳过写入：两个调用点的位置都取自 `outer_position()`，而 GDK 的
+/// Wayland 后端不向客户端报告窗口在屏幕上的坐标，该调用返回 `{x:0,y:0}` 且不报错。
+/// 照写会把上一次在 X11 会话里存下的有效位置覆盖成原点（issue #649）。
 pub fn save_pet_window_position<R: Runtime>(app: &AppHandle<R>, position: &PetWindowPosition) {
+    if !crate::pet_overlay_supported_env() {
+        return;
+    }
     let store = app
         .store(store_dat_file_name())
         .expect("Failed to load store for pet window position");
@@ -160,6 +171,7 @@ pub fn apply_pet_size<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// 将窗口左上角限制到单个显示器内；窗口大于显示器时贴齐其左上角。
+#[allow(clippy::too_many_arguments)]
 fn clamp_window_position(
     x: i32,
     y: i32,
@@ -285,6 +297,13 @@ pub fn move_pet_window<R: Runtime>(
 pub fn ensure_pet_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWindow<R>> {
     if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
         return Ok(window);
+    }
+    if !crate::pet_overlay_supported_env() {
+        log::warn!(
+            "PET_OVERLAY_UNSUPPORTED: always-on-top and absolute positioning are unavailable on \
+             a native Wayland session; the pet window is covered by other windows and does not \
+             stay where it was placed. Enable the XWayland option in pet settings to restore them."
+        );
     }
     let app_handle = app.clone();
     let (width, height) =

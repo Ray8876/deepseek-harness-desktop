@@ -1,4 +1,4 @@
-// 引用源 @deepseek-ai/dsh-client-ui-primitives · packages/client/ui-primitives/src/ · 版本 0.1.7-alpha.1（≥0.1.5-rc.1）· hash 官方原样（无 refork 类）
+// 引用源 @deepseek-ai/dsh-client-ui-primitives · packages/client/ui-primitives/src/ · 版本 0.1.7-rc.2（≥0.1.5-rc.1）· hash 官方原样（无 refork 类）
 /**
  * 官方 `@deepseek-ai/dsh-client-ui-primitives` 的直通转发层。
  *
@@ -43,7 +43,6 @@ export {
   MarkdownText,
   Menu,
   Modal,
-  OnboardingSurface,
   Pill,
   projectUserText,
   rankByName,

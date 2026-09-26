@@ -20,6 +20,7 @@ import { If } from 'react-if-lite'
 import { cn } from 'tailwind-variants'
 import { useStore } from 'valtio-define'
 import { queryKeys } from '@/config/query-keys'
+import { shortcutHint, useDshShortcuts } from '@/hooks/use-dsh-shortcuts'
 import { useDshStyle } from '@/hooks/use-dsh-style'
 import { useListen } from '@/hooks/use-listen'
 import { store } from '@/store'
@@ -79,8 +80,20 @@ const DOCS_URL = 'https://dshtauri.mintlify.site'
 /** 「文件」菜单的动作 id（宿主侧统一分发，避免菜单项内散落逻辑）。 */
 type FileAction = 'new-window' | 'new-chat' | 'open-folder' | 'close' | 'quit'
 
+/**
+ * 「编辑」菜单项：`dsh://edit` 的 action 与平台加速键（macOS 用 ⌘，与官方桌面端一致）。
+ */
+const EDIT_ITEMS = [
+  { id: 'undo', labelKey: 'menu.undo', key: 'Z', shift: false },
+  { id: 'redo', labelKey: 'menu.redo', key: 'Z', shift: true },
+  { id: 'cut', labelKey: 'menu.cut', key: 'X', shift: false },
+  { id: 'copy', labelKey: 'menu.copy', key: 'C', shift: false },
+  { id: 'paste', labelKey: 'menu.paste', key: 'V', shift: false },
+  { id: 'selectAll', labelKey: 'menu.select_all', key: 'A', shift: false },
+] as const
+
 /** 「帮助」菜单的动作 id。 */
-type HelpAction = 'copy-run-logs' | 'check-update' | 'about' | 'documentation'
+type HelpAction = 'keyboard-shortcuts' | 'copy-run-logs' | 'check-update' | 'about' | 'documentation'
 
 /** 「运行」菜单项：直接打开配置对话框并定位到对应面板。 */
 const CONFIG_TABS: { id: ConfigTab, labelKey: string }[] = [
@@ -193,8 +206,26 @@ function useMaximized() {
   return isMaximized
 }
 
-export interface NavbarProps {
-  /** iframe 回报的 dsh 侧边栏折叠状态（导航桥逻辑在 `iframe.tsx`） */
+/** 菜单项：左侧文案 + 右侧按键提示；没有生效绑定时只渲染文案（布局不变）。 */
+function ShortcutLabel({ label, hint }: { label: string, hint?: string }) {
+  if (hint == null)
+    return <Label>{label}</Label>
+  return (
+    <span className="flex w-full items-center justify-between gap-6">
+      <Label>{label}</Label>
+      <span className="shrink-0 font-mono text-xs text-muted" data-testid="dsh-navbar-shortcut-hint">{hint.replaceAll(' ', '')}</span>
+    </span>
+  )
+}
+
+/** 编辑菜单的加速键文本：macOS 用 ⌘，其余平台用 Ctrl（与官方桌面端同一组）。 */
+function editAccelerator(key: string, shift: boolean): string {
+  if (IS_MACOS)
+    return `⌘${shift ? '⇧' : ''}${key}`
+  return `Ctrl+${shift ? 'Shift+' : ''}${key}`
+}
+
+export interface NavbarProps { /** iframe 回报的 dsh 侧边栏折叠状态（导航桥逻辑在 `iframe.tsx`） */
   sidebarCollapsed?: boolean
   /** 切换 iframe 内 dsh 侧边栏（向 iframe 发 `dsh://sidebar:toggle`）；传入时启用左侧导航控制 */
   onToggleSidebar?: () => void
@@ -202,9 +233,13 @@ export interface NavbarProps {
   onNewChat?: () => void
   /** 打开文件夹：向 iframe 发 `dsh://workspace:add`（dsh 官方「添加工作区」）；传入时该项可用 */
   onOpenFolder?: () => void
+  /** 编辑菜单动作：向 iframe 发 `dsh://edit`（dsh-tauri 的 `client/register/shortcuts.ts` 执行） */
+  onEditAction?: (action: string) => void
+  /** 显示键盘快捷键：向 iframe 发 `dsh://shortcuts:open`，弹官方 `shortcuts.open` 弹层（官方蒙版） */
+  onOpenShortcuts?: () => void
 }
 
-export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, onOpenFolder }: NavbarProps) {
+export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, onOpenFolder, onEditAction, onOpenShortcuts }: NavbarProps) {
   const { t } = useTranslation()
   const isFullscreen = useMacOSFullscreen()
   const isMaximized = useMaximized()
@@ -216,6 +251,7 @@ export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, o
   })
   const { updateInfo } = useStore(store.desktopUpdater)
   const [dshStyle] = useDshStyle()
+  const [{ rows: shortcutRows }] = useDshShortcuts()
   // 「运行」菜单受控开合：快捷重启按钮不是菜单项，走不到 React Aria 的
   // 「项选中即收起」，收起得自己来，否则重启期间菜单会一直挂在新页面上。
   const [runMenuOpen, setRunMenuOpen] = useState(false)
@@ -262,6 +298,8 @@ export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, o
       void copyRunLogs()
     else if (key === 'documentation')
       void openDocumentation()
+    else if (key === 'keyboard-shortcuts')
+      onOpenShortcuts?.()
   }
 
   function handleFileAction(key: FileAction) {
@@ -399,7 +437,7 @@ export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, o
   return (
     <div
       className={cn(
-        'relative flex h-11 w-full flex-none select-none items-center gap-0.5 border-b border-line bg-panel',
+        'relative flex h-11 w-full flex-none select-none items-center gap-0.5 bg-panel',
         {
           'hidden': IS_MACOS && isFullscreen,
           'pl-20 pr-1.5': IS_MACOS && !isFullscreen,
@@ -460,7 +498,7 @@ export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, o
                   textValue={t('menu.new_chat')}
                   onAction={() => handleFileAction('new-chat')}
                 >
-                  <Label>{t('menu.new_chat')}</Label>
+                  <ShortcutLabel label={t('menu.new_chat')} hint={shortcutHint(shortcutRows, 'session.new')} />
                 </Dropdown.Item>
                 <Dropdown.Item
                   className="rounded-md"
@@ -470,7 +508,7 @@ export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, o
                   textValue={t('menu.open_folder')}
                   onAction={() => handleFileAction('open-folder')}
                 >
-                  <Label>{t('menu.open_folder')}</Label>
+                  <ShortcutLabel label={t('menu.open_folder')} hint={shortcutHint(shortcutRows, 'workspace.add')} />
                 </Dropdown.Item>
                 <Dropdown.Item
                   className="rounded-md"
@@ -493,7 +531,40 @@ export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, o
               </Dropdown.Menu>
             </Dropdown.Popover>
           </Dropdown>
+          {/* 「编辑」：与官方桌面端同一组编辑命令（撤销/重做/剪切/复制/粘贴/全选）。
+              动作经 `dsh://edit` 交给 iframe 内的 dsh-tauri 插件在文档上执行，
+              未安装插件（没有接收方）时整组禁用；加速键是系统/WebView 真实绑定，
+              只作为提示（粘贴仍走原生快捷键，脚本无权读剪贴板）。 */}
+          <Dropdown>
+            <Button
+              className="rounded-lg h-6 text-[12.5px] px-1.5"
+              size="sm"
+              variant="ghost"
+              aria-label={t('menu.edit')}
+              data-testid="dsh-navbar-menu-edit"
+            >
+              {t('menu.edit')}
+            </Button>
+            <Dropdown.Popover className="rounded-md min-w-55" data-testid="dsh-navbar-menu-popover">
+              <Dropdown.Menu>
+                {EDIT_ITEMS.map(item => (
+                  <Dropdown.Item
+                    key={item.id}
+                    className="rounded-md"
+                    id={item.id}
+                    data-testid={`dsh-navbar-item-edit-${item.id}`}
+                    isDisabled={onEditAction == null}
+                    textValue={t(item.labelKey)}
+                    onAction={() => onEditAction?.(item.id)}
+                  >
+                    <ShortcutLabel label={t(item.labelKey)} hint={editAccelerator(item.key, item.shift)} />
+                  </Dropdown.Item>
+                ))}
+              </Dropdown.Menu>
+            </Dropdown.Popover>
+          </Dropdown>
           <Dropdown isOpen={runMenuOpen} onOpenChange={setRunMenuOpen}>
+            {' '}
             <Button
               className="rounded-lg h-6 text-[12.5px] px-1.5"
               size="sm"
@@ -560,6 +631,15 @@ export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, o
               <Dropdown.Menu>
                 <Dropdown.Item
                   className="rounded-md"
+                  id="keyboard-shortcuts"
+                  data-testid="dsh-navbar-item-keyboard-shortcuts"
+                  textValue={t('menu.keyboard_shortcuts')}
+                  onAction={() => onHelpAction('keyboard-shortcuts')}
+                >
+                  <ShortcutLabel label={t('menu.keyboard_shortcuts')} hint={shortcutHint(shortcutRows, 'shortcuts.open')} />
+                </Dropdown.Item>
+                <Dropdown.Item
+                  className="rounded-md"
                   id="copy-run-logs"
                   data-testid="dsh-navbar-item-copy-run-logs"
                   textValue={t('menu.run_logs')}
@@ -623,7 +703,9 @@ export function Navbar({ sidebarCollapsed = false, onToggleSidebar, onNewChat, o
 
       {/* 纯装饰：把 dsh 页面遮罩（`_mask_`）的底色/毛玻璃镜像到导航栏下沿，让两段观感连续。
           dsh 弹模态（如首次进入的 apiKey 对话框）时遮罩铺满，这一层就该盖住导航栏——
-          壳层在 dsh 有模态期间不应可点，不要给它加 `pointer-events-none`。 */}
+          壳层在 dsh 有模态期间不应可点，不要给它加 `pointer-events-none`。
+          0.1.7-rc.2 起官方遮罩的底色落在 `::after` 并带入场淡入，镜像层随样式一起带上
+          同参数的 `background` / `backdrop-filter` 过渡（见 `getOverlayMarkedStyle`）。 */}
       <div className="absolute" style={dshStyle.marked || {}} />
 
       {/* 「更新可用」chip：紧跟「帮助」右侧。检测到新版本即出现（安装包此时已在静默下载），

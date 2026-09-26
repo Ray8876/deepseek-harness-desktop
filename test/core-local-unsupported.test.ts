@@ -3,12 +3,15 @@ import { describe, expect, it } from 'vitest'
 import { compareVersions, isCoreUnsupported, MIN_SUPPORTED_CORE_VERSION } from '@/utils/core-version'
 
 const CORE_PANEL = new URL('../src/ui/config/core.tsx', import.meta.url)
-const RECOMMEND_MANIFEST = new URL('../src-tauri/resources/version-recommend.json', import.meta.url)
+const RESOURCE_MANIFEST = new URL('../src-tauri/resources/manifest.jsonc', import.meta.url)
 
 /** 随包推荐核心版本（前端核心面板的「更新」提示基线）。 */
 function recommendedVersion(): string {
-  const raw = JSON.parse(readFileSync(RECOMMEND_MANIFEST, 'utf8')) as { dsh: string }
-  return raw.dsh
+  // 资源清单是 JSONC（允许行注释）：解析前先剥掉行注释。
+  const raw = JSON.parse(
+    readFileSync(RESOURCE_MANIFEST, 'utf8').replace(/^\s*\/\/.*$/gm, ''),
+  ) as { engines: { dsh: { recommend: string } } }
+  return raw.engines.dsh.recommend
 }
 
 /** `isUnsupportedLocal` 的函数体源码（用于锁定它不再复用推荐版本当基线）。 */
@@ -22,7 +25,8 @@ function localPredicateSource(): string {
 /**
  * 兼容性只由**最低支持基线**（0.1.5-rc.1）决定，与推荐核心版本无关。
  *
- * 回归背景：本地核心的判定曾复用「推荐核心版本」（`version-recommend.json`，误报发生时
+ * 回归背景：本地核心的判定曾复用「推荐核心版本」（`manifest.jsonc` 的
+ * `engines.dsh.recommend`，误报发生时
  * 为 0.1.7-alpha.1）当基线，于是 0.1.5-rc.3 这类**高于最低支持基线**的本地核心被误判为
  * 「不兼容」：行内挂红标、激活被拒、提示文案还引用推荐版本号。最低支持基线独立于推荐
  * 版本（issue #596），两者不可混用。

@@ -2,6 +2,8 @@ pub mod activation;
 pub mod autostart;
 pub mod builder;
 pub mod compat;
+pub mod deep_link;
+pub mod frame_log;
 #[cfg(target_os = "linux")]
 pub mod linux_tray;
 pub mod notification;

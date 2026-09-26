@@ -26,13 +26,18 @@ function refreshIfLoaded(controller: ModelsSettingsStore): void {
   void controller.load()
 }
 
+/** 桌面载体凭据：壳层给 iframe 注入 `dshDesktop`（浏览器直开没有该标记）。 */
+function isDesktopCarrier(): boolean {
+  return 'dshDesktop' in globalThis
+}
+
 function credentialOnboardingOf(): boolean {
   const page = globalThis as Partial<Record<typeof ONBOARDING_CONFIG_GLOBAL, unknown>>
   const payload = page[ONBOARDING_CONFIG_GLOBAL]
   const value = typeof payload === 'object' && payload !== null
     ? (payload as { credentialOnboarding?: unknown }).credentialOnboarding
     : undefined
-  return (value ?? true) === true && !('dshDesktop' in globalThis)
+  return (value ?? true) === true && !isDesktopCarrier()
 }
 
 export const registerModelsPage = defineRegister<ClientContext>((controller, ctx) => {
@@ -73,6 +78,7 @@ export const registerModelsPage = defineRegister<ClientContext>((controller, ctx
     remote.$on('settings/document-updated', () => {
       refreshModels()
     }),
+    remote.$on('credentials/record-updated', refreshModels),
     remote.$on('credentials/reference-updated', refreshModels),
     remote.$on('llm/adapters-updated', refreshModels),
     ctx.on('connection/reset', refreshModels),
@@ -93,12 +99,16 @@ export const registerModelsPage = defineRegister<ClientContext>((controller, ctx
       'settings.models.footer': { kind: 'list', scope: 'root' },
     },
   }, ModelsSection)))
-  controller.add(ctx.slots.inject('settings.onboarding', () => ctx.slots.register({
-    name: 'settings.onboarding',
-    id: 'welcome-notice',
-    order: -100,
-    inject: welcomeInjected,
-  }, WelcomeNotice)))
+  // 内测声明步骤在桌面载体上不再注册（0.1.7-rc.2 起官方语义）：壳层的引导座位由账号/密钥
+  // 那条入口独占，声明弹层不与它争同一个座位。
+  if (!isDesktopCarrier()) {
+    controller.add(ctx.slots.inject('settings.onboarding', () => ctx.slots.register({
+      name: 'settings.onboarding',
+      id: 'welcome-notice',
+      order: -100,
+      inject: welcomeInjected,
+    }, WelcomeNotice)))
+  }
   controller.add(ctx.slots.inject('settings.onboarding', () => ctx.slots.register({
     name: 'settings.onboarding',
     id: 'deepseek-official',

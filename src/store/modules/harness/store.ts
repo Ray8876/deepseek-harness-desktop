@@ -22,6 +22,7 @@ import { preinstall } from '../preinstall'
 import { recovery } from '../recovery'
 import { setting } from '../setting'
 import {
+  IFRAME_FRAME_GRACE_TIMEOUT,
   IFRAME_LOAD_TIMEOUT,
   IFRAME_RECOVERY_ABSOLUTE_TIMEOUT,
   IFRAME_RELOAD_MAX_ATTEMPTS,
@@ -92,11 +93,21 @@ export const harness = defineStore({
     inotifyLimitHint: '',
     /** 识别到补丁层 YAML 语法错误时的针对性提示（含文件与行列号，Loadable children 展示） */
     patchLayerHint: '',
+    heapOomHint: '',
     serviceUrl: 'http://127.0.0.1:3080',
     /** 带时间戳的 iframe 地址（boot 时生成一次，避免缓存） */
     iframeSrc: '',
     iframeLoaded: false,
     iframeError: false,
+    /**
+     * 已确认承载 dsh 文档的 iframe 代（`iframeKey`）。
+     *
+     * iframe 的 load 事件不足以证明页面加载成功：浏览器内部错误页（代理拦截、
+     * DNS 失败等）同样触发 load，且永远不会发出帧内消息（issue #705）。因此页面
+     * 是否真的起来只以「帧内自报」为准，并把确认绑定到具体那一代 iframe——重挂
+     * 之后旧文档的迟到消息不能替新文档背书。
+     */
+    iframeAliveKey: null as number | null,
     iframeKey: 0,
     serviceHealthy: false,
     serviceRunning: false,
@@ -112,6 +123,17 @@ export const harness = defineStore({
     /** 服务健康但 iframe 加载失败：页面覆盖层展示重试入口 */
     showIframeError(): boolean {
       return this.serviceHealthy && this.iframeError
+    },
+    /** 当前这一代 iframe 是否已自报承载 dsh 文档（重挂即失效，见 `iframeAliveKey`） */
+    iframeAlive(): boolean {
+      return this.iframeAliveKey === this.iframeKey
+    },
+    /**
+     * 内嵌页面加载失败的补充说明：服务已就绪却没有任何帧内消息，说明帧里根本没
+     * 起来 dsh 页面（典型是一张浏览器内部错误页），而不是服务没跑起来。
+     */
+    iframeErrorHint(): string {
+      return this.iframeAlive ? '' : i18next.t('ui.iframe_unreachable_hint')
     },
   },
   actions: {
@@ -194,9 +216,10 @@ export const harness = defineStore({
       this.serviceHealthy = false
       this.iframeLoaded = false
       this.iframeError = false
+      this.iframeAliveKey = null
       this.fail(message)
 
-      const error = await attachStartupDiagnostics(new Error(message))
+      const error = await attachStartupDiagnostics(new Error(message), true)
       if (exitToken !== bootToken)
         return
       await recovery.reviewStartupRecovery(
@@ -212,6 +235,7 @@ export const harness = defineStore({
         error.inotifyLimitHint,
         undefined,
         error.patchLayerHint,
+        error.heapOomHint,
       )
     },
 
@@ -245,6 +269,7 @@ export const harness = defineStore({
     refreshIframe() {
       this.iframeLoaded = false
       this.iframeError = false
+      this.iframeAliveKey = null
       if (iframeRefreshTimer !== undefined) {
         clearTimeout(iframeRefreshTimer)
       }
@@ -262,6 +287,23 @@ export const harness = defineStore({
 
     markIframeError() {
       this.iframeError = true
+      this.iframeLoaded = false
+    },
+
+    /** 帧内任一桥消息到达：确认帧里确实跑着 dsh 页面（load 事件不算数，见 state 注释） */
+    markIframeAlive() {
+      this.iframeAliveKey = this.iframeKey
+    },
+
+    /**
+     * 帧内文档开始离开（pagehide）：旧确认立即作废。
+     *
+     * 帧内导航（dsh 页面把整帧跳到远端登录/错误页）不换 iframe 元素，只靠代绑定
+     * 抓不到；新文档要么自己重新自报，要么在宽限窗内被判成「帧里没有 dsh 页面」。
+     * 同时撤回 load 结论：这一代已经没有任何已加载的文档了。
+     */
+    markIframeLeaving() {
+      this.iframeAliveKey = null
       this.iframeLoaded = false
     },
 
@@ -381,6 +423,7 @@ export const harness = defineStore({
       this.pluginConflictHint = ''
       this.inotifyLimitHint = ''
       this.patchLayerHint = ''
+      this.heapOomHint = ''
       preinstall.error = ''
       // 服务（重）启动成功：清空插件异常修复态（若曾进入），并重置已「暂不处理」的插件
       recovery.reset()
@@ -410,10 +453,12 @@ export const harness = defineStore({
       this.pluginConflictHint = ''
       this.inotifyLimitHint = ''
       this.patchLayerHint = ''
+      this.heapOomHint = ''
       recovery.reset()
       this.serviceHealthy = false
       this.iframeLoaded = false
       this.iframeError = false
+      this.iframeAliveKey = null
       this.startupPhase = 'process-boot'
       this.startupReason = i18next.t('status.loading_process')
       try {
@@ -467,7 +512,8 @@ export const harness = defineStore({
       }
       catch (err) {
         // 失败时附上服务日志里的真实错误行，供错误界面展示而不是只显示超时文案
-        throw await attachStartupDiagnostics(err)
+        const error = err instanceof Error ? err : new Error(String(err))
+        throw await attachStartupDiagnostics(error, error.message.includes('HARNESS_NOT_OWNED') || error.message.includes('Harness exited early'))
       }
     },
 
@@ -483,6 +529,7 @@ export const harness = defineStore({
       this.serviceHealthy = false
       this.iframeLoaded = false
       this.iframeError = false
+      this.iframeAliveKey = null
       // 重新启动/进入启动流程时先退出上一轮的错误与修复态（重启可能由插件修复、
       // 配置切换触发），避免旧的「启动失败 / Preview」等信息在启动期间闪现。
       // 注意：保留 attempts 计数，连续失败仍能命中「频繁失败」提示。
@@ -491,6 +538,7 @@ export const harness = defineStore({
       this.pluginConflictHint = ''
       this.inotifyLimitHint = ''
       this.patchLayerHint = ''
+      this.heapOomHint = ''
       recovery.clear()
       this.status = 'ready'
       let unlistenInstall: UnlistenFn | null = null
@@ -568,9 +616,9 @@ export const harness = defineStore({
           }
           throw startupError('plugin-install', String(err), 'failed')
         }
-        // 预装插件引导：首次安装、老版本升级（无指纹基线）或 preset-plugins.json
+        // 预装插件引导：首次安装、老版本升级（无指纹基线）或清单 plugins 节
         // 内容变更（社区新增推荐插件）时重新进入预设流程，装完/跳过后才拉起服务。
-        // preset-plugins.json 随安装包发布、每次安装被强制覆盖，旧文件不可比对，
+        // 清单随安装包发布、每次安装被强制覆盖，旧内容不可比对，
         // 由 Rust 侧记录内容指纹到 app-data（.store.dat），启动时比对是否有变更。
         if (await invoke<boolean>('get_preinstall_pending')) {
           this.status = 'preinstall'
@@ -602,6 +650,7 @@ export const harness = defineStore({
           error.inotifyLimitHint,
           this.serviceRunning,
           error.patchLayerHint,
+          error.heapOomHint,
         )
       }
       finally {
@@ -616,12 +665,13 @@ export const harness = defineStore({
     },
 
     /** 进入错误态（供本模块与 harness-updater 模块共用） */
-    fail(message: string, logs?: string[], pluginConflictHint?: string, inotifyLimitHint?: string, keepServiceRunning = false, patchLayerHint?: string) {
+    fail(message: string, logs?: string[], pluginConflictHint?: string, inotifyLimitHint?: string, keepServiceRunning = false, patchLayerHint?: string, heapOomHint?: string) {
       this.errorMsg = message
       this.errorLogs = logs ?? []
       this.pluginConflictHint = pluginConflictHint ?? ''
       this.inotifyLimitHint = inotifyLimitHint ?? ''
       this.patchLayerHint = patchLayerHint ?? ''
+      this.heapOomHint = heapOomHint ?? ''
       this.status = 'error'
       this.serviceRunning = keepServiceRunning
     },
@@ -771,6 +821,7 @@ export const harness = defineStore({
       this.pluginConflictHint = ''
       this.inotifyLimitHint = ''
       this.patchLayerHint = ''
+      this.heapOomHint = ''
       recovery.reset()
     },
 
@@ -805,24 +856,35 @@ export const harness = defineStore({
   },
 })
 
-// 进入 ready 后 iframe 长时间未加载（dsh 未就绪/挂起）→ 转为错误界面，
-// 避免一直停在黑色加载遮罩
-let iframeLoadTimer: ReturnType<typeof setTimeout> | null = null
+// 进入 ready 后 iframe 始终没有自报「帧里跑着 dsh 页面」→ 转为错误界面，避免一直
+// 停在黑色加载遮罩。判定只看帧内自报，不看 load：浏览器内部错误页（代理拦截、DNS
+// 失败等）同样触发 load 却永远没有帧内消息，只按 load 判定就会把一张浏览器错误页
+// 当成加载成功——壳层既不给重试入口也不报错，用户只能重启电脑（issue #705）。
+let iframeWatch: { loaded: boolean, timer: ReturnType<typeof setTimeout> } | null = null
 harness.$subscribe(() => {
   const { status, serviceHealthy, iframeLoaded, iframeError } = harness.$state
-  if (status === 'ready' && serviceHealthy && !iframeLoaded && !iframeError) {
-    if (!iframeLoadTimer) {
-      iframeLoadTimer = setTimeout(() => {
-        iframeLoadTimer = null
-        harness.iframeLoaded = false
-        harness.iframeError = true
-      }, IFRAME_LOAD_TIMEOUT)
+  const watching = status === 'ready' && serviceHealthy && !harness.iframeAlive && !iframeError
+  if (!watching) {
+    if (iframeWatch) {
+      clearTimeout(iframeWatch.timer)
+      iframeWatch = null
     }
+    return
   }
-  else {
-    if (iframeLoadTimer) {
-      clearTimeout(iframeLoadTimer)
-      iframeLoadTimer = null
-    }
+  // 帧已提交文档（load 已触发）却没有帧内消息：只剩「帧里是浏览器错误页」这种可能，
+  // 用远短于整体加载上限的宽限窗口尽快给出可重试界面。
+  if (iframeWatch?.loaded === iframeLoaded)
+    return
+  if (iframeWatch) {
+    clearTimeout(iframeWatch.timer)
+  }
+  iframeWatch = {
+    loaded: iframeLoaded,
+    timer: setTimeout(() => {
+      iframeWatch = null
+      console.warn('[Harness] iframe never confirmed a dsh document, showing retryable error')
+      harness.iframeLoaded = false
+      harness.iframeError = true
+    }, iframeLoaded ? IFRAME_FRAME_GRACE_TIMEOUT : IFRAME_LOAD_TIMEOUT),
   }
 })

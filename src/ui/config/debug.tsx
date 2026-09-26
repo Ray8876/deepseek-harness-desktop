@@ -1,3 +1,4 @@
+import type { RuntimeInfo } from '@/types'
 import { ArrowRotateRight, ArrowUpRightFromSquare, ChevronRight, Copy, Folder, Power } from '@gravity-ui/icons'
 import { Button, Chip, Description, Input, Link, ListBox, Select, Spinner, Switch } from '@heroui/react'
 import { useMutation, useQuery } from '@tanstack/react-query'
@@ -11,23 +12,14 @@ import { Panel } from '@/components/panel'
 import { queryKeys } from '@/config/query-keys'
 import { useListen } from '@/hooks/use-listen'
 import { store } from '@/store'
+import { HARNESS_HEAP_MAX_MB, HARNESS_HEAP_MIN_MB } from '@/store/modules/setting'
 import { ConfigCloseAction } from '@/ui/config/components/close-action'
 import { ConfigLaunchOnLogin } from '@/ui/config/components/launch-on-login'
 import { useCoreBreakingConfirm } from '@/ui/config/hooks/use-core-breaking-confirm'
+import { useCoreProfileSwitch } from '@/ui/config/hooks/use-core-profile-switch'
 import { toast } from '@/utils/toast'
 
 const ZOOM_OPTIONS = Array.from({ length: 16 }, (_, index) => Number((0.5 + index * 0.1).toFixed(1)))
-
-export interface RuntimeInfo {
-  app_version: string
-  dsh_version: string | null
-  node_version: string
-  service_url: string
-  data_dir: string
-  log_path: string
-  platform: string
-  arch: string
-}
 
 export interface CliLinkStatus {
   enabled: boolean
@@ -43,10 +35,12 @@ export function ConfigDebug() {
   const { serviceRunning, busyAction } = useStore(store.harness)
   const { updateInfo } = useStore(store.harnessUpdater)
   const { holder: coreBreakingHolder, confirmCoreBreaking } = useCoreBreakingConfirm()
+  const { holder: coreProfileSwitchHolder, guardCoreUpgrade } = useCoreProfileSwitch()
 
   // 端口编辑态：用户尚未输入时为 undefined，展示值始终以 store 中已保存的端口为准。
   // 初值不写入 state（避免渲染期副作用），用户一旦输入即以输入值为准。
   const [portInput, setPortInput] = useState<number>()
+  const [heapInput, setHeapInput] = useState<string>()
 
   const { data: info, refetch: refreshInfo } = useQuery({
     queryKey: queryKeys.info,
@@ -58,8 +52,11 @@ export function ConfigDebug() {
     void refreshInfo()
   })
 
-  const { port: savedPort, zoom_factor: zoomFactor } = useStore(store.setting)
+  const { port: savedPort, zoom_factor: zoomFactor, harness_max_heap_mb: savedHeapMb } = useStore(store.setting)
   const port = portInput ?? savedPort
+  const heapValue = heapInput ?? String(savedHeapMb ?? '')
+  /** 空输入代表自动值（null），其余按数字解析，非法值交给保存前的整数校验拦下 */
+  const parsedHeap = heapValue.trim() === '' ? null : Number(heapValue)
 
   const { data: cliStatus, refetch: refreshCliStatus } = useQuery({
     queryKey: queryKeys.cliStatus,
@@ -71,12 +68,19 @@ export function ConfigDebug() {
     store.harnessUpdater.showToast(() => handleUpdate())
   }
 
-  /** 点击「立即更新」：目标版本高于 rc.2 时先弹破坏性更改确认，取消则中止更新 */
+  /**
+   * 点击「立即更新」：目标版本高于 rc.2 时先弹破坏性更改确认，取消则中止更新；
+   * 目标版本是升级时先落到配套版本档案，更新失败再把档案切回去。
+   */
   async function handleUpdate() {
     const info = store.harnessUpdater.updateInfo
     if (!info || !(await confirmCoreBreaking(info.tag)))
       return
-    await store.harnessUpdater.handleUpdate()
+    const guard = await guardCoreUpgrade(info.tag)
+    if (!guard)
+      return
+    if (!(await store.harnessUpdater.handleUpdate()))
+      await guard.rollback?.()
   }
 
   const { mutate: onToggleCliLink } = useMutation({
@@ -142,6 +146,37 @@ export function ConfigDebug() {
     },
   })
 
+  const { mutate: onSaveHeap } = useMutation({
+    mutationFn: async (mb: number | null) => {
+      // 空输入 = 交回自动值；Rust 侧把 0 归一化为 None（物理内存一半，见 workflow/heap.rs）
+      if (mb !== null && (!Number.isInteger(mb) || mb < HARNESS_HEAP_MIN_MB || mb > HARNESS_HEAP_MAX_MB)) {
+        throw new Error('HEAP_INVALID')
+      }
+      await store.setting.update({ harnessMaxHeapMb: mb ?? 0 })
+      const key = toast(t('messages.heap_changed'), {
+        variant: 'accent',
+        description: t('messages.heap_restart_hint'),
+        timeout: 10_000,
+        actionProps: {
+          children: t('app.restart'),
+          onPress: () => {
+            store.harness.restart()
+            toast.close(key)
+          },
+        },
+      })
+    },
+    onError: (err: unknown) => {
+      console.error('[ConfigDebug] save heap limit failed:', err)
+      if (String(err).includes('HEAP_INVALID')) {
+        toast(t('messages.heap_invalid'), { variant: 'danger' })
+      }
+      else {
+        toast(t('messages.heap_save_failed'), { variant: 'danger' })
+      }
+    },
+  })
+
   const { mutate: onRevealDataDir } = useMutation({
     mutationFn: () => invoke('reveal_data_dir'),
     onError: (err: unknown) => {
@@ -154,6 +189,7 @@ export function ConfigDebug() {
     <div className="space-y-3">
       <Panel.Header title={t('config.application')} testId="dsh-config-panel-title" />
       {coreBreakingHolder}
+      {coreProfileSwitchHolder}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-wider text-muted">
@@ -318,6 +354,28 @@ export function ConfigDebug() {
               variant="primary"
               className="rounded-md h-8"
               onPress={() => onSavePort(port)}
+            >
+              {t('buttons.save')}
+            </Button>
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-medium text-ink">{t('ui.heap_limit')}</span>
+          <div className="flex items-center gap-1.5">
+            <Input
+              type="number"
+              variant="secondary"
+              value={heapValue}
+              placeholder={t('ui.heap_limit_auto')}
+              onChange={e => setHeapInput(e.target.value)}
+              className="w-24 h-8 rounded-md [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              aria-label={t('ui.heap_limit')}
+            />
+            <Button
+              size="sm"
+              variant="primary"
+              className="rounded-md h-8"
+              onPress={() => onSaveHeap(parsedHeap)}
             >
               {t('buttons.save')}
             </Button>

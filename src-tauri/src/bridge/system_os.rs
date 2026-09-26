@@ -155,7 +155,9 @@ pub async fn clear_service_logs(app_handle: AppHandle) -> Result<(), String> {
 /// `log::*`；仅对旧版本已落盘、尚未轮转掉的 `frontend:` 行做一次兜底剔除。据此把
 /// 「运行日志」拆成：
 /// - `### 前台日志`：取自前端独立文件 `logs/desktop.frontdesk.log`
-///   （`logger::init` 单独落盘，见 logger/mod.rs），仅含前端 `console.*`；
+///   （`logger::init` 单独落盘，见 logger/mod.rs），含壳层前端 `console.*` 与
+///   注入脚本从 dsh iframe 转回的帧内 console/未捕获异常（标识 `[iframe]`，
+///   见 desktop/frame_log.rs）；
 /// - `### 后台日志`：取自 `logs/desktop.log`，剔除残余 `target: "frontend"` 行，
 ///   仅保留后端 `log::*`。
 /// 每段取末尾最多 `MAX_LINES` 行（前端日志量大，仅取一半 `FRONTEND_MAX_LINES`），

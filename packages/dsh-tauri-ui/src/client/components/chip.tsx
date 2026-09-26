@@ -1,4 +1,4 @@
-// 引用源 @deepseek-ai/dsh-client-ui-agent-preset · packages/client/ui-agent-preset/src/client/AgentPresetSeat.module.css ; @deepseek-ai/dsh-client-ui-permission-presets · packages/client/ui-permission-presets/src/client/PermissionSelect.module.css ; @deepseek-ai/dsh-client-ui-permission-presets · packages/client/ui-permission-presets/src/client/PermissionRow.module.css · 版本 0.1.7-alpha.1（≥0.1.5-rc.1）· hash seat=cubgiG_seat composerTrigger=iWlSmW_trigger selector=oY77xG_selector
+// 引用源 @deepseek-ai/dsh-client-ui-agent-preset · packages/client/ui-agent-preset/src/client/AgentPresetSeat.module.css ; @deepseek-ai/dsh-client-ui-permission-presets · packages/client/ui-permission-presets/src/client/PermissionSelect.module.css ; @deepseek-ai/dsh-client-ui-permission-presets · packages/client/ui-permission-presets/src/client/PermissionRow.module.css · 版本 0.1.7-rc.2（≥0.1.5-rc.1）· hash seat=cubgiG_seat composerTrigger=iWlSmW_trigger selector=oY77xG_selector
 import type { ButtonHTMLAttributes, ReactElement, ReactNode } from 'react'
 import { compact } from 'dsh-tauri/client'
 import { useMountStyle } from '../hooks/use-mount-style'

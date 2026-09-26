@@ -56,6 +56,24 @@ export interface LlmModelDiscoveryRequest {
   apiKey?: string
 }
 
+export interface LlmCatalogModel {
+  id: string
+  name: string
+  description?: string
+}
+
+export interface LlmCatalogGroup {
+  id: string
+  name: string
+  models: readonly LlmCatalogModel[]
+}
+
+export interface LlmModelCatalog {
+  default: { provider: string, model: string, reasoningEffort?: string }
+  routableProviders: readonly string[]
+  groups: readonly LlmCatalogGroup[]
+}
+
 export interface LlmDiscoveredModel {
   id: string
   name?: string
@@ -80,11 +98,16 @@ export interface LlmRemote {
   discoverModels: (settingsNs: string, request: LlmModelDiscoveryRequest) => Promise<RemoteResult<LlmDiscoveredModel[]>>
 }
 
-export type RemoteEventName = 'settings/document-updated' | 'credentials/reference-updated' | 'llm/adapters-updated'
+export interface SessionRemote {
+  modelCatalog: () => Promise<RemoteResult<LlmModelCatalog>>
+}
+
+export type RemoteEventName = 'settings/document-updated' | 'credentials/reference-updated' | 'credentials/record-updated' | 'llm/adapters-updated'
 
 export interface ClientRemote {
   settings: SettingsRemote
   credentials: CredentialsRemote
   llm: LlmRemote
+  session: SessionRemote
   $on: (event: RemoteEventName, listener: () => void) => () => void
 }

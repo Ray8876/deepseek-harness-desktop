@@ -1,6 +1,8 @@
+import type { DshShortcutRow } from '@/hooks/use-dsh-shortcuts'
 import { useRef, useState } from 'react'
 import { If } from 'react-if-lite'
 import { useStore } from 'valtio-define'
+import { useDshShortcuts } from '@/hooks/use-dsh-shortcuts'
 import { useDshStyle } from '@/hooks/use-dsh-style'
 import { useIframeMessage } from '@/hooks/use-iframe-message'
 import { useIframePost } from '@/hooks/use-iframe-post'
@@ -15,6 +17,7 @@ import { PreinstallSetup } from './setup-preinstall'
 interface NavBridgeMessage {
   type?: string
   collapsed?: boolean
+  rows?: unknown
 }
 
 /**
@@ -33,6 +36,7 @@ export function Webview() {
   const post = useIframePost(iframeRef)
 
   const [dshStyle] = useDshStyle()
+  const [, setDshShortcuts] = useDshShortcuts()
 
   const { status, serviceHealthy } = useStore(store.harness)
   const { recovery } = useStore(store.recovery)
@@ -41,6 +45,9 @@ export function Webview() {
   useIframeMessage<NavBridgeMessage>(iframeRef, (data) => {
     if (data.type === 'dsh://sidebar:collapsed') {
       setSidebarCollapsed(Boolean(data.collapsed))
+    }
+    else if (data.type === 'dsh://shortcuts') {
+      setDshShortcuts({ rows: parseShortcutRows(data.rows) })
     }
   })
 
@@ -72,6 +79,8 @@ export function Webview() {
         onToggleSidebar: () => post({ type: 'dsh://sidebar:toggle' }),
         onNewChat: () => post({ type: 'dsh://session:new' }),
         onOpenFolder: () => post({ type: 'dsh://workspace:add' }),
+        onEditAction: (action: string) => post({ type: 'dsh://edit', action }),
+        onOpenShortcuts: () => post({ type: 'dsh://shortcuts:open' }),
       }
     : {}
 
@@ -84,4 +93,25 @@ export function Webview() {
       </div>
     </main>
   )
+}
+
+/** 目录行校验：只接受有 id 与文案的行，键位逐项取字符串（桥消息按不可信输入处理）。 */
+function parseShortcutRows(rows: unknown): DshShortcutRow[] {
+  if (!Array.isArray(rows))
+    return []
+  const out: DshShortcutRow[] = []
+  for (const row of rows) {
+    if (typeof row !== 'object' || row === null)
+      continue
+    const entry = row as { id?: unknown, label?: unknown, keys?: unknown, aria?: unknown }
+    if (typeof entry.id !== 'string' || typeof entry.label !== 'string')
+      continue
+    out.push({
+      id: entry.id,
+      label: entry.label,
+      keys: Array.isArray(entry.keys) ? entry.keys.filter((key): key is string => typeof key === 'string') : [],
+      ...typeof entry.aria === 'string' ? { aria: entry.aria } : {},
+    })
+  }
+  return out
 }

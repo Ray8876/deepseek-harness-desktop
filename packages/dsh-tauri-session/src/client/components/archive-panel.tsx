@@ -5,6 +5,7 @@ import type { ArchivePanelProps, DeleteConfirm } from './archive-panel.types'
 import { Button, ChevronDown, Chip, Ellipsis, FolderOpen, Icon, IconButton, Input, Magnifier, Menu, Modal, Toast, TrashBin, useMountStyle } from 'dsh-tauri-ui/client'
 import { isEmpty, useWatchImmediate } from 'dsh-tauri/client'
 import { useCallback, useState } from 'react'
+import { PLUGIN_ID } from '../../shared/constants'
 import { SESSION_STYLE_ID } from '../constants'
 import { useArchiveView } from '../hooks/use-archive-view'
 import { locale } from '../locales'
@@ -22,7 +23,7 @@ import { formatTime, projectOptions } from './archive-panel.utils'
 
 /** 设置页「归档」分区：已归档的聊天列表（搜索 / 排序 / 项目筛选 / 取消归档 / 彻底删除）。 */
 export function ArchivePanel(props: ArchivePanelProps): ReactElement | null {
-  useMountStyle(archivePanelStyle, SESSION_STYLE_ID)
+  useMountStyle(archivePanelStyle, SESSION_STYLE_ID, PLUGIN_ID)
   const { ui, rows, visible, groups, busy } = useArchiveView(props)
   locale.useLocale()
   const [confirm, setConfirm] = useState<DeleteConfirm>(null)

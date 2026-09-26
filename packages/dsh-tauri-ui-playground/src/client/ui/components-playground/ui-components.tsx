@@ -29,6 +29,7 @@ import {
   Xmark,
 } from 'dsh-tauri-ui/client'
 import { useState } from 'react'
+import { PLUGIN_ID } from '../../../shared/constants'
 import { UI_COMPONENTS_STYLE_ID } from '../../constants'
 import uiComponentsStyle from './ui-components.cssr'
 
@@ -117,7 +118,7 @@ function SourceCard({ entry }: { entry: UiComponentEntry }): ReactElement {
 }
 
 export function UiComponentsPanel(): ReactElement {
-  useMountStyle(uiComponentsStyle, UI_COMPONENTS_STYLE_ID)
+  useMountStyle(uiComponentsStyle, UI_COMPONENTS_STYLE_ID, PLUGIN_ID)
   const [checked, setChecked] = useState(true)
   const [activePill, setActivePill] = useState('alpha')
   const [query, setQuery] = useState('')

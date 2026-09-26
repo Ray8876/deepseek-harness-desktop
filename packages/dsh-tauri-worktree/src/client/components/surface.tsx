@@ -80,7 +80,7 @@ export function WorktreeSurface({ sessionId }: SurfaceBarProps): ReactElement | 
             </GoalBarAction>
           )}
         </GoalBar>
-        <Logs log={state.log} open={logOpen} />
+        {logOpen && <Logs log={state.log} open={logOpen} />}
       </div>
     </div>
   )

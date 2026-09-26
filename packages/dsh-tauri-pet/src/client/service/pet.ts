@@ -3,10 +3,13 @@ import type { PetActionResult, PetStatus } from './pet.types'
 import { PET_HATCH_PROMPT } from '../constants'
 import { store } from '../store'
 import {
+  getForceXwayland,
   getPetList,
+  getPetOverlaySupported,
   getPetStatus,
   getPresetPets,
   postActivePet,
+  postForceXwayland,
   postPetEnabled,
   postPetImport,
   postPetSize,
@@ -30,6 +33,42 @@ export async function loadPetStatus(): Promise<PetStatus | null> {
   }
   catch (error) {
     console.error('[dsh-tauri-pet] load pet status failed:', error)
+    return null
+  }
+}
+
+/**
+ * Query：读取当前环境能否让桌宠窗口置顶并定位（issue #649）。
+ *
+ * 与清单装载分开发起：判定失败只应让提示不出现，不该把设置页整体打成错误态。
+ * 失败返回 `null` 并保留 store 中的旧值，重试交给下一次进入设置页。
+ */
+export async function loadPetOverlaySupported(): Promise<boolean | null> {
+  try {
+    const supported = await getPetOverlaySupported()
+    store.pet.setOverlaySupported(supported)
+    return supported
+  }
+  catch (error) {
+    console.error('[dsh-tauri-pet] load pet overlay support failed:', error)
+    return null
+  }
+}
+
+/**
+ * Query：读取「强制 XWayland」开关的持久值（issue #649）。
+ *
+ * 与 `loadPetOverlaySupported` 同样的失败语义：返回 `null` 并保留 store 中的旧值，
+ * 读不到只让开关不出现，不把设置页整体打成错误态。
+ */
+export async function loadForceXwayland(): Promise<boolean | null> {
+  try {
+    const enabled = await getForceXwayland()
+    store.pet.setForceXwayland(enabled)
+    return enabled
+  }
+  catch (error) {
+    console.error('[dsh-tauri-pet] load force xwayland failed:', error)
     return null
   }
 }
@@ -110,6 +149,23 @@ export async function togglePet(input: { enabled: boolean }): Promise<PetActionR
   }
   catch (error) {
     console.error('[dsh-tauri-pet] toggle pet failed:', error)
+    return { ok: false, error: messageOf(error) }
+  }
+}
+
+/**
+ * Action：切换「强制 XWayland」开关。
+ *
+ * 只落盘，不改变本次进程的任何行为：`GDK_BACKEND` 在 GTK 初始化时已被读走，
+ * 生效要等下次启动，调用方据此提示用户重启。
+ */
+export async function toggleForceXwayland(input: { enabled: boolean }): Promise<PetActionResult> {
+  try {
+    store.pet.setForceXwayland(await postForceXwayland(input.enabled))
+    return { ok: true }
+  }
+  catch (error) {
+    console.error('[dsh-tauri-pet] toggle force xwayland failed:', error)
     return { ok: false, error: messageOf(error) }
   }
 }

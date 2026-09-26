@@ -5,6 +5,7 @@ import {
   addDraftAttachments,
   canAddDraftAttachments,
   draftAttachmentIds,
+  hasSendableContent,
   interceptsSubmit,
   NO_DRAFT_ATTACHMENTS,
   removeDraftAttachment,
@@ -43,6 +44,23 @@ describe('工作树模式选择框的可见性与发送拦截（issue #648）', 
     expect(interceptsSubmit(sessionState({ isGit: true, mode: 'pending' }))).toBe(true)
     expect(interceptsSubmit(sessionState({ isGit: true, mode: 'local' }))).toBe(false)
     expect(interceptsSubmit(sessionState({ isGit: true, mode: 'worktree' }))).toBe(false)
+  })
+})
+
+describe('hasSendableContent', () => {
+  it('有正文即可发送', () => {
+    expect(hasSendableContent('hi', [])).toBe(true)
+    expect(hasSendableContent('  hi  ', [])).toBe(true)
+  })
+
+  it('纯附件（截图/文件、无正文）同样可发送：核心认这种发送，漏判会把它放回本地会话', () => {
+    expect(hasSendableContent('', ['a'])).toBe(true)
+    expect(hasSendableContent('   ', ['a'])).toBe(true)
+  })
+
+  it('既没有正文也没有附件时不可发送，拦截器必须放行', () => {
+    expect(hasSendableContent('', [])).toBe(false)
+    expect(hasSendableContent('  \n ', [])).toBe(false)
   })
 })
 

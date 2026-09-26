@@ -35,9 +35,9 @@ cargo check
 cargo test
 ```
 
-For Developer ID signing, notarization, and the required GitHub Actions secrets, see [macOS signing and notarization](./spec/MACOS_SIGNING.md).
+For Developer ID signing, notarization, and the required GitHub Actions secrets, see [`.github/workflows/build-macos.yml`](../.github/workflows/build-macos.yml) and [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
-To add a new built-in (internal) plugin bundled with the app, see [Built-in (Internal) Plugins](./spec/BUILTIN_PLUGINS.md).
+To add a new built-in (internal) plugin bundled with the app, see [Built-in (internal) plugins](../src-tauri/resources/README.md#built-in-internal-plugins).
 
 ## Tips
 

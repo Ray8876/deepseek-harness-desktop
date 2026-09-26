@@ -4,6 +4,7 @@ import { Clock, Icon, mountStyle } from 'dsh-tauri-ui/client'
 import { compact, defineRegister, map } from 'dsh-tauri/client'
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
+import { PLUGIN_ID } from '../../shared/constants'
 import { SESSION_ICON_ATTRIBUTE, SESSION_ICON_STYLE_ID, SIDEBAR_SELECTOR } from '../constants'
 import { store } from '../store'
 import sessionIconStyle from '../styles/index.cssr'
@@ -78,7 +79,7 @@ function scan(): void {
 export const sessionIconsFeature = defineRegister<ClientContext>((controller) => {
   if (typeof document === 'undefined')
     return
-  controller.add(mountStyle(sessionIconStyle, SESSION_ICON_STYLE_ID))
+  controller.add(mountStyle(sessionIconStyle, SESSION_ICON_STYLE_ID, PLUGIN_ID))
   controller.observe(document.body, scan)
   controller.add(store.scheduler.$subscribe(scan))
 

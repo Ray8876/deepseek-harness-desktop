@@ -4,7 +4,9 @@ import type {
   ClientRemote,
   CredentialInfo,
   LlmConfigurableProvider,
+  LlmModelCatalog,
   LlmProviderInfo,
+  RemoteResult,
   SettingsNamespaceView,
 } from '../types/remotes.ts'
 import type { SettingsSchemaOperations } from './schema-operations.ts'
@@ -48,7 +50,14 @@ export function joinProviderDirectory(
       active: true,
     })
   }
-  return rows
+  return [...rows].sort((left, right) => routeRank(left.provider) - routeRank(right.provider))
+}
+
+/** 账号与官方两条 DeepSeek 路由置顶（账号优先），其余保持声明顺序。 */
+function routeRank(provider: string): number {
+  if (provider === 'deepseek-account')
+    return 0
+  return provider === 'deepseek-official' ? 1 : 2
 }
 
 export interface ProviderRow {
@@ -58,7 +67,11 @@ export interface ProviderRow {
   apiKeyEnv: string | undefined
   credential: CredentialInfo | undefined
   derivedCredential?: CredentialInfo
+  accountAvailable?: boolean
 }
+
+/** 账号路由：凭据走官方账号登录，不读 API-key 环境变量引用。 */
+const ACCOUNT_PROVIDER = 'deepseek-account'
 
 export interface ModelsSettingsState {
   status: 'idle' | 'loading' | 'ready' | 'error'
@@ -71,6 +84,20 @@ export interface ModelsSettingsState {
 
 export function deriveKeyRef(provider: string): string {
   return `${provider.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`
+}
+
+/** 模型目录读取：`session/modelCatalog` 只在带账号路由的核心上存在，老核心按「不可用」处理。 */
+async function modelCatalogOf(remote: ClientRemote): Promise<RemoteResult<LlmModelCatalog> | undefined> {
+  try {
+    const session = remote.session
+    const call = session?.modelCatalog
+    if (typeof call !== 'function')
+      return undefined
+    return await call.call(session)
+  }
+  catch {
+    return undefined
+  }
 }
 
 export function protocolChoices(
@@ -158,11 +185,15 @@ export class ModelsSettingsStore {
         entry,
         configured,
         removable,
-        apiKeyEnv: apiKeyEnvOf(namespace, entry.settingsPath, this.schema),
+        apiKeyEnv: entry.provider === ACCOUNT_PROVIDER
+          ? undefined
+          : apiKeyEnvOf(namespace, entry.settingsPath, this.schema),
         credential: undefined,
       }
     })
-    const refs = [...new Set(rows.map(row => row.apiKeyEnv ?? deriveKeyRef(row.entry.provider)))]
+    if (rows.some(row => row.entry.provider === ACCOUNT_PROVIDER))
+      await this.joinAccountAvailability(rows)
+    const refs = [...new Set(rows.filter(row => row.entry.provider !== ACCOUNT_PROVIDER).map(row => row.apiKeyEnv ?? deriveKeyRef(row.entry.provider)))]
     let credentials: Record<string, CredentialInfo> = {}
     let credentialError: string | null = null
     if (refs.length > 0) {
@@ -179,17 +210,35 @@ export class ModelsSettingsStore {
       s.error = null
       s.credentialError = credentialError
       s.writable = writable
-      s.rows = rows.map((row) => {
-        const named = row.apiKeyEnv === undefined ? undefined : credentials[row.apiKeyEnv]
-        const derived = row.apiKeyEnv !== undefined ? undefined : credentials[deriveKeyRef(row.entry.provider)]
-        return {
-          ...row,
-          ...named === undefined ? {} : { credential: named },
-          ...derived === undefined ? {} : { derivedCredential: derived },
-        }
-      })
+      s.rows = rows
+        .filter(row => row.entry.provider !== ACCOUNT_PROVIDER || row.accountAvailable === true)
+        .map((row) => {
+          if (row.entry.provider === ACCOUNT_PROVIDER)
+            return row
+          const named = row.apiKeyEnv === undefined ? undefined : credentials[row.apiKeyEnv]
+          const derived = row.apiKeyEnv !== undefined ? undefined : credentials[deriveKeyRef(row.entry.provider)]
+          return {
+            ...row,
+            ...named === undefined ? {} : { credential: named },
+            ...derived === undefined ? {} : { derivedCredential: derived },
+          }
+        })
       s.namespaces = namespaces
     })
+  }
+
+  /**
+   * 账号路由是否可用：登录状态本身不暴露给页面，用模型目录里「该分组有模型」表达——
+   * 未登录时账号分组为空，此时该行应从列表隐去（rc.2 起官方语义），只留可填 API-key 的官方路由。
+   */
+  private async joinAccountAvailability(rows: ProviderRow[]): Promise<void> {
+    const catalog = await modelCatalogOf(this.remote)
+    const available = catalog?.ok === true
+      && catalog.value.groups.some(group => group.id === ACCOUNT_PROVIDER && group.models.length > 0)
+    for (const row of rows) {
+      if (row.entry.provider === ACCOUNT_PROVIDER)
+        row.accountAvailable = available
+    }
   }
 
   private failLoad(generation: number, message: string): void {
@@ -205,6 +254,8 @@ export class ModelsSettingsStore {
 export function providerUsable(row: ProviderRow): boolean {
   if (!row.entry.active)
     return false
+  if (row.entry.provider === ACCOUNT_PROVIDER)
+    return row.accountAvailable === true
   if (row.apiKeyEnv === undefined)
     return true
   return row.credential?.configured === true

@@ -110,7 +110,7 @@ export async function removeProviderProfile(
 }
 
 export function needsSetup(row: ProviderRow, anyUsable: boolean): boolean {
-  if (anyUsable)
+  if (anyUsable || row.entry.provider === 'deepseek-account')
     return false
   if (row.entry.settingsPath.length > 0)
     return false
@@ -164,7 +164,13 @@ export function ModelsSection(props: ModelsSectionProps): ReactNode {
 
 function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace, renderSlot: ModelsRenderSlot }): ReactNode {
   const { controller, operations, schema, t } = injected
-  const state = injected.useSnapshot(snapshot => snapshot)
+  const snapshot = injected.useSnapshot(value => value)
+  const state = {
+    ...snapshot,
+    rows: snapshot.rows.map(row => row.entry.provider === 'deepseek-account'
+      ? { ...row, entry: { ...row.entry, displayName: t('deepSeekAccount') } }
+      : row),
+  }
   const [editing, setEditing] = useState<EditorTarget | undefined>(undefined)
   const [addOpen, setAddOpen] = useState(false)
   const [addMode, setAddMode] = useState<AddMode>('catalog')
@@ -602,7 +608,9 @@ function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace, renderS
         className={styles.deleteDialog as string}
         footer={(
           <>
-            <Button variant="outline" autoFocus disabled={deleting} onClick={closeDelete}>
+            {/* rc.2 的 Modal 由 `useModalLayer` 认 `data-modal-autofocus` 决定初始焦点；
+                更早的核心没有这层管理，React 的 `autoFocus` 仍是唯一落点，两者并存。 */}
+            <Button variant="outline" autoFocus data-modal-autofocus disabled={deleting} onClick={closeDelete}>
               {t('cancel')}
             </Button>
             <Button

@@ -95,6 +95,10 @@ pub async fn install_dependencies(app_handle: AppHandle) -> Result<bool, String>
     // 非 Windows 返回 true，保持原有依赖集合不变。
     let git_ok = config::git_runtime_ready(&app_handle);
 
+    // 依赖路径映射回写：系统已有合规版本记 `null`（使用系统环境），只有真正托管在
+    // 本地的内核才记路径。幂等，且内容未变化时不落盘。
+    download::record_mappings(&app_handle);
+
     // 启动自愈捷径：记录显示未安装、但运行时文件已全部在盘。常见于桌面端自更新
     // 安装器强杀进程，或上次启动时核心文件短暂缺失被 workflow::start 复位
     // `installed`（一旦复位，此后每次启动都会走进安装分支）。此时直接补记

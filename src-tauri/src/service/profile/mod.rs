@@ -579,11 +579,17 @@ pub fn reset_with_root(profiles_root: &Path, id: &str) -> Result<(), String> {
 /// - `name` 为 `None` 时按 source_id 自动递增；`Some` 时规范化并校验冲突；
 /// - 复制后清除搬入的 pnpm 元数据（`.modules.yaml`），并重写 manifest name 为
 ///   `dsh-profile-<new-id>`。
-pub fn clone_with_root(profiles_root: &Path, source_id: &str, name: Option<&str>) -> Result<Profile, String> {
+pub fn clone_with_root(
+    profiles_root: &Path,
+    source_id: &str,
+    name: Option<&str>,
+) -> Result<Profile, String> {
     fs_guard::validate_id(source_id)?;
     let src_dir = fs_guard::join_safe(profiles_root, source_id)?;
     if !src_dir.is_dir() {
-        return Err(format!("PROFILE_NOT_FOUND: profile {source_id} does not exist"));
+        return Err(format!(
+            "PROFILE_NOT_FOUND: profile {source_id} does not exist"
+        ));
     }
 
     let new_id = match name {
@@ -594,7 +600,9 @@ pub fn clone_with_root(profiles_root: &Path, source_id: &str, name: Option<&str>
             }
             let id = normalize_profile_id(trimmed);
             if id.is_empty() {
-                return Err("PROFILE_INVALID_NAME: profile name has no usable characters".to_string());
+                return Err(
+                    "PROFILE_INVALID_NAME: profile name has no usable characters".to_string(),
+                );
             }
             if id.len() > 64 {
                 return Err("PROFILE_NAME_TOO_LONG: profile id exceeds 64 characters".to_string());
@@ -649,37 +657,38 @@ fn copy_dir_tree(src: &Path, dst: &Path) -> Result<(), String> {
     let entries: Vec<_> = read_dir
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("COPY_ENTRY: {e}"))?;
-    entries.par_iter().try_for_each(|entry| -> Result<(), String> {
-        let name = entry.file_name();
-        // 仅跳过运行时产物（不随克隆迁移）
-        if let Some(s) = name.to_str() {
-            if s == ".harness.pid" || s == ".backups" {
-                return Ok(());
+    entries
+        .par_iter()
+        .try_for_each(|entry| -> Result<(), String> {
+            let name = entry.file_name();
+            // 仅跳过运行时产物（不随克隆迁移）
+            if let Some(s) = name.to_str() {
+                if s == ".harness.pid" || s == ".backups" {
+                    return Ok(());
+                }
             }
-        }
-        let src_path = entry.path();
-        let dst_path = dst.join(&name);
-        let ty = entry.file_type().map_err(|e| format!("COPY_TYPE: {e}"))?;
-        if ty.is_symlink() {
-            // 保留符号链接原样（如 node_modules/.bin 下的可执行链接）
-            let target = std::fs::read_link(&src_path)
-                .map_err(|e| format!("COPY_LINK_READ: {e}"))?;
-            copy_symlink(&target, &dst_path)?;
-        } else if ty.is_dir() {
-            copy_dir_tree(&src_path, &dst_path)?;
-        } else if ty.is_file() {
-            fs::copy(&src_path, &dst_path).map_err(|e| format!("COPY_FILE: {e}"))?;
-        }
-        Ok(())
-    })?;
+            let src_path = entry.path();
+            let dst_path = dst.join(&name);
+            let ty = entry.file_type().map_err(|e| format!("COPY_TYPE: {e}"))?;
+            if ty.is_symlink() {
+                // 保留符号链接原样（如 node_modules/.bin 下的可执行链接）
+                let target =
+                    std::fs::read_link(&src_path).map_err(|e| format!("COPY_LINK_READ: {e}"))?;
+                copy_symlink(&target, &dst_path)?;
+            } else if ty.is_dir() {
+                copy_dir_tree(&src_path, &dst_path)?;
+            } else if ty.is_file() {
+                fs::copy(&src_path, &dst_path).map_err(|e| format!("COPY_FILE: {e}"))?;
+            }
+            Ok(())
+        })?;
     Ok(())
 }
 
 /// 在目标位置重建一条符号链接（指向原链接相同的目标）。
 #[cfg(unix)]
 fn copy_symlink(target: &std::path::Path, dst: &Path) -> Result<(), String> {
-    std::os::unix::fs::symlink(target, dst)
-        .map_err(|e| format!("COPY_LINK_CREATE: {e}"))
+    std::os::unix::fs::symlink(target, dst).map_err(|e| format!("COPY_LINK_CREATE: {e}"))
 }
 
 /// 在目标位置重建一条符号链接（Windows 下需要权限，best-effort）。
@@ -717,8 +726,8 @@ fn rewrite_manifest_name(dir: &Path, new_id: &str) -> Result<(), String> {
 
 /// 同目录临时文件 + rename 原子替换写入档案清单（调用方决定错误码前缀）。
 fn rewrite_manifest_name_atomic(path: &Path, manifest: &serde_json::Value) -> Result<(), String> {
-    let content = serde_json::to_string_pretty(manifest)
-        .map_err(|e| format!("MANIFEST_RENDER: {e}"))?;
+    let content =
+        serde_json::to_string_pretty(manifest).map_err(|e| format!("MANIFEST_RENDER: {e}"))?;
     atomic_write(path, &format!("{content}\n"), "MANIFEST_WRITE")
 }
 
@@ -939,10 +948,10 @@ fn init_profile_dir(dir: &Path, id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod clone_tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     /// 在 profiles 根目录下构造一个最小源档案目录，返回其路径。
-    fn scaffold_source(root: &PathBuf, id: &str) -> PathBuf {
+    fn scaffold_source(root: &Path, id: &str) -> PathBuf {
         let dir = root.join(id);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -984,7 +993,11 @@ mod clone_tests {
         let root = tmp.join("profiles");
         scaffold_source(&root, "web");
         std::fs::create_dir_all(root.join("web-1")).unwrap();
-        std::fs::write(root.join("web-1/package.json"), r#"{"name":"dsh-profile-web-1"}"#).unwrap();
+        std::fs::write(
+            root.join("web-1/package.json"),
+            r#"{"name":"dsh-profile-web-1"}"#,
+        )
+        .unwrap();
 
         let profile = clone_with_root(&root, "web", None).unwrap();
         assert_eq!(profile.id, "web-2");
@@ -1002,7 +1015,8 @@ mod clone_tests {
         let profile = clone_with_root(&root, "web", None).unwrap();
         let dst = root.join(&profile.id);
         let manifest: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(dst.join("package.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(dst.join("package.json")).unwrap())
+                .unwrap();
         assert_eq!(manifest["name"], format!("dsh-profile-{}", profile.id));
 
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1031,7 +1045,10 @@ mod clone_tests {
         let root = tmp.join("profiles");
 
         let err = clone_with_root(&root, "nonexistent", None).unwrap_err();
-        assert!(err.contains("PROFILE_NOT_FOUND"), "expected PROFILE_NOT_FOUND, got: {err}");
+        assert!(
+            err.contains("PROFILE_NOT_FOUND"),
+            "expected PROFILE_NOT_FOUND, got: {err}"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1044,12 +1061,19 @@ mod clone_tests {
         scaffold_source(&root, "web");
         let nm = root.join("web/node_modules");
         std::fs::create_dir_all(&nm).unwrap();
-        std::fs::write(nm.join(".modules.yaml"), "lockfileVersion: '9.0'\nstoreDir: /old/store\n").unwrap();
+        std::fs::write(
+            nm.join(".modules.yaml"),
+            "lockfileVersion: '9.0'\nstoreDir: /old/store\n",
+        )
+        .unwrap();
 
         let profile = clone_with_root(&root, "web", None).unwrap();
         let dst_nm = root.join(&profile.id).join("node_modules");
         assert!(dst_nm.is_dir(), "node_modules should be copied");
-        assert!(!dst_nm.join(".modules.yaml").exists(), "carried .modules.yaml must be purged");
+        assert!(
+            !dst_nm.join(".modules.yaml").exists(),
+            "carried .modules.yaml must be purged"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1089,7 +1113,10 @@ mod tests {
         let mapping = value.as_mapping().unwrap();
         assert_eq!(mapping.len(), 3, "{mapping:?}");
         assert_eq!(
-            value.get("packages").and_then(Value::as_sequence).map(Vec::len),
+            value
+                .get("packages")
+                .and_then(Value::as_sequence)
+                .map(Vec::len),
             Some(1)
         );
         assert_eq!(
@@ -1104,7 +1131,10 @@ mod tests {
         let (value, normalized) =
             parse_workspace_document("nodeLinker: hoisted\n---\nnodeLinker: isolated\n").unwrap();
         assert!(normalized);
-        assert_eq!(value.get("nodeLinker").and_then(Value::as_str), Some("isolated"));
+        assert_eq!(
+            value.get("nodeLinker").and_then(Value::as_str),
+            Some("isolated")
+        );
     }
 
     /// 非映射文档（序列/标量）无法安全合并，保留原始解析错误。
@@ -1341,10 +1371,7 @@ mod tests {
         let root = tmp.join("profiles");
 
         // 旧目录不存在（全新安装 / 已迁移完成）→ 无需改名即视为就绪
-        assert_eq!(
-            adopt_tauri_profile_dir(&root),
-            ProfileDirAdoption::Adopted
-        );
+        assert_eq!(adopt_tauri_profile_dir(&root), ProfileDirAdoption::Adopted);
 
         let legacy = root.join(LEGACY_DESKTOP_PROFILE);
         std::fs::create_dir_all(&legacy).unwrap();
@@ -1353,15 +1380,9 @@ mod tests {
             r#"{"name":"dsh-profile-desktop","private":true}"#,
         )
         .unwrap();
-        assert_eq!(
-            adopt_tauri_profile_dir(&root),
-            ProfileDirAdoption::Adopted
-        );
+        assert_eq!(adopt_tauri_profile_dir(&root), ProfileDirAdoption::Adopted);
         // 再跑一次：旧目录已不存在，仍为 Adopted（幂等，不阻断 active_profile 改写）
-        assert_eq!(
-            adopt_tauri_profile_dir(&root),
-            ProfileDirAdoption::Adopted
-        );
+        assert_eq!(adopt_tauri_profile_dir(&root), ProfileDirAdoption::Adopted);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1390,7 +1411,10 @@ mod tests {
             adoption == ProfileDirAdoption::Failed || adoption == ProfileDirAdoption::Blocked,
             "rename failure must be reported, got {adoption:?}"
         );
-        assert!(legacy.join("package.json").is_file(), "legacy profile must stay");
+        assert!(
+            legacy.join("package.json").is_file(),
+            "legacy profile must stay"
+        );
         assert_eq!(
             std::fs::read_to_string(legacy.join("package.json")).unwrap(),
             r#"{"name":"dsh-profile-desktop","private":true}"#,
@@ -1399,10 +1423,7 @@ mod tests {
 
         // 放开占位文件后下次启动改名成功（重试路径）
         std::fs::remove_file(root.join(DESKTOP_PROFILE)).unwrap();
-        assert_eq!(
-            adopt_tauri_profile_dir(&root),
-            ProfileDirAdoption::Adopted
-        );
+        assert_eq!(adopt_tauri_profile_dir(&root), ProfileDirAdoption::Adopted);
         assert!(!legacy.exists(), "retry must finish the rename");
 
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1639,7 +1660,10 @@ mod tests {
             manifest["dsh"]["profile"]["bundles"],
             serde_json::json!(["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"])
         );
-        assert!(!profiles_root.join("web").join("disabled-plugins.json").exists());
+        assert!(!profiles_root
+            .join("web")
+            .join("disabled-plugins.json")
+            .exists());
         // 会话数据完整保留
         assert!(sessions.join("_no-cwd").join("s1.json").is_file());
 
@@ -1668,7 +1692,7 @@ mod tests {
         let root = tmp.join("profiles");
         std::fs::create_dir_all(&root).unwrap();
         let res = std::panic::catch_unwind(|| {
-            std::fs::create_dir_all(&root.join("web")).unwrap();
+            std::fs::create_dir_all(root.join("web")).unwrap();
             let ok = crate::service::fs_guard::safe_remove_target(&root, "web");
             assert!(ok.is_ok(), "存在的合法目录应通过守卫: {ok:?}");
             let bad = crate::service::fs_guard::safe_remove_target(&root, "..");

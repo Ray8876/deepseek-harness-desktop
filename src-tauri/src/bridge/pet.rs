@@ -126,7 +126,7 @@ pub struct PetAsset {
 }
 
 /// 将缺省、旧版未限定 id 或非法选择归一化为空字符串（未选择任何宠物）。
-/// 合法值：预设宠物 id（`resources/preset-pets.json` 的安全字符集）或来源限定 id。
+/// 合法值：预设宠物 id（清单 `pets.built-in` 的安全字符集）或来源限定 id。
 /// 注意：不再默认给内置宠物 —— 全新安装下 active_pet 为空，由用户在设置页主动启用
 /// （预设条目直连远端素材，启用即用，无需任何安装步骤）。
 fn normalize_active_pet(active_pet: Option<&str>) -> String {
@@ -163,6 +163,37 @@ fn emit_pet_status(app: &AppHandle, status: &PetStatus) {
 #[tauri::command]
 pub fn get_pet_status(app: AppHandle) -> PetStatus {
     status_from_setting(&config::get_store_dat_setting(&app))
+}
+
+/// 查询当前运行环境能否让桌宠窗口置顶并定位（issue #649）。
+///
+/// 结果由运行环境推导，与持久设置无关，因此不并入 [`PetStatus`]：
+/// [`status_from_setting`] 是 [`config::Setting`] 的纯函数，掺入环境变量会破坏这一点。
+#[tauri::command]
+pub fn get_pet_overlay_supported() -> bool {
+    crate::pet_overlay_supported_env()
+}
+
+/// 读取「强制 XWayland」开关（issue #649 的方案 2，默认关闭）。
+///
+/// 该设置作用于整个应用而非只有桌宠，命令名因此不带 `pet_` 前缀；落在本模块只因
+/// 桌宠遮挡是它唯一的症状与唯一的消费方。同理不并入 [`PetStatus`]：后者经
+/// `pet://status` 广播给桌宠窗口与侧栏指示点，两者都不关心这个值。
+#[tauri::command]
+pub fn get_force_xwayland(app: AppHandle) -> bool {
+    config::get_store_dat_setting(&app).force_xwayland
+}
+
+/// 写入「强制 XWayland」开关，返回落盘后的值。
+///
+/// 不操作窗口、不广播 `pet://status`：`GDK_BACKEND` 只在 GTK 初始化时被读取一次，
+/// 本次进程里没有任何东西能因此改变，生效要等下次启动。
+#[tauri::command]
+pub fn set_force_xwayland(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    let updated = config::update_store_dat_setting(&app, |setting| {
+        setting.force_xwayland = enabled;
+    });
+    Ok(updated.force_xwayland)
 }
 
 /// 启用/关闭桌宠（持久化）。侧栏入口、设置页与桌宠窗口自身的关闭请求都走这里。
@@ -315,19 +346,17 @@ async fn consume_pet_session_stream(app: &AppHandle, url: &str) -> Result<(), St
             let trimmed = line.trim();
             if let Some(data) = trimmed.strip_prefix("data:") {
                 pending_data.push(data.trim().to_string());
-            } else if trimmed.is_empty() {
-                if !pending_data.is_empty() {
-                    let frame: Value = serde_json::from_str(&pending_data.join("\n"))
-                        .map_err(|error| error.to_string())?;
-                    let action = frame
-                        .get("action")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let payload = frame.get("payload").cloned().unwrap_or(Value::Null);
-                    emit_pet_session(app, &action, &payload);
-                    pending_data.clear();
-                }
+            } else if trimmed.is_empty() && !pending_data.is_empty() {
+                let frame: Value = serde_json::from_str(&pending_data.join("\n"))
+                    .map_err(|error| error.to_string())?;
+                let action = frame
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let payload = frame.get("payload").cloned().unwrap_or(Value::Null);
+                emit_pet_session(app, &action, &payload);
+                pending_data.clear();
             }
             // 其余（'：' 开头的注释帧等）忽略。
         }
@@ -690,13 +719,13 @@ struct SpriteGrid {
 /// 声明与图集比例不符时以图集为准：旧版 8x9 图集沿用缺省 v2 声明（或清单漏写版本）
 /// 是常见写法，按声明拒绝会让整个宠物无法导入。
 fn sprite_grid(declared: Option<u8>, width: u32, height: u32) -> Result<SpriteGrid, String> {
-    if width % u32::from(PET_SPRITE_COLUMNS) != 0 {
+    if !width.is_multiple_of(u32::from(PET_SPRITE_COLUMNS)) {
         return Err(format!(
             "PET_ASSET_DIMENSIONS_INVALID: spritesheet width must be divisible by {PET_SPRITE_COLUMNS} columns"
         ));
     }
-    let v1 = height % u32::from(PET_SPRITE_V1_ROWS) == 0;
-    let v2 = height % u32::from(PET_SPRITE_V2_ROWS) == 0;
+    let v1 = height.is_multiple_of(u32::from(PET_SPRITE_V1_ROWS));
+    let v2 = height.is_multiple_of(u32::from(PET_SPRITE_V2_ROWS));
     let version = match (v1, v2) {
         (false, false) => {
             return Err(format!(
@@ -1029,7 +1058,7 @@ fn copy_archive_entry<R: Read, W: Write>(
 fn extract_pet_archive(bytes: &[u8], staging: &Path) -> Result<PetManifest, String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))
         .map_err(|error| format!("PET_ARCHIVE_INVALID: failed to open zip: {error}"))?;
-    if archive.len() == 0 || archive.len() > PET_PACKAGE_MAX_ENTRIES {
+    if archive.is_empty() || archive.len() > PET_PACKAGE_MAX_ENTRIES {
         return Err(format!(
             "PET_ARCHIVE_ENTRY_LIMIT: archive must contain 1..={PET_PACKAGE_MAX_ENTRIES} entries"
         ));

@@ -147,7 +147,7 @@ pub fn decode_process_line(bytes: &[u8]) -> String {
 
 /// 按给定代码页把多字节串解成 UTF-16，再取 `String`；转换失败返回 `None`。
 #[cfg(windows)]
-fn decode_multibyte(bytes: &[u8], codepage: u32) -> Option<String> {
+pub(crate) fn decode_multibyte(bytes: &[u8], codepage: u32) -> Option<String> {
     use windows_sys::Win32::Globalization::MultiByteToWideChar;
 
     if bytes.is_empty() {
@@ -174,11 +174,119 @@ fn decode_multibyte(bytes: &[u8], codepage: u32) -> Option<String> {
     Some(String::from_utf16_lossy(&wide))
 }
 
+/// 按给定代码页把文本编码成多字节串；出现该代码页无法表示的字符时返回 `None`。
+///
+/// 与 [`decode_process_line`] 对称：写入交给外部程序按系统代码页解析的文件
+/// （`.cmd`/`.bat`）时，UTF-8 字节会被读成乱码。带 `WC_NO_BEST_FIT_CHARS`：
+/// 否则 `∞` 这类字符会被「近似」成 `8`，编出一条指向别处的路径却报成功。
+#[cfg(windows)]
+pub(crate) fn encode_multibyte(text: &str, codepage: u32) -> Option<Vec<u8>> {
+    use windows_sys::Win32::Globalization::{WideCharToMultiByte, CP_UTF8, WC_NO_BEST_FIT_CHARS};
+
+    if text.is_empty() {
+        return Some(Vec::new());
+    }
+    // UTF-8 能表示 Rust `str` 的全部字符（无落单代理项），且该代码页不接受
+    // `lpUsedDefaultChar`；直接给出等价字节。
+    if codepage == CP_UTF8 {
+        return Some(text.as_bytes().to_vec());
+    }
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    if wide.len() > i32::MAX as usize {
+        return None;
+    }
+    let len = wide.len() as i32;
+    let mut used_default = 0i32;
+    // SAFETY: 指针与长度同源于 `wide`；空缓冲 + 0 长度只探测所需字节数。
+    let needed = unsafe {
+        WideCharToMultiByte(
+            codepage,
+            WC_NO_BEST_FIT_CHARS,
+            wide.as_ptr(),
+            len,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null(),
+            &mut used_default,
+        )
+    };
+    if needed <= 0 {
+        return None;
+    }
+    let mut bytes = vec![0u8; needed as usize];
+    used_default = 0;
+    // SAFETY: `bytes` 恰有 `needed` 个元素，等于上一次探测出的所需长度。
+    let written = unsafe {
+        WideCharToMultiByte(
+            codepage,
+            WC_NO_BEST_FIT_CHARS,
+            wide.as_ptr(),
+            len,
+            bytes.as_mut_ptr(),
+            needed,
+            std::ptr::null(),
+            &mut used_default,
+        )
+    };
+    if written <= 0 || used_default != 0 {
+        return None;
+    }
+    bytes.truncate(written as usize);
+    Some(bytes)
+}
+
+/// 路径的 Windows 8.3 短名（纯 ASCII），长名含非 ASCII 时用它烘焙进 `.cmd`。
+///
+/// 短名由卷上的 8dot3 机制维护：路径不存在、或该卷已关闭短名时返回 `None`
+/// （此时 API 原样返回长名，调用方据 `is_ascii` 判定不可用）。
+#[cfg(windows)]
+pub(crate) fn short_path(path: &Path) -> Option<PathBuf> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: 空缓冲 + 0 长度只探测所需长度（含结尾 NUL）；指针来自 `wide`。
+    let needed = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
+    if needed == 0 {
+        return None;
+    }
+    let mut buf = vec![0u16; needed as usize];
+    // SAFETY: `buf` 恰有 `needed` 个元素，等于上一次探测出的所需长度。
+    let written = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), needed) };
+    if written == 0 || written >= needed {
+        return None;
+    }
+    buf.truncate(written as usize);
+    Some(PathBuf::from(std::ffi::OsString::from_wide(&buf)))
+}
+
+/// 外部程序（cmd.exe）解析文本文件所用的代码页：优先 OEM，其次 ANSI。
+///
+/// 批处理文件由 cmd.exe 按控制台代码页读取（中文 Windows 为 936），因此把带
+/// 非 ASCII 路径的 `.cmd` 写成 UTF-8 必然乱码。取不到时回落 UTF-8 代码页，
+/// 调用方据此退回原字节写出。
+#[cfg(windows)]
+pub(crate) fn console_code_page() -> u32 {
+    use windows_sys::Win32::Globalization::{GetACP, GetOEMCP};
+
+    // SAFETY: 两个 API 都无参数、无副作用，仅返回系统代码页常量。
+    let oem = unsafe { GetOEMCP() };
+    if oem != 0 {
+        return oem;
+    }
+    // SAFETY: 同上。
+    let ansi = unsafe { GetACP() };
+    if ansi != 0 {
+        return ansi;
+    }
+    65001
+}
+
 #[cfg(test)]
 mod tests {
     use super::decode_process_line;
     #[cfg(windows)]
-    use super::decode_multibyte;
+    use super::{decode_multibyte, encode_multibyte, short_path};
 
     #[test]
     fn keeps_valid_utf8_untouched() {
@@ -203,5 +311,32 @@ mod tests {
             decode_multibyte(&gbk, 936).as_deref(),
             Some("系统找不到指定的路径。")
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn encodes_back_to_the_same_codepage_bytes() {
+        let text = "系统找不到指定的路径。";
+        let gbk = encode_multibyte(text, 936).expect("gbk");
+        assert!(!gbk.is_ascii());
+        assert_eq!(decode_multibyte(&gbk, 936).as_deref(), Some(text));
+        // UTF-8 代码页不看 `lpUsedDefaultChar`，直接给出等价字节。
+        assert_eq!(encode_multibyte(text, 65001).as_deref(), Some(text.as_bytes()));
+    }
+
+    /// 该代码页表示不了的字符必须报 `None`，不能靠「近似字符」蒙混过关。
+    #[cfg(windows)]
+    #[test]
+    fn rejects_characters_outside_the_codepage() {
+        assert_eq!(encode_multibyte("小蔡", 437), None);
+    }
+
+    /// 短名只在路径存在且卷上保留 8dot3 时才有；拿不到时调用方按 `is_ascii` 拒绝。
+    #[cfg(windows)]
+    #[test]
+    fn short_path_resolves_existing_paths() {
+        let temp = std::env::temp_dir();
+        let short = short_path(&temp).expect("temp dir always resolves");
+        assert!(short.exists());
     }
 }

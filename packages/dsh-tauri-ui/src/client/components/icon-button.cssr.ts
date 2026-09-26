@@ -2,7 +2,7 @@ import { styles as sharedStyles } from '../constants/theme'
 import { cssr } from '../utils/cssr'
 
 const { c, bem: { b, m } } = cssr
-const { brand, focusRing, hover, primary, secondary, tertiary } = sharedStyles
+const { focusRing, hover, primary, secondary, tertiary } = sharedStyles
 
 export default b('icon-button', {}, [
   m('search', {
@@ -29,7 +29,7 @@ export default b('icon-button', {}, [
     width: '28px',
     height: '28px',
     border: '0',
-    borderRadius: '28px',
+    borderRadius: 'var(--dsw-radius-sm)',
     background: 'transparent',
     color: 'var(--dsw-alias-label-caption)',
     cursor: 'pointer',
@@ -43,7 +43,7 @@ export default b('icon-button', {}, [
       cursor: 'default',
     }),
     c('&:focus-visible', {
-      outline: `2px solid ${brand}`,
+      outline: 'var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary))',
       outlineOffset: '1px',
     }),
   ]),
@@ -55,7 +55,7 @@ export default b('icon-button', {}, [
     width: '28px',
     height: '28px',
     border: 'none',
-    borderRadius: '6px',
+    borderRadius: 'var(--dsw-radius-sm)',
     background: 'transparent',
     color: tertiary,
     cursor: 'pointer',
@@ -79,8 +79,7 @@ export default b('icon-button', {}, [
     width: '28px',
     height: '28px',
     border: 'none',
-    borderRadius: '50%',
-    cornerShape: 'round',
+    borderRadius: 'var(--dsw-radius-sm)',
     padding: '0',
     background: 'transparent',
     cursor: 'pointer',
@@ -100,7 +99,7 @@ export default b('icon-button', {}, [
     width: '16px',
     height: '16px',
     border: 'none',
-    borderRadius: '4px',
+    borderRadius: 'var(--dsw-radius-xs)',
     padding: '0',
     background: 'transparent',
     cursor: 'pointer',
@@ -121,7 +120,7 @@ export default b('icon-button', {}, [
     height: '24px',
     padding: '0',
     border: '0',
-    borderRadius: '6px',
+    borderRadius: 'var(--dsw-radius-sm)',
     background: 'none',
     color: tertiary,
     cursor: 'pointer',
@@ -131,7 +130,7 @@ export default b('icon-button', {}, [
       color: secondary,
     }),
     c('&:focus-visible', {
-      outline: `2px solid ${brand}`,
+      outline: 'var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary))',
       outlineOffset: '1px',
     }),
   ]),
@@ -143,7 +142,7 @@ export default b('icon-button', {}, [
     height: 'calc(28px + var(--dsh-content-font-delta, 0px))',
     padding: '6px',
     border: 'none',
-    borderRadius: '28px',
+    borderRadius: 'var(--dsw-radius-sm)',
     background: 'transparent',
     color: tertiary,
     cursor: 'pointer',
